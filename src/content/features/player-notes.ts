@@ -58,7 +58,18 @@ interface LastGameEntry {
   mmrChange: number;
 }
 
-type NoteRecord = { text: string; timestamp: number; version?: string };
+type NoteRecord = { text: string; timestamp: number; version?: string; tag?: string };
+
+/** Палитра цветных меток игроков. */
+const TAG_COLORS: Array<{ c: string; name: string }> = [
+  { c: "", name: "нет" },
+  { c: "#ef4444", name: "красный" },
+  { c: "#f59e0b", name: "оранжевый" },
+  { c: "#eab308", name: "жёлтый" },
+  { c: "#22c55e", name: "зелёный" },
+  { c: "#3b82f6", name: "синий" },
+  { c: "#a855f7", name: "фиолетовый" },
+];
 type NotesMap = Record<string, NoteRecord | string>;
 
 const VERSION = "1.0";
@@ -175,6 +186,7 @@ class PlayerNotesManager {
       if (area !== "sync" || !changes.playerNotes) return;
       this.notes = (changes.playerNotes.newValue as NotesMap) || {};
       this.refreshNoteIndicators();
+      this.refreshPlayerTags();
       this.updateAllTooltips();
     };
     browser.storage.onChanged.addListener(storageListener);
@@ -296,6 +308,28 @@ class PlayerNotesManager {
     const note = this.notes[username];
     if (!note) return "";
     return typeof note === "string" ? note : note.text || "";
+  }
+
+  private getNoteTag(username: string): string {
+    const note = this.notes[username];
+    return note && typeof note !== "string" ? note.tag || "" : "";
+  }
+
+  /** Подсветить плитку игрока цветом метки (или снять подсветку). */
+  private applyPlayerTag(container: HTMLElement, username: string): void {
+    const tag = this.getNoteTag(username);
+    container.style.boxShadow = tag ? `inset 0 0 0 2px ${tag}, 0 0 10px ${tag}66` : "";
+  }
+
+  /** Обновить подсветку плиток у всех видимых игроков. */
+  private refreshPlayerTags(): void {
+    document
+      .querySelectorAll<HTMLElement>(`.${OWN.noteButton}[data-username]`)
+      .forEach((btn) => {
+        const u = btn.dataset.username;
+        const container = btn.closest<HTMLElement>(SITE.player);
+        if (u && container) this.applyPlayerTag(container, u);
+      });
   }
 
   // ─────────── Загрузка статистики (с кэшем) ───────────
@@ -745,6 +779,42 @@ class PlayerNotesManager {
       box-sizing: border-box;
     `;
 
+    // ── выбор цветной метки ──
+    let selectedTag = this.getNoteTag(username);
+    const tagLabel = document.createElement("div");
+    tagLabel.textContent = "Метка";
+    tagLabel.style.cssText = "color: rgba(255,255,255,.7); font-size: 12px; margin-bottom: 6px;";
+    const tagRow = document.createElement("div");
+    tagRow.style.cssText = "display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap;";
+    const swatches: HTMLButtonElement[] = [];
+    const renderSwatches = () => {
+      swatches.forEach((s) => {
+        const isSel = s.dataset.color === selectedTag;
+        s.style.outline = isSel ? "2px solid #fff" : "2px solid transparent";
+        s.style.outlineOffset = "2px";
+      });
+    };
+    TAG_COLORS.forEach(({ c, name }) => {
+      const sw = document.createElement("button");
+      sw.dataset.color = c;
+      sw.title = name;
+      sw.style.cssText = `
+        width: 22px; height: 22px; border-radius: 50%; cursor: pointer; padding: 0;
+        border: 1px solid rgba(255,255,255,.3);
+        background: ${c || "transparent"};
+        ${c ? "" : "position:relative;"}
+      `;
+      if (!c) sw.textContent = "✕"; // «нет метки»
+      if (!c) sw.style.color = "rgba(255,255,255,.6)";
+      sw.addEventListener("click", () => {
+        selectedTag = c;
+        renderSwatches();
+      });
+      swatches.push(sw);
+      tagRow.appendChild(sw);
+    });
+    renderSwatches();
+
     // ── общие действия ──
     const close = () => {
       document.removeEventListener("keydown", onKey, true);
@@ -752,8 +822,13 @@ class PlayerNotesManager {
     };
     const save = () => {
       const value = textarea.value.trim();
-      if (value) {
-        this.notes[username] = { text: value, timestamp: Date.now(), version: VERSION };
+      if (value || selectedTag) {
+        this.notes[username] = {
+          text: value,
+          timestamp: Date.now(),
+          version: VERSION,
+          tag: selectedTag || undefined,
+        };
       } else {
         delete this.notes[username];
       }
@@ -763,6 +838,7 @@ class PlayerNotesManager {
       );
       if (tooltip) tooltip.innerHTML = this.generateTooltipContent(username);
       this.refreshNoteIndicators();
+      this.refreshPlayerTags();
     };
     const saveAndClose = () => {
       save();
@@ -814,7 +890,7 @@ class PlayerNotesManager {
       if (e.target === overlay) close();
     });
 
-    modal.append(title, textarea, buttons);
+    modal.append(title, textarea, tagLabel, tagRow, buttons);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
@@ -1028,6 +1104,7 @@ class PlayerNotesManager {
         const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
         if (vid) vid.style.display = "none";
       }
+      this.applyPlayerTag(container as HTMLElement, username);
       return;
     }
 
@@ -1051,6 +1128,8 @@ class PlayerNotesManager {
       const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
       if (vid) vid.style.display = "none";
     }
+
+    this.applyPlayerTag(container as HTMLElement, username);
   }
 
   private removeOldButtons(username: string): void {
@@ -1067,6 +1146,9 @@ class PlayerNotesManager {
     document
       .querySelectorAll(`${OWN_BUTTON_SELECTOR}, .${OWN.playerStats}`)
       .forEach((el) => el.remove());
+    document.querySelectorAll<HTMLElement>(SITE.player).forEach((p) => {
+      if (p.style.boxShadow) p.style.boxShadow = "";
+    });
     document.querySelectorAll(`.${OWN.playerIcons}`).forEach((group) => {
       if (!group.children.length) group.remove();
     });
