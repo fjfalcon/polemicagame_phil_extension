@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Polemica Notes",
+  "version": "8.1.1",
+  "description": "Расширение для Polemica Game с дополнительными функциями:\n• Статистика игроков\n• Подмена роли (F)\n• Быстрая пауза (F8)\n• Автопринятие игры",
+  "permissions": ["storage", "scripting", "activeTab", "tabs"],
+  "host_permissions": [
+    "*://*.polemicagame.com/*",
+    "ws://localhost:*/*",
+    "wss://localhost:*/*",
+    "wss://irc-ws.chat.twitch.tv:443/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' ws://localhost:* wss://localhost:* wss://irc-ws.chat.twitch.tv:443"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "128": "icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.polemicagame.com/*"],
+      "js": ["content.js"],
+      "css": ["notes.css"],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icon16.png", "icon128.png", "*.svg", "*.png", "*.jpg", "*.jpeg"],
+      "matches": ["*://*.polemicagame.com/*"]
+    }
+  ],
+  "action": {
+    "default_icon": "icon16.png",
+    "default_popup": "popup.html"
+  }
+}

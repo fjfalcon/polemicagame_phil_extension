@@ -1,0 +1,30 @@
+{
+  "name": "polemica-notes",
+  "version": "8.1.1",
+  "private": true,
+  "description": "Расширение для Polemica Game: статистика, заметки, OBS, Twitch",
+  "type": "module",
+  "scripts": {
+    "clean": "rimraf dist .dist-js",
+    "build:js": "tsup",
+    "assemble:chrome": "node scripts/assemble.mjs chrome",
+    "assemble:firefox": "node scripts/assemble.mjs firefox",
+    "build:chrome": "npm run build:js && npm run assemble:chrome",
+    "build:firefox": "npm run build:js && npm run assemble:firefox",
+    "build": "npm run clean && npm run build:js && npm run assemble:chrome && npm run assemble:firefox",
+    "typecheck": "tsc --noEmit",
+    "lint:ext:chrome": "web-ext lint -s dist/chrome",
+    "lint:ext:firefox": "web-ext lint -s dist/firefox",
+    "dev:firefox": "web-ext run -s dist/firefox"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "web-ext": "^8.3.0"
+  },
+  "dependencies": {
+    "webextension-polyfill": "^0.12.0"
+  }
+}

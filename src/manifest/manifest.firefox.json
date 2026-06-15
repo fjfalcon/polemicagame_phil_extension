@@ -1,0 +1,11 @@
+{
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "polemica-notes@polemicagame",
+      "strict_min_version": "115.0"
+    }
+  }
+}

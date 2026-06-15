@@ -1,0 +1,328 @@
+.player-note-container {
+    position: relative;
+    display: inline-block;
+}
+
+.player-note-btn {
+    background: none;
+    border: none;
+    color: #007bff;
+    cursor: pointer;
+    margin-left: 5px;
+    transition: transform 0.2s ease;
+}
+
+.player-note-btn:hover {
+    transform: scale(1.1);
+}
+
+.player-note-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(5px);
+    border: 1px solid rgba(0,0,0,0.1);
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    z-index: 10001;
+}
+
+.player-note-textarea {
+    width: 100%;
+    height: 150px;
+    margin-bottom: 10px;
+}
+.player-tooltip {
+    position: absolute;
+    background-color: #fff;
+    color: #000;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    z-index: 99999;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: all 0.2s ease;
+    top: 10px;
+    left: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border: 1px solid rgba(0,0,0,0.1);
+    max-width: 200px;
+    word-wrap: break-word;
+    white-space: normal;
+}
+
+.player-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+.player-tooltip .content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 50px;
+    min-height: 20px;
+    text-align: center;
+    line-height: 1.2;
+}
+
+.note-notification {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 10px 20px;
+    background: rgba(0,0,0,0.8);
+    color: white;
+    border-radius: 4px;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.loading-indicator {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #ffffff;
+    border-top: 2px solid transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    position: absolute;
+    right: 40px;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Стили для контейнера видео */
+.player__video-wrapper[data-v-7fedc89e] {
+    overflow: visible !important;
+    position: relative !important;
+}
+
+/* Сделаем контейнер информации якорем для иконок */
+.player__info {
+    position: relative !important;
+    overflow: visible !important; /* чтобы иконки над блоком не обрезались */
+    z-index: 2 !important;
+}
+
+/* Группа иконок: фиксированная строка над .player__info */
+.player-icons {
+    position: absolute !important;
+    top: -28px !important;
+    left: 0 !important;
+    display: flex !important;
+    gap: 0px !important; /* фиксированное расстояние между иконками */
+    align-items: center !important;
+    z-index: 10000 !important;
+    pointer-events: auto !important;
+}
+
+/* Стили для иконок статистики */
+.stats-button, 
+.note-button,
+.last-games-button,
+.dodge-button,
+.hide-video-button {
+    background: none !important;
+    border: none !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 24px !important;   /* фиксированный размер */
+    height: 24px !important;  /* фиксированный размер */
+}
+
+/* Внутри .player-icons кнопки размещаются потоком (flex) */
+.player-icons > .stats-button,
+.player-icons > .note-button,
+.player-icons > .last-games-button,
+.player-icons > .dodge-button,
+.player-icons > .hide-video-button {
+    position: static !important;
+    margin: 0 !important; /* убираем любые внешние отступы у кнопок */
+}
+
+/* Убрали индивидуальные смещения — управляет .player-icons */
+
+/* Стили для иконок при наведении */
+.stats-button:hover,
+.note-button:hover,
+.last-games-button:hover,
+.dodge-button:hover,
+.hide-video-button:hover {
+    transform: scale(1.1) !important;
+}
+
+/* Адаптация для разных разрешений */
+@media screen and (min-width: 1920px) {
+    .player-stats {
+        right: 2rem;
+        gap: 8px;
+        padding: 3px 8px;
+    }
+    
+    .player-stats span {
+        font-size: 14px;
+    }
+
+    /* позиция иконок остаётся привязанной к .player__info */
+}
+
+@media screen and (min-width: 2560px) {
+    .player-stats {
+        right: 3rem;
+        gap: 10px;
+        padding: 4px 10px;
+    }
+    
+    .player-stats span {
+        font-size: 16px;
+    }
+
+    /* позиция иконок остаётся привязанной к .player__info */
+}
+
+/* Стили для отдельных элементов статистики */
+.player-stats span {
+    color: white;
+    font-size: 12px;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+    white-space: nowrap;
+}
+
+.player-stats .mmr {
+    font-weight: bold;
+}
+
+.player-stats .games {
+    opacity: 0.9;
+}
+
+.player-stats .winrate {
+    color: #4CAF50;
+}
+
+.player-stats .kills {
+    color: #f44336;
+}
+
+/* Анимация при наведении */
+.player-stats:hover {
+    background: rgba(0, 0, 0, 0.7);
+    transform: translateY(-50%) scale(1.05);
+    transition: all 0.2s ease;
+}
+.dodge-list, .dodge-check {
+    position: fixed !important; /* Добавляем important для перезаписи inline стилей */
+    user-select: none;
+    background: rgba(0, 0, 0, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    z-index: 10000;
+    transform: none !important; /* Отключаем transform для корректной работы перетаскивания */
+    cursor: move;
+}
+
+.dodge-header {
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    margin-bottom: 10px;
+    cursor: move;
+    user-select: none;
+    touch-action: none;
+}
+
+/* Добавляем стили для активного состояния при перетаскивании */
+.dodge-list.dragging, .dodge-check.dragging {
+    opacity: 0.8;
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+}
+
+/* Стили для текста в тултипе */
+.tooltip-text {
+    color: white !important;
+    text-shadow: 
+        -0.1px -0.1px 0 #000,
+        0.1px -0.1px 0 #000,
+        -0.1px 0.1px 0 #000,
+        0.1px 0.1px 0 #000,
+        0 0 1px #000 !important;
+    font-weight: 200 !important;
+}
+
+/* Стили для всех иконок */
+.stats-button svg path, 
+.note-button svg path,
+.last-games-button svg path,
+.dodge-button svg path,
+.hide-video-button svg path,
+.stats-button svg circle,
+.note-button svg circle,
+.last-games-button svg circle,
+.dodge-button svg circle,
+.hide-video-button svg circle {
+    stroke: var(--stats-button-theme-color, #4267B2) !important;
+    stroke-width: 1.5 !important;
+    stroke-linejoin: round !important;
+    stroke-linecap: round !important;
+}
+
+/* Единый размер для графики внутри кнопок */
+.stats-button svg,
+.note-button svg,
+.last-games-button svg,
+.dodge-button svg,
+.hide-video-button svg {
+    width: 18px !important;
+    height: 18px !important;
+}
+
+/* Стили для иконок при наведении */
+.stats-button:hover svg path,
+.note-button:hover svg path,
+.last-games-button:hover svg path,
+.dodge-button:hover svg path,
+.hide-video-button:hover svg path,
+.stats-button:hover svg circle,
+.note-button:hover svg circle,
+.last-games-button:hover svg circle,
+.dodge-button:hover svg circle,
+.hide-video-button:hover svg circle {
+    stroke-width: 2 !important;
+}
+
+/* Move up the 'Оставить ЛХ' and 'Сбросить ЛХ' buttons */
+#app .center .button[data-v-6e0d5d98]:contains('Оставить ЛХ'),
+#app .center .button[data-v-6e0d5d98]:contains('Сбросить ЛХ') {
+    position: relative;
+    transform: translateY(-150px) !important;
+    margin-top: -160px !important;
+    margin-bottom: 200px !important;
+}
+
+/* Стили для текста в тултипе последних игр */
+.last-games-button .tooltip span {
+    text-shadow:
+        -0.1px -0.1px 0 #000,
+        0.1px -0.1px 0 #000,
+        -0.1px 0.1px 0 #000,
+        0.1px 0.1px 0 #000 !important;
+    font-weight: 400 !important;
+}
