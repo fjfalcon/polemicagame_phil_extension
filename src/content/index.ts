@@ -17,6 +17,7 @@ import { roleFakerFeature } from "./features/role-faker";
 import { pauseHotkeyFeature } from "./features/pause-hotkey";
 import { cameraRotateFeature } from "./features/camera-rotate";
 import { f5RefreshFeature } from "./features/f5-refresh";
+import { playerVolumeFeature } from "./features/player-volume";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -30,6 +31,7 @@ const manager = new FeatureManager().register(
   pauseHotkeyFeature,
   cameraRotateFeature,
   f5RefreshFeature,
+  playerVolumeFeature,
   obsPanelFeature,
   twitchPanelFeature,
 );
