@@ -166,6 +166,20 @@ class PlayerNotesManager {
       }),
     );
 
+    // Live-обновление заметок: изменения в storage (правка в другой вкладке или
+    // импорт из popup) сразу подхватываются — индикаторы и тултипы обновляются.
+    const storageListener = (
+      changes: Record<string, { newValue?: unknown }>,
+      area: string,
+    ) => {
+      if (area !== "sync" || !changes.playerNotes) return;
+      this.notes = (changes.playerNotes.newValue as NotesMap) || {};
+      this.refreshNoteIndicators();
+      this.updateAllTooltips();
+    };
+    browser.storage.onChanged.addListener(storageListener);
+    this.unsubscribers.push(() => browser.storage.onChanged.removeListener(storageListener));
+
     // Обновление при возвращении на вкладку и кастомные события смены состояния.
     this.visibilityHandler = () => {
       if (!document.hidden) this.processExistingElements();
@@ -594,7 +608,35 @@ class PlayerNotesManager {
     `;
     noteButton.addEventListener("click", () => this.showNoteModal(username));
     this.applyButtonTheme(noteButton);
+    this.updateNoteIndicator(noteButton, username);
     return noteButton;
+  }
+
+  /** Жёлтая точка на кнопке заметки, если у игрока есть заметка. */
+  private updateNoteIndicator(button: HTMLElement, username: string): void {
+    const has = !!this.getNoteText(username);
+    button.style.position = "relative";
+    let dot = button.querySelector<HTMLElement>(".pn-note-dot");
+    if (has && !dot) {
+      dot = document.createElement("span");
+      dot.className = "pn-note-dot";
+      dot.style.cssText =
+        "position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;" +
+        "background:#f59e0b;box-shadow:0 0 0 1px rgba(0,0,0,.5);pointer-events:none;";
+      button.appendChild(dot);
+    } else if (!has && dot) {
+      dot.remove();
+    }
+  }
+
+  /** Обновить индикаторы у всех видимых кнопок заметок. */
+  private refreshNoteIndicators(): void {
+    document
+      .querySelectorAll<HTMLElement>(`.${OWN.noteButton}[data-username]`)
+      .forEach((btn) => {
+        const u = btn.dataset.username;
+        if (u) this.updateNoteIndicator(btn, u);
+      });
   }
 
   private createHideVideoButton(
@@ -720,6 +762,7 @@ class PlayerNotesManager {
         `.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`,
       );
       if (tooltip) tooltip.innerHTML = this.generateTooltipContent(username);
+      this.refreshNoteIndicators();
     };
     const saveAndClose = () => {
       save();

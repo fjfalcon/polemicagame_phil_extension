@@ -130,6 +130,72 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
 
+  // ───────────────────────── Бэкап заметок (экспорт/импорт) ─────────────────────────
+  const exportBtn = $<HTMLButtonElement>("export_notes");
+  const importBtn = $<HTMLButtonElement>("import_notes");
+  const importFile = $<HTMLInputElement>("import_notes_file");
+
+  if (exportBtn) {
+    exportBtn.addEventListener("click", async () => {
+      const { playerNotes = {} } = (await browser.storage.sync.get("playerNotes")) as {
+        playerNotes?: Record<string, unknown>;
+      };
+      const count = Object.keys(playerNotes).length;
+      const payload = {
+        app: "polemica-notes",
+        type: "notes-backup",
+        version: browser.runtime.getManifest().version,
+        exportedAt: new Date().toISOString(),
+        notes: playerNotes,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `polemica-notes-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showPopupToast(`Экспортировано заметок: ${count}`);
+    });
+  }
+
+  if (importBtn && importFile) {
+    importBtn.addEventListener("click", () => importFile.click());
+    importFile.addEventListener("change", async () => {
+      const file = importFile.files?.[0];
+      if (!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        const incoming = (data?.notes ?? (data?.app ? {} : data)) as Record<
+          string,
+          { text?: string; timestamp?: number }
+        >;
+        if (!incoming || typeof incoming !== "object") throw new Error("bad format");
+
+        const { playerNotes = {} } = (await browser.storage.sync.get("playerNotes")) as {
+          playerNotes?: Record<string, { text?: string; timestamp?: number }>;
+        };
+        const merged: Record<string, { text?: string; timestamp?: number }> = { ...playerNotes };
+        let added = 0;
+        for (const [user, note] of Object.entries(incoming)) {
+          if (!note || typeof note.text !== "string") continue;
+          const cur = merged[user];
+          if (!cur || (note.timestamp ?? 0) >= (cur.timestamp ?? 0)) {
+            merged[user] = note;
+            added++;
+          }
+        }
+        await browser.storage.sync.set({ playerNotes: merged });
+        showPopupToast(`Импортировано заметок: ${added}`);
+      } catch (e) {
+        log.error(SCOPE, "import failed", e);
+        showPopupToast("Не удалось импортировать файл", "error");
+      } finally {
+        importFile.value = "";
+      }
+    });
+  }
+
   // ───────────────────────── Захват клавиши паузы ─────────────────────────
   let pauseHotkeyCode = "F8";
   const pauseCaptureBtn = $<HTMLButtonElement>("pause_hotkey_capture");
@@ -152,10 +218,43 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // ───────────────────────── Захват клавиш ролей (F/E/D) ─────────────────────────
+  let roleFakeCode = "KeyF";
+  let roleResetCode = "KeyE";
+  let roleHideCode = "KeyD";
+  const roleKeyRenders: Array<() => void> = [];
+  const setupRoleKey = (id: string, get: () => string, set: (c: string) => void) => {
+    const btn = $<HTMLButtonElement>(id);
+    if (!btn) return;
+    const render = () => (btn.textContent = formatKeyCode(get()));
+    render();
+    roleKeyRenders.push(render);
+    btn.addEventListener("click", () => {
+      btn.textContent = "Нажми…";
+      const onKey = (e: KeyboardEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isModifierCode(e.code)) return;
+        window.removeEventListener("keydown", onKey, true);
+        set(e.code);
+        render();
+        saveSettings();
+      };
+      window.addEventListener("keydown", onKey, true);
+    });
+  };
+  setupRoleKey("hotkey_role_fake", () => roleFakeCode, (c) => (roleFakeCode = c));
+  setupRoleKey("hotkey_role_reset", () => roleResetCode, (c) => (roleResetCode = c));
+  setupRoleKey("hotkey_role_hide", () => roleHideCode, (c) => (roleHideCode = c));
+
   // ───────────────────────── Загрузка настроек в контролы ─────────────────────────
   void getSettings().then((items) => {
     pauseHotkeyCode = items.pause_hotkey_code || "F8";
     renderPauseKey();
+    roleFakeCode = items.hotkey_role_fake || "KeyF";
+    roleResetCode = items.hotkey_role_reset || "KeyE";
+    roleHideCode = items.hotkey_role_hide || "KeyD";
+    roleKeyRenders.forEach((r) => r());
     const set = (id: string, val: boolean) => {
       const el = $<HTMLInputElement>(id);
       if (el) el.checked = val;
@@ -187,6 +286,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("camera_rotate_enabled", items.camera_rotate_enabled);
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("remember_player_volume_enabled", items.remember_player_volume_enabled);
+    set("update_check_enabled", items.update_check_enabled);
 
     // OBS
     const obsEnabled = $<HTMLInputElement>("obs_enabled");
@@ -242,9 +342,13 @@ document.addEventListener("DOMContentLoaded", () => {
       camera_rotate_enabled: cb("camera_rotate_enabled", false),
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       remember_player_volume_enabled: cb("remember_player_volume_enabled", true),
+      update_check_enabled: cb("update_check_enabled", true),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       pause_hotkey_enabled: cb("pause_hotkey_enabled", true),
       pause_hotkey_code: pauseHotkeyCode,
+      hotkey_role_fake: roleFakeCode,
+      hotkey_role_reset: roleResetCode,
+      hotkey_role_hide: roleHideCode,
       statistics_enabled: cb("statistics_enabled", true),
       match_page_stats_enabled: cb("match_page_stats_enabled", true),
       stats_button_theme: ($<HTMLSelectElement>("stats_button_theme")?.value || "default"),
@@ -294,6 +398,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "camera_rotate_enabled",
     "f5_refresh_fix_enabled",
     "remember_player_volume_enabled",
+    "update_check_enabled",
   ];
   simpleChangeIds.forEach((id) => {
     const el = $(id);

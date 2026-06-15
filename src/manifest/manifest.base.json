@@ -6,6 +6,7 @@
   "permissions": ["storage", "scripting", "activeTab", "tabs"],
   "host_permissions": [
     "*://*.polemicagame.com/*",
+    "https://api.github.com/*",
     "ws://localhost:*/*",
     "wss://localhost:*/*",
     "wss://irc-ws.chat.twitch.tv:443/*"

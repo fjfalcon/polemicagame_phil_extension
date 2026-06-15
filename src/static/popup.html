@@ -264,11 +264,26 @@
     </div>
 
     <div class="setting-item">
-        <span>Подмена роли (клавиша F)</span>
+        <span>Подмена роли</span>
         <label class="switch">
             <input type="checkbox" id="enable_role_faker" checked>
             <span class="slider"></span>
         </label>
+    </div>
+
+    <div class="setting-item">
+        <span>Клавиша подмены роли</span>
+        <button id="hotkey_role_fake" class="hotkey-capture" style="padding: 6px 12px; min-width: 70px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">F</button>
+    </div>
+
+    <div class="setting-item">
+        <span>Клавиша сброса роли</span>
+        <button id="hotkey_role_reset" class="hotkey-capture" style="padding: 6px 12px; min-width: 70px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">E</button>
+    </div>
+
+    <div class="setting-item">
+        <span>Клавиша скрытия роли</span>
+        <button id="hotkey_role_hide" class="hotkey-capture" style="padding: 6px 12px; min-width: 70px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">D</button>
     </div>
 
     <div class="setting-item">
@@ -322,6 +337,23 @@
     <div class="setting-item">
         <span>Символы в никах</span>
         <button id="show_nickname_lengths" style="padding: 6px 10px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Показать</button>
+    </div>
+
+    <div class="setting-item">
+        <span>Уведомлять о новой версии</span>
+        <label class="switch">
+            <input type="checkbox" id="update_check_enabled" checked>
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <div class="setting-item">
+        <span>Бэкап заметок</span>
+        <span style="display: flex; gap: 6px;">
+            <button id="export_notes" style="padding: 6px 10px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Экспорт</button>
+            <button id="import_notes" style="padding: 6px 10px; background: rgba(255,255,255,0.12); color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Импорт</button>
+            <input type="file" id="import_notes_file" accept="application/json,.json" style="display: none;">
+        </span>
     </div>
 
     <!-- OBS Integration Section -->

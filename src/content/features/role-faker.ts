@@ -7,7 +7,7 @@ import { keyboard } from "@core/keyboard";
 import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
 import { SITE } from "@core/selectors";
-import type { Feature } from "@core/feature";
+import type { Feature, FeatureContext } from "@core/feature";
 
 interface RoleDef {
   name: string;
@@ -30,6 +30,8 @@ class RoleFaker {
 
   private offDom: (() => void) | null = null;
   private dBlocker: ((e: KeyboardEvent) => void) | null = null;
+  /** Клавиша скрытия роли (блокируется во время подмены). Настраивается. */
+  hideKeyCode = "KeyD";
 
   onFakeKey = () => {
     this.changeRole();
@@ -52,7 +54,7 @@ class RoleFaker {
   private attachDBlocker() {
     if (this.dBlocker) return;
     this.dBlocker = (e: KeyboardEvent) => {
-      if (this.isFaked && e.code === "KeyD") {
+      if (this.isFaked && e.code === this.hideKeyCode) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -201,16 +203,37 @@ class RoleFaker {
 
 let faker: RoleFaker | null = null;
 let offKeys: Array<() => void> = [];
+let boundFake = "KeyF";
+let boundReset = "KeyE";
+
+function bindKeys(): void {
+  offKeys.forEach((off) => off());
+  offKeys = [
+    keyboard.register(boundFake, () => faker?.onFakeKey()),
+    keyboard.register(boundReset, () => faker?.onResetKey()),
+  ];
+}
 
 export const roleFakerFeature: Feature = {
   id: "role-faker",
   settingKey: "enable_role_faker",
-  enable() {
+  enable(ctx: FeatureContext) {
     faker = new RoleFaker();
-    offKeys = [
-      keyboard.register("KeyF", () => faker?.onFakeKey()),
-      keyboard.register("KeyE", () => faker?.onResetKey()),
-    ];
+    faker.hideKeyCode = ctx.settings.hotkey_role_hide || "KeyD";
+    boundFake = ctx.settings.hotkey_role_fake || "KeyF";
+    boundReset = ctx.settings.hotkey_role_reset || "KeyE";
+    bindKeys();
+  },
+  update(ctx: FeatureContext) {
+    if (!faker) return;
+    faker.hideKeyCode = ctx.settings.hotkey_role_hide || "KeyD";
+    const f = ctx.settings.hotkey_role_fake || "KeyF";
+    const r = ctx.settings.hotkey_role_reset || "KeyE";
+    if (f !== boundFake || r !== boundReset) {
+      boundFake = f;
+      boundReset = r;
+      bindKeys();
+    }
   },
   disable() {
     offKeys.forEach((off) => off());

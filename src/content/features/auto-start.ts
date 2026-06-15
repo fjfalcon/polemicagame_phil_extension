@@ -51,6 +51,7 @@ let videoButtonClicked = false;
 let gameInterval: ReturnType<typeof setInterval> | null = null;
 let unsubGameDom: (() => void) | null = null;
 let unsubKeyboard: (() => void) | null = null;
+let roleHideKey = "KeyD";
 let onRoleMenuClick: ((e: MouseEvent) => void) | null = null;
 let webcamDisabled = false;
 let webcamClickInterval: ReturnType<typeof setInterval> | null = null;
@@ -725,7 +726,11 @@ function handleRoleKey() {
     syncTrackedRolesVisibility();
   }
   trackedRolesVisible = !trackedRolesVisible;
-  log.debug(SCOPE, "D toggle, trackedRolesVisible =", trackedRolesVisible);
+  log.debug(SCOPE, "role-hide toggle, trackedRolesVisible =", trackedRolesVisible);
+
+  // Если хоткей переназначен (не дефолтный D) — сайт сам по нему не реагирует,
+  // поэтому досылаем ему синтетический D, чтобы его собственный тоггл сработал.
+  if (roleHideKey !== "KeyD") dispatchNativeRoleToggle();
 }
 
 function handleRoleMenuClick(event: MouseEvent) {
@@ -764,7 +769,7 @@ function enableGamePage() {
   onRoleMenuClick = handleRoleMenuClick;
   document.addEventListener("click", onRoleMenuClick, true);
 
-  unsubKeyboard = keyboard.register("KeyD", handleRoleKey, { preventDefault: false });
+  unsubKeyboard = keyboard.register(roleHideKey, handleRoleKey, { preventDefault: false });
 
   unsubGameDom = onDomChange((muts) => {
     if (muts.some((m) => m.addedNodes.length)) {
@@ -809,6 +814,16 @@ function disableGamePage() {
 function applyConfig(ctx: FeatureContext) {
   const s = ctx.settings;
   const prevAutoHide = cfg.autoHideRoles;
+
+  // Переназначаемая клавиша скрытия роли — перерегистрируем, если изменилась.
+  const newHideKey = s.hotkey_role_hide || "KeyD";
+  if (newHideKey !== roleHideKey) {
+    roleHideKey = newHideKey;
+    if (unsubKeyboard) {
+      unsubKeyboard();
+      unsubKeyboard = keyboard.register(roleHideKey, handleRoleKey, { preventDefault: false });
+    }
+  }
 
   cfg = {
     autoAccept: s.auto_accept_enabled === true,

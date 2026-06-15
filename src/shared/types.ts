@@ -29,6 +29,14 @@ export interface Settings {
   f5_refresh_fix_enabled: boolean;
   /** Запоминать громкость/mute каждого игрока и восстанавливать после обновления. */
   remember_player_volume_enabled: boolean;
+  /** Клавиша подмены роли (KeyboardEvent.code, дефолт KeyF). */
+  hotkey_role_fake: string;
+  /** Клавиша сброса роли (дефолт KeyE). */
+  hotkey_role_reset: string;
+  /** Клавиша скрытия/показа своей роли (дефолт KeyD). */
+  hotkey_role_hide: string;
+  /** Проверять наличие новой версии на GitHub и показывать баннер. */
+  update_check_enabled: boolean;
   // OBS
   obs_enabled: boolean;
   obs_host: string;
