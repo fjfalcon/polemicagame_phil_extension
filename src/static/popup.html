@@ -1,509 +1,372 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <style>
+        :root {
+            --bg: #0f1420;
+            --panel: #161c2c;
+            --panel-2: #1b2233;
+            --text: #e6e9f0;
+            --muted: #8b93a7;
+            --border: rgba(255, 255, 255, 0.08);
+            --accent: #3b82f6;
+            --accent-2: #6366f1;
+            --twitch: #9146ff;
+            --danger: #ef4444;
+            --ok: #22c55e;
+        }
+        * { box-sizing: border-box; }
         body {
-            width: 300px;
-            padding: 15px;
-            font-family: Arial, sans-serif;
+            width: 360px;
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
         }
-        .setting-item {
-            margin: 10px 0;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
+
+        /* Шапка */
+        .hdr {
+            display: flex; align-items: baseline; gap: 8px;
+            padding: 14px 16px 12px;
+            background: linear-gradient(135deg, rgba(99,102,241,.25), rgba(59,130,246,.10));
+            border-bottom: 1px solid var(--border);
         }
-        .setting-item span {
-            flex: 1;
+        .hdr-title { font-size: 15px; font-weight: 700; }
+        .hdr-ver { font-size: 11px; color: var(--muted); }
+
+        /* Вкладки */
+        .tabs {
+            display: flex; gap: 2px;
+            padding: 8px 8px 0;
+            background: var(--bg);
+            position: sticky; top: 0; z-index: 5;
         }
-        .setting-select {
-            min-width: 120px;
-            padding: 5px 7px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            background: #fff;
-            font-size: 12px;
+        .tab {
+            flex: 1; padding: 8px 4px; text-align: center;
+            background: transparent; border: none; color: var(--muted);
+            font: 600 12px/1 system-ui, sans-serif; cursor: pointer;
+            border-radius: 8px 8px 0 0; transition: all .15s;
         }
-        .switch {
-            position: relative;
-            display: inline-block;
-            width: 50px;
-            height: 24px;
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--text); background: var(--panel); }
+
+        /* Панели */
+        .panels { max-height: 70vh; overflow-y: auto; padding: 12px; background: var(--panel); }
+        .panel { display: none; }
+        .panel.active { display: block; }
+        .panels::-webkit-scrollbar { width: 8px; }
+        .panels::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 8px; }
+
+        /* Строка настройки */
+        .row {
+            display: flex; align-items: center; gap: 10px;
+            padding: 9px 10px; margin-bottom: 6px;
+            background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
         }
-        .switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
+        .row > span:first-child { flex: 1; }
+        .row .hint { display: block; font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+        /* Подзаголовок секции (внутри вкладки «Стрим») */
+        .sub {
+            display: flex; align-items: center; gap: 6px;
+            margin: 14px 0 8px; font-size: 12px; font-weight: 700;
         }
+        .sub:first-child { margin-top: 0; }
+        .sub.obs { color: var(--accent); }
+        .sub.twitch { color: var(--twitch); }
+        .field { margin-bottom: 8px; }
+        .field label { display: block; margin-bottom: 4px; font-size: 11px; color: var(--muted); }
+
+        /* Переключатель */
+        .switch { position: relative; display: inline-block; width: 42px; height: 22px; flex: 0 0 auto; }
+        .switch input { opacity: 0; width: 0; height: 0; }
         .slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #ccc;
-            transition: .4s;
-            border-radius: 24px;
+            position: absolute; inset: 0; cursor: pointer;
+            background: rgba(255,255,255,.16); transition: .25s; border-radius: 22px;
         }
         .slider:before {
-            position: absolute;
-            content: "";
-            height: 16px;
-            width: 16px;
-            left: 4px;
-            bottom: 4px;
-            background-color: white;
-            transition: .4s;
-            border-radius: 50%;
+            position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
+            background: #fff; transition: .25s; border-radius: 50%;
         }
-        input:checked + .slider {
-            background-color: #2196F3;
+        input:checked + .slider { background: var(--accent); }
+        input:checked + .slider:before { transform: translateX(20px); }
+
+        /* Кнопки */
+        .btn {
+            padding: 7px 12px; border: none; border-radius: 8px; cursor: pointer;
+            font: 600 12px/1 system-ui, sans-serif; color: #fff; background: var(--accent-2);
+            transition: filter .15s;
         }
-        input:checked + .slider:before {
-            transform: translateX(26px);
+        .btn:hover { filter: brightness(1.1); }
+        .btn-primary { background: var(--accent); }
+        .btn-ghost { background: rgba(255,255,255,.1); }
+        .btn-danger { background: var(--danger); }
+        .btn-ok { background: var(--ok); }
+        .btn-twitch { background: var(--twitch); }
+        .btn-key {
+            min-width: 64px; padding: 7px 12px; border: none; border-radius: 8px; cursor: pointer;
+            font: 600 12px/1 system-ui, sans-serif; color: #fff; background: rgba(255,255,255,.12);
         }
+        .btn-key:hover { background: rgba(255,255,255,.2); }
+        .btn-row { display: flex; gap: 6px; }
+        .btn-row .btn { flex: 1; }
+
+        /* Поля ввода / select */
+        .inp, .sel {
+            width: 100%; padding: 7px 9px; font-size: 12px; color: var(--text);
+            background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+        }
+        .sel { min-width: 130px; width: auto; }
+        .row .sel { flex: 0 0 auto; }
+
+        .status { font-size: 11px; text-align: center; color: var(--muted); margin: 8px 0; }
+        #scenes_list {
+            max-height: 110px; overflow-y: auto; border: 1px solid var(--border);
+            border-radius: 8px; background: var(--bg); font-size: 12px;
+        }
+        .note-box {
+            margin: 6px 0 0; padding: 8px 10px; font-size: 10px; color: var(--muted);
+            background: rgba(255,255,255,.04); border-radius: 8px;
+        }
+
+        .footer {
+            padding: 10px; text-align: center; font-size: 11px; color: var(--muted);
+            border-top: 1px solid var(--border); font-style: italic;
+        }
+
+        /* Тост */
         #notification {
-            position: fixed;
-            left: 50%;
-            bottom: 10px;
-            transform: translateX(-50%) translateY(6px);
-            width: calc(100% - 20px);
-            max-width: 320px;
-            padding: 10px 12px;
-            border-radius: 8px;
-            font-size: 11px;
-            line-height: 1.3;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 160ms ease, transform 160ms ease;
-            white-space: pre-line;
-            max-height: 200px;
-            overflow: auto;
-            box-sizing: border-box;
+            position: fixed; left: 50%; bottom: 10px; transform: translateX(-50%) translateY(6px);
+            width: calc(100% - 24px); max-width: 336px; padding: 10px 12px; border-radius: 10px;
+            font-size: 11px; line-height: 1.3; opacity: 0; pointer-events: none;
+            transition: opacity .16s ease, transform .16s ease; white-space: pre-line;
+            max-height: 200px; overflow: auto; background: var(--panel-2);
+            border: 1px solid var(--border); color: var(--text);
         }
-        #notification.show {
-            opacity: 1;
-            transform: translateX(-50%) translateY(0);
-        }
+        #notification.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        /* Модалка длины ников */
         #nicklen_overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.55);
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 160ms ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 12px;
-            box-sizing: border-box;
+            position: fixed; inset: 0; background: rgba(0,0,0,.6); opacity: 0; pointer-events: none;
+            transition: opacity .16s ease; display: flex; align-items: center; justify-content: center; padding: 12px;
         }
-        #nicklen_overlay.show {
-            opacity: 1;
-            pointer-events: auto;
-        }
+        #nicklen_overlay.show { opacity: 1; pointer-events: auto; }
         #nicklen_modal {
-            width: 100%;
-            max-width: 320px;
-            background: #101418;
-            color: #e5e7eb;
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-            overflow: hidden;
+            width: 100%; max-width: 320px; background: var(--panel); color: var(--text);
+            border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,.5); overflow: hidden;
         }
         #nicklen_modal_header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 10px 10px 8px;
-            background: linear-gradient(135deg, rgba(99, 102, 241, 0.35), rgba(139, 92, 246, 0.18));
-            border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+            display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px;
+            background: linear-gradient(135deg, rgba(99,102,241,.35), rgba(139,92,246,.18));
+            border-bottom: 1px solid var(--border);
         }
-        #nicklen_modal_title {
-            font-size: 12px;
-            font-weight: 700;
-            margin: 0;
-        }
+        #nicklen_modal_title { font-size: 12px; font-weight: 700; }
         #nicklen_close {
-            width: 26px;
-            height: 26px;
-            border: none;
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.10);
-            color: #e5e7eb;
-            cursor: pointer;
-            font-size: 16px;
-            line-height: 26px;
-            padding: 0;
+            width: 26px; height: 26px; border: none; border-radius: 8px; background: rgba(255,255,255,.1);
+            color: var(--text); cursor: pointer; font-size: 16px; line-height: 26px; padding: 0;
         }
-        #nicklen_close:hover {
-            background: rgba(255, 255, 255, 0.16);
-        }
-        #nicklen_modal_body {
-            padding: 10px;
-            font-size: 11px;
-            line-height: 1.35;
-            white-space: pre-line;
-            max-height: 240px;
-            overflow: auto;
-        }
+        #nicklen_close:hover { background: rgba(255,255,255,.18); }
+        #nicklen_modal_body { padding: 12px; font-size: 11px; line-height: 1.4; white-space: pre-line; max-height: 240px; overflow: auto; }
     </style>
 </head>
 <body>
-    <h2>Polemica extension 8.1.1</h2>
-
-    <div class="setting-item">
-        <span>Автопринятие игр</span>
-        <label class="switch">
-            <input type="checkbox" id="auto_accept_enabled" checked>
-            <span class="slider"></span>
-        </label>
+    <div class="hdr">
+        <span class="hdr-title">Polemica Notes</span>
+        <span class="hdr-ver" id="popup_version"></span>
     </div>
 
-    <div class="setting-item">
-        <span>Скип черных экранов "Начать игру"</span>
-        <label class="switch">
-            <input type="checkbox" id="skip_start_screen_enabled" checked>
-            <span class="slider"></span>
-        </label>
+    <div class="tabs">
+        <button class="tab active" data-tab="game">Игра</button>
+        <button class="tab" data-tab="stats">Стата</button>
+        <button class="tab" data-tab="roles">Роли</button>
+        <button class="tab" data-tab="stream">Стрим</button>
+        <button class="tab" data-tab="misc">Ещё</button>
     </div>
 
-    <div class="setting-item">
-        <span>Быстрая пауза</span>
-        <label class="switch">
-            <input type="checkbox" id="pause_hotkey_enabled" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Клавиша паузы</span>
-        <button id="pause_hotkey_capture" title="Нажми, затем нажми нужную клавишу" style="padding: 6px 12px; min-width: 70px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">F8</button>
-    </div>
-
-    <div class="setting-item">
-        <span>Статистика</span>
-        <label class="switch">
-            <input type="checkbox" id="statistics_enabled" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Послеигровая статистика</span>
-        <label class="switch">
-            <input type="checkbox" id="match_page_stats_enabled" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Тема кнопок статистики</span>
-        <select id="stats_button_theme" class="setting-select">
-            <option value="default">Стандарт</option>
-            <option value="pink">Розовая</option>
-            <option value="yellow">Желтая</option>
-            <option value="red">Красная</option>
-            <option value="green">Зеленая</option>
-            <option value="lime">Салатовая</option>
-            <option value="blue">Голубая</option>
-        </select>
-    </div>
-
-    <div class="setting-item">
-        <span>Показывать MMR</span>
-        <label class="switch">
-            <input type="checkbox" id="show_mmr" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Показывать количество игр</span>
-        <label class="switch">
-            <input type="checkbox" id="show_games" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Показывать ID игрока</span>
-        <label class="switch">
-            <input type="checkbox" id="show_id">
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Показывать винрейт</span>
-        <label class="switch">
-            <input type="checkbox" id="show_winrate" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Показывать отстрелы</span>
-        <label class="switch">
-            <input type="checkbox" id="show_kills" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Статистика по ролям</span>
-        <label class="switch">
-            <input type="checkbox" id="show_roles" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Подмена роли</span>
-        <label class="switch">
-            <input type="checkbox" id="enable_role_faker" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Клавиша подмены роли</span>
-        <button id="hotkey_role_fake" class="hotkey-capture" style="padding: 6px 12px; min-width: 70px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">F</button>
-    </div>
-
-    <div class="setting-item">
-        <span>Клавиша сброса роли</span>
-        <button id="hotkey_role_reset" class="hotkey-capture" style="padding: 6px 12px; min-width: 70px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">E</button>
-    </div>
-
-    <div class="setting-item">
-        <span>Клавиша скрытия роли</span>
-        <button id="hotkey_role_hide" class="hotkey-capture" style="padding: 6px 12px; min-width: 70px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">D</button>
-    </div>
-
-    <div class="setting-item">
-        <span>Автоотключение ролей</span>
-        <label class="switch">
-            <input type="checkbox" id="auto_hide_roles_enabled" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Автосмена ролей днем/ночью</span>
-        <label class="switch">
-            <input type="checkbox" id="role_phase_auto_switch_enabled" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Отключать клики по веб-камере (для всех)</span>
-        <label class="switch">
-            <input type="checkbox" id="disable_webcam_clicks">
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Режим поворота камер (клик по игроку — переворот на 180°)</span>
-        <label class="switch">
-            <input type="checkbox" id="camera_rotate_enabled">
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>F5 обновляет страницу (а не открывает настройки)</span>
-        <label class="switch">
-            <input type="checkbox" id="f5_refresh_fix_enabled" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Запоминать громкость игроков (после обновления)</span>
-        <label class="switch">
-            <input type="checkbox" id="remember_player_volume_enabled" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Символы в никах</span>
-        <button id="show_nickname_lengths" style="padding: 6px 10px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Показать</button>
-    </div>
-
-    <div class="setting-item">
-        <span>Уведомлять о новой версии</span>
-        <label class="switch">
-            <input type="checkbox" id="update_check_enabled" checked>
-            <span class="slider"></span>
-        </label>
-    </div>
-
-    <div class="setting-item">
-        <span>Бэкап заметок</span>
-        <span style="display: flex; gap: 6px;">
-            <button id="export_notes" style="padding: 6px 10px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Экспорт</button>
-            <button id="import_notes" style="padding: 6px 10px; background: rgba(255,255,255,0.12); color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Импорт</button>
-            <input type="file" id="import_notes_file" accept="application/json,.json" style="display: none;">
-        </span>
-    </div>
-
-    <!-- OBS Integration Section -->
-    <div style="margin-top: 20px; padding-top: 15px; border-top: 2px solid #2196F3;">
-        <h3 style="margin: 0 0 15px 0; color: #2196F3; font-size: 14px;">OBS Studio Integration</h3>
-
-        <div class="setting-item">
-            <span>Включить OBS интеграцию</span>
-            <label class="switch">
-                <input type="checkbox" id="obs_enabled">
-                <span class="slider"></span>
-            </label>
+    <div class="panels">
+        <!-- ── Игра ── -->
+        <div class="panel active" data-panel="game">
+            <div class="row"><span>Автопринятие игр</span>
+                <label class="switch"><input type="checkbox" id="auto_accept_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Скип чёрных экранов «Начать игру»</span>
+                <label class="switch"><input type="checkbox" id="skip_start_screen_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Быстрая пауза</span>
+                <label class="switch"><input type="checkbox" id="pause_hotkey_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Клавиша паузы</span>
+                <button id="pause_hotkey_capture" class="btn-key" title="Нажми, затем нужную клавишу">F8</button>
+            </div>
+            <div class="row"><span>Отключать клики по веб-камере (для всех)</span>
+                <label class="switch"><input type="checkbox" id="disable_webcam_clicks"><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Режим поворота камер<span class="hint">клик по игроку — переворот видео на 180°</span></span>
+                <label class="switch"><input type="checkbox" id="camera_rotate_enabled"><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>F5 обновляет страницу<span class="hint">а не открывает настройки игры</span></span>
+                <label class="switch"><input type="checkbox" id="f5_refresh_fix_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Запоминать громкость игроков<span class="hint">сохраняется после обновления страницы</span></span>
+                <label class="switch"><input type="checkbox" id="remember_player_volume_enabled" checked><span class="slider"></span></label>
+            </div>
         </div>
 
-        <div id="obs_settings" style="display: none;">
-            <div style="margin: 10px 0;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">WebSocket адрес:</label>
-                <input type="text" id="obs_host" value="ws://localhost:4455" style="width: 100%; padding: 5px; border: 1px solid #ccc; border-radius: 3px; font-size: 12px;">
+        <!-- ── Статистика ── -->
+        <div class="panel" data-panel="stats">
+            <div class="row"><span>Статистика игроков</span>
+                <label class="switch"><input type="checkbox" id="statistics_enabled" checked><span class="slider"></span></label>
             </div>
-
-            <div style="margin: 10px 0;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">Пароль (опционально):</label>
-                <input type="password" id="obs_password" style="width: 100%; padding: 5px; border: 1px solid #ccc; border-radius: 3px; font-size: 12px;">
+            <div class="row"><span>Послеигровая статистика</span>
+                <label class="switch"><input type="checkbox" id="match_page_stats_enabled" checked><span class="slider"></span></label>
             </div>
-
-            <div style="margin: 10px 0; display: flex; gap: 5px;">
-                <button id="obs_connect" style="flex: 1; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">Подключиться</button>
-                <button id="obs_disconnect" style="flex: 1; padding: 8px; background: #f44336; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">Отключиться</button>
+            <div class="row"><span>Тема кнопок</span>
+                <select id="stats_button_theme" class="sel">
+                    <option value="default">Стандарт</option>
+                    <option value="pink">Розовая</option>
+                    <option value="yellow">Жёлтая</option>
+                    <option value="red">Красная</option>
+                    <option value="green">Зелёная</option>
+                    <option value="lime">Салатовая</option>
+                    <option value="blue">Голубая</option>
+                </select>
             </div>
-
-            <div id="obs_status" style="margin: 10px 0; font-size: 12px; text-align: center; color: #666;">
-                Не подключено
+            <div class="row"><span>Показывать MMR</span>
+                <label class="switch"><input type="checkbox" id="show_mmr" checked><span class="slider"></span></label>
             </div>
+            <div class="row"><span>Количество игр</span>
+                <label class="switch"><input type="checkbox" id="show_games" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>ID игрока</span>
+                <label class="switch"><input type="checkbox" id="show_id"><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Винрейт</span>
+                <label class="switch"><input type="checkbox" id="show_winrate" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Отстрелы</span>
+                <label class="switch"><input type="checkbox" id="show_kills" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Статистика по ролям</span>
+                <label class="switch"><input type="checkbox" id="show_roles" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Символы в никах</span>
+                <button id="show_nickname_lengths" class="btn btn-primary">Показать</button>
+            </div>
+        </div>
 
-            <div id="obs_scenes" style="margin: 10px 0;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">Сцены OBS:</label>
-                <div id="scenes_list" style="max-height: 120px; overflow-y: auto; border: 1px solid #ccc; border-radius: 3px; background: #f9f9f9;">
-                    <!-- Сцены будут загружены динамически -->
+        <!-- ── Роли ── -->
+        <div class="panel" data-panel="roles">
+            <div class="row"><span>Подмена роли</span>
+                <label class="switch"><input type="checkbox" id="enable_role_faker" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Клавиша подмены роли</span>
+                <button id="hotkey_role_fake" class="btn-key">F</button>
+            </div>
+            <div class="row"><span>Клавиша сброса роли</span>
+                <button id="hotkey_role_reset" class="btn-key">E</button>
+            </div>
+            <div class="row"><span>Клавиша скрытия роли</span>
+                <button id="hotkey_role_hide" class="btn-key">D</button>
+            </div>
+            <div class="row"><span>Автоотключение ролей</span>
+                <label class="switch"><input type="checkbox" id="auto_hide_roles_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Автосмена ролей днём/ночью</span>
+                <label class="switch"><input type="checkbox" id="role_phase_auto_switch_enabled" checked><span class="slider"></span></label>
+            </div>
+        </div>
+
+        <!-- ── Стрим (OBS + Twitch) ── -->
+        <div class="panel" data-panel="stream">
+            <div class="sub obs">🎥 OBS Studio</div>
+            <div class="row"><span>Включить OBS интеграцию</span>
+                <label class="switch"><input type="checkbox" id="obs_enabled"><span class="slider"></span></label>
+            </div>
+            <div id="obs_settings" style="display: none;">
+                <div class="field">
+                    <label>WebSocket адрес</label>
+                    <input type="text" id="obs_host" class="inp" value="ws://localhost:4455">
                 </div>
-            </div>
-
-            <div style="margin: 10px 0;">
-                <div class="setting-item">
-                    <span>Плавающая панель на странице</span>
-                    <label class="switch">
-                        <input type="checkbox" id="obs_floating_panel_enabled">
-                        <span class="slider"></span>
-                    </label>
+                <div class="field">
+                    <label>Пароль (опционально)</label>
+                    <input type="password" id="obs_password" class="inp">
                 </div>
-                <div style="margin-top: 8px; display: flex; gap: 5px;">
-                    <button id="show_floating_panel" style="flex: 1; padding: 6px; background: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Показать панель</button>
-                    <button id="hide_floating_panel" style="flex: 1; padding: 6px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Скрыть панель</button>
+                <div class="btn-row">
+                    <button id="obs_connect" class="btn btn-primary">Подключиться</button>
+                    <button id="obs_disconnect" class="btn btn-danger">Отключиться</button>
                 </div>
-                <div style="margin-top: 5px; font-size: 10px; color: #999; text-align: center;">
-                    💡 Плавающая панель работает только на странице игры
+                <div id="obs_status" class="status">Не подключено</div>
+                <div id="obs_scenes" class="field">
+                    <label>Сцены OBS</label>
+                    <div id="scenes_list"></div>
                 </div>
-            </div>
-
-            <div style="margin: 15px 0; padding: 10px; background: rgba(33, 150, 243, 0.1); border-radius: 5px; border: 1px solid rgba(33, 150, 243, 0.2);">
-                <h4 style="margin: 0 0 10px 0; color: #2196F3; font-size: 12px; font-weight: bold;">🌙 Автоматическое переключение сцен</h4>
-
-                <div class="setting-item">
-                    <span>Автоматический режим</span>
-                    <label class="switch">
-                        <input type="checkbox" id="obs_auto_mode_enabled">
-                        <span class="slider"></span>
-                    </label>
+                <div class="row"><span>Плавающая панель на странице</span>
+                    <label class="switch"><input type="checkbox" id="obs_floating_panel_enabled"><span class="slider"></span></label>
                 </div>
-
-                <div id="obs_auto_settings" style="display: none; margin-top: 10px;">
-                    <div style="margin: 8px 0;">
-                        <label style="display: block; margin-bottom: 3px; font-size: 11px; color: #666;">Дневная сцена:</label>
-                        <select id="obs_day_scene" style="width: 100%; padding: 4px; border: 1px solid #ccc; border-radius: 3px; font-size: 11px; background: white;">
-                            <option value="">Выберите сцену</option>
-                        </select>
+                <div class="btn-row">
+                    <button id="show_floating_panel" class="btn btn-ok">Показать</button>
+                    <button id="hide_floating_panel" class="btn btn-ghost">Скрыть</button>
+                </div>
+                <div class="row" style="margin-top:6px;"><span>Авто-переключение сцен день/ночь</span>
+                    <label class="switch"><input type="checkbox" id="obs_auto_mode_enabled"><span class="slider"></span></label>
+                </div>
+                <div id="obs_auto_settings" style="display: none;">
+                    <div class="field">
+                        <label>Дневная сцена</label>
+                        <select id="obs_day_scene" class="inp"><option value="">Выберите сцену</option></select>
                     </div>
-
-                    <div style="margin: 8px 0;">
-                        <label style="display: block; margin-bottom: 3px; font-size: 11px; color: #666;">Ночная сцена:</label>
-                        <select id="obs_night_scene" style="width: 100%; padding: 4px; border: 1px solid #ccc; border-radius: 3px; font-size: 11px; background: white;">
-                            <option value="">Выберите сцену</option>
-                        </select>
+                    <div class="field">
+                        <label>Ночная сцена</label>
+                        <select id="obs_night_scene" class="inp"><option value="">Выберите сцену</option></select>
                     </div>
-
-                    <div style="margin-top: 8px; font-size: 10px; color: #999; text-align: center;">
-                        🎯 Сцены автоматически переключаются при изменении времени суток на странице игры
-                    </div>
+                    <div class="note-box">🎯 Сцены переключаются автоматически при смене времени суток в игре</div>
                 </div>
+                <div class="note-box">💡 Плавающая панель работает только на странице игры</div>
             </div>
+
+            <div class="sub twitch">💬 Twitch Chat</div>
+            <div class="row"><span>Включить Twitch чат</span>
+                <label class="switch"><input type="checkbox" id="twitch_chat_enabled"><span class="slider"></span></label>
+            </div>
+            <div id="twitch_settings" style="display: none;">
+                <div class="field">
+                    <label>Имя канала (без #)</label>
+                    <input type="text" id="twitch_channel_name" class="inp" placeholder="shroud">
+                </div>
+                <div class="btn-row">
+                    <button id="twitch_connect" class="btn btn-twitch">Подключиться</button>
+                    <button id="twitch_disconnect" class="btn btn-danger">Отключиться</button>
+                </div>
+                <div id="twitch_status" class="status">Не подключен</div>
+                <div class="row"><span>Плавающая панель чата</span>
+                    <label class="switch"><input type="checkbox" id="twitch_floating_panel_enabled"><span class="slider"></span></label>
+                </div>
+                <div class="btn-row">
+                    <button id="show_twitch_panel" class="btn btn-twitch">Показать</button>
+                    <button id="hide_twitch_panel" class="btn btn-ghost">Скрыть</button>
+                </div>
+                <div class="note-box">💬 Плавающий чат работает только на странице игры</div>
+            </div>
+        </div>
+
+        <!-- ── Ещё ── -->
+        <div class="panel" data-panel="misc">
+            <div class="row"><span>Уведомлять о новой версии<span class="hint">проверка релизов на GitHub</span></span>
+                <label class="switch"><input type="checkbox" id="update_check_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Бэкап заметок</span>
+                <span class="btn-row">
+                    <button id="export_notes" class="btn btn-primary">Экспорт</button>
+                    <button id="import_notes" class="btn btn-ghost">Импорт</button>
+                    <input type="file" id="import_notes_file" accept="application/json,.json" style="display: none;">
+                </span>
+            </div>
+            <div class="note-box">Экспортируй заметки в файл, чтобы не потерять их при сбросе браузера.</div>
         </div>
     </div>
 
-    <!-- Twitch Chat Integration Section -->
-    <div style="margin-top: 20px; padding-top: 15px; border-top: 2px solid #9146FF;">
-        <h3 style="margin: 0 0 15px 0; color: #9146FF; font-size: 14px;">💬 Twitch Chat Integration</h3>
-
-        <div class="setting-item">
-            <span>Включить Twitch чат</span>
-            <label class="switch">
-                <input type="checkbox" id="twitch_chat_enabled">
-                <span class="slider"></span>
-            </label>
-        </div>
-
-        <div id="twitch_settings" style="display: none;">
-            <div style="margin: 10px 0;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">Имя канала Twitch:</label>
-                <input type="text" id="twitch_channel_name" placeholder="shroud" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px;">
-                <div style="font-size: 10px; color: #999; margin-top: 2px;">Введите имя канала без # (например: shroud)</div>
-            </div>
-
-            <div style="margin: 10px 0; display: flex; gap: 5px;">
-                <button id="twitch_connect" style="flex: 1; padding: 8px; background: #9146FF; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">Подключиться</button>
-                <button id="twitch_disconnect" style="flex: 1; padding: 8px; background: #f44336; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">Отключиться</button>
-            </div>
-
-            <div id="twitch_status" style="margin: 10px 0; font-size: 12px; text-align: center; color: #666;">
-                Не подключен
-            </div>
-
-            <div style="margin: 10px 0;">
-                <div class="setting-item">
-                    <span>Плавающая панель чата</span>
-                    <label class="switch">
-                        <input type="checkbox" id="twitch_floating_panel_enabled">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                <div style="margin-top: 8px; display: flex; gap: 5px;">
-                    <button id="show_twitch_panel" style="flex: 1; padding: 6px; background: #9146FF; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Показать чат</button>
-                    <button id="hide_twitch_panel" style="flex: 1; padding: 6px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Скрыть чат</button>
-                </div>
-                <div style="margin-top: 5px; font-size: 10px; color: #999; text-align: center;">
-                    💬 Плавающий чат работает только на странице игры
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div style="
-        margin-top: 20px;
-        padding-top: 10px;
-        border-top: 1px solid #eee;
-        text-align: center;
-        font-size: 12px;
-        color: #666;
-        font-style: italic;
-    ">
-        © Phil_Richards, 2025
-    </div>
+    <div class="footer">© Phil_Richards, 2025</div>
 
     <div id="notification"></div>
 

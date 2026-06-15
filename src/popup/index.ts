@@ -33,6 +33,35 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T | null =>
 const SCOPE = "popup";
 
 document.addEventListener("DOMContentLoaded", () => {
+  // ───────────────────────── Версия в шапке ─────────────────────────
+  const verEl = $("popup_version");
+  if (verEl) verEl.textContent = `v${browser.runtime.getManifest().version}`;
+
+  // ───────────────────────── Вкладки ─────────────────────────
+  const tabs = Array.from(document.querySelectorAll<HTMLElement>(".tab"));
+  const panels = Array.from(document.querySelectorAll<HTMLElement>(".panel"));
+  const TAB_LS = "polemica:popupTab";
+  const activateTab = (name: string) => {
+    const exists = tabs.some((t) => t.dataset.tab === name);
+    const target = exists ? name : "game";
+    tabs.forEach((t) => t.classList.toggle("active", t.dataset.tab === target));
+    panels.forEach((p) => p.classList.toggle("active", p.dataset.panel === target));
+    try {
+      localStorage.setItem(TAB_LS, target);
+    } catch {
+      /* ignore */
+    }
+  };
+  tabs.forEach((t) =>
+    t.addEventListener("click", () => activateTab(t.dataset.tab || "game")),
+  );
+  try {
+    const saved = localStorage.getItem(TAB_LS);
+    if (saved) activateTab(saved);
+  } catch {
+    /* ignore */
+  }
+
   // ───────────────────────── Тосты ─────────────────────────
   let popupToastTimer: ReturnType<typeof setTimeout> | null = null;
   function showPopupToast(message: string, type: "success" | "error" = "success", timeoutMs = 8000) {
