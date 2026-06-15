@@ -314,7 +314,6 @@ document.addEventListener("DOMContentLoaded", () => {
     set("auto_accept_enabled", items.auto_accept_enabled);
     set("camera_rotate_enabled", items.camera_rotate_enabled);
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
-    set("remember_player_volume_enabled", items.remember_player_volume_enabled);
     set("update_check_enabled", items.update_check_enabled);
 
     // OBS
@@ -370,7 +369,6 @@ document.addEventListener("DOMContentLoaded", () => {
       auto_accept_enabled: cb("auto_accept_enabled", true),
       camera_rotate_enabled: cb("camera_rotate_enabled", true),
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
-      remember_player_volume_enabled: cb("remember_player_volume_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       pause_hotkey_enabled: cb("pause_hotkey_enabled", true),
@@ -426,7 +424,6 @@ document.addEventListener("DOMContentLoaded", () => {
     "auto_accept_enabled",
     "camera_rotate_enabled",
     "f5_refresh_fix_enabled",
-    "remember_player_volume_enabled",
     "update_check_enabled",
   ];
   simpleChangeIds.forEach((id) => {

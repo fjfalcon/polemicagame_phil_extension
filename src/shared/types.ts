@@ -27,8 +27,6 @@ export interface Settings {
   camera_rotate_enabled: boolean;
   /** Возвращать F5 нормальное обновление страницы (сайт перехватывает его под настройки). */
   f5_refresh_fix_enabled: boolean;
-  /** Запоминать громкость/mute каждого игрока и восстанавливать после обновления. */
-  remember_player_volume_enabled: boolean;
   /** Клавиша подмены роли (KeyboardEvent.code, дефолт KeyF). */
   hotkey_role_fake: string;
   /** Клавиша сброса роли (дефолт KeyE). */
