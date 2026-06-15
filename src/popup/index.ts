@@ -368,7 +368,7 @@ document.addEventListener("DOMContentLoaded", () => {
       enable_role_faker: cb("enable_role_faker"),
       disable_webcam_clicks: cb("disable_webcam_clicks", false),
       auto_accept_enabled: cb("auto_accept_enabled", true),
-      camera_rotate_enabled: cb("camera_rotate_enabled", false),
+      camera_rotate_enabled: cb("camera_rotate_enabled", true),
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       remember_player_volume_enabled: cb("remember_player_volume_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
