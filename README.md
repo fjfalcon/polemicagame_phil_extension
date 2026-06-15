@@ -8,6 +8,17 @@
 
 Код основан на работах [Phil_Richards](https://t.me/smartestphill).
 
+## Установка (готовые сборки)
+
+Скачай архив из [последнего релиза](https://github.com/fjfalcon/polemicagame_phil_extension/releases/latest):
+
+- **Chrome** — `polemica-notes-chrome-<версия>.zip`: распаковать → открыть `chrome://extensions`
+  → включить «Режим разработчика» → «Загрузить распакованное» → выбрать папку.
+- **Firefox** — `polemica-notes-firefox-<версия>.zip`: распаковать → открыть `about:debugging#/runtime/this-firefox`
+  → «Загрузить временное дополнение» → выбрать `manifest.json`.
+  Временное дополнение слетает при перезапуске Firefox; для постоянной установки нужна подпись
+  через AMO (`npx web-ext sign -s dist/firefox`).
+
 ## Сборка
 
 ```bash
@@ -47,7 +58,8 @@ src/
     auto-accept.ts автопринятие через scripting.executeScript
   content/         единый content.js
     index.ts       bootstrap: регистрирует все фичи в FeatureManager
-    features/       search, auto-start, player-notes, match-stats, tooltip, role-faker, pause-hotkey
+    features/       search, auto-start, player-notes, match-stats, tooltip,
+                    role-faker, pause-hotkey, camera-rotate
     panels/         obs-panel, twitch-panel
   popup/           UI настроек
   static/          popup.html, notes.css, иконки
