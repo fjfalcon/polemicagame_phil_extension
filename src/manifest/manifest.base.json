@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Polemica Notes",
-  "version": "8.1.13",
+  "version": "8.1.14",
   "description": "Расширение для Polemica Game с дополнительными функциями:\n• Статистика игроков\n• Подмена роли (F)\n• Быстрая пауза (F8)\n• Автопринятие игры",
   "permissions": ["storage", "scripting", "activeTab", "tabs"],
   "host_permissions": [

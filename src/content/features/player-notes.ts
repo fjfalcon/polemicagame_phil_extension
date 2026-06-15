@@ -61,15 +61,28 @@ interface LastGameEntry {
 
 type NoteRecord = { text: string; timestamp: number; version?: string; tag?: string };
 
-/** Палитра цветных меток игроков. */
-const TAG_COLORS: Array<{ c: string; name: string }> = [
-  { c: "", name: "нет" },
-  { c: "#ef4444", name: "красный" },
-  { c: "#f59e0b", name: "оранжевый" },
-  { c: "#eab308", name: "жёлтый" },
-  { c: "#22c55e", name: "зелёный" },
-  { c: "#3b82f6", name: "синий" },
-  { c: "#a855f7", name: "фиолетовый" },
+/**
+ * Палитра меток игроков. `css` — любое значение для background:
+ * сплошной цвет ИЛИ градиент (linear-gradient...). Старые метки (hex-цвет) совместимы.
+ */
+const TAG_PRESETS: Array<{ css: string; name: string }> = [
+  { css: "", name: "нет" },
+  // сплошные цвета
+  { css: "#ef4444", name: "красный" },
+  { css: "#f59e0b", name: "оранжевый" },
+  { css: "#eab308", name: "жёлтый" },
+  { css: "#22c55e", name: "зелёный" },
+  { css: "#3b82f6", name: "синий" },
+  { css: "#a855f7", name: "фиолетовый" },
+  { css: "#06b6d4", name: "бирюзовый" },
+  { css: "#ffffff", name: "белый" },
+  { css: "#0a0a0a", name: "чёрный" },
+  // градиенты
+  { css: "linear-gradient(135deg,#ffffff,#ec4899)", name: "бело-розовый" },
+  { css: "linear-gradient(135deg,#ff2d95,#0a0a0a)", name: "розово-чёрный" },
+  { css: "linear-gradient(135deg,#0a0a0a,#ffffff)", name: "чёрно-белый" },
+  { css: "linear-gradient(135deg,#ff512f,#f09819)", name: "огонь" },
+  { css: "linear-gradient(135deg,#ef4444,#eab308,#22c55e,#3b82f6,#a855f7)", name: "радуга" },
 ];
 type NotesMap = Record<string, NoteRecord | string>;
 
@@ -316,10 +329,31 @@ class PlayerNotesManager {
     return note && typeof note !== "string" ? note.tag || "" : "";
   }
 
-  /** Подсветить плитку игрока цветом метки (или снять подсветку). */
+  /** Подсветить плитку игрока меткой (цвет или градиент) через overlay-рамку. */
   private applyPlayerTag(container: HTMLElement, username: string): void {
     const tag = this.getNoteTag(username);
-    container.style.boxShadow = tag ? `inset 0 0 0 2px ${tag}, 0 0 10px ${tag}66` : "";
+    let ring = container.querySelector<HTMLElement>(".pn-tag-ring");
+    if (!tag) {
+      ring?.remove();
+      return;
+    }
+    if (getComputedStyle(container).position === "static") {
+      container.style.position = "relative";
+    }
+    if (!ring) {
+      ring = document.createElement("div");
+      ring.className = "pn-tag-ring";
+      container.appendChild(ring);
+    }
+    // Градиентная рамка: маской вырезаем середину, остаётся рамка 2.5px.
+    ring.style.cssText = `
+      position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 5;
+      padding: 2.5px; background: ${tag};
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor; mask-composite: exclude;
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      filter: drop-shadow(0 0 4px rgba(0,0,0,.4));
+    `;
   }
 
   /** Обновить подсветку плиток у всех видимых игроков. */
@@ -827,25 +861,27 @@ class PlayerNotesManager {
     const swatches: HTMLButtonElement[] = [];
     const renderSwatches = () => {
       swatches.forEach((s) => {
-        const isSel = s.dataset.color === selectedTag;
+        const isSel = s.dataset.css === selectedTag;
         s.style.outline = isSel ? "2px solid #fff" : "2px solid transparent";
         s.style.outlineOffset = "2px";
       });
     };
-    TAG_COLORS.forEach(({ c, name }) => {
+    TAG_PRESETS.forEach(({ css, name }) => {
       const sw = document.createElement("button");
-      sw.dataset.color = c;
+      sw.dataset.css = css;
       sw.title = name;
       sw.style.cssText = `
-        width: 22px; height: 22px; border-radius: 50%; cursor: pointer; padding: 0;
-        border: 1px solid rgba(255,255,255,.3);
-        background: ${c || "transparent"};
-        ${c ? "" : "position:relative;"}
+        width: 24px; height: 24px; border-radius: 50%; cursor: pointer; padding: 0;
+        border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto;
+        background: ${css || "transparent"};
+        display: flex; align-items: center; justify-content: center;
       `;
-      if (!c) sw.textContent = "✕"; // «нет метки»
-      if (!c) sw.style.color = "rgba(255,255,255,.6)";
+      if (!css) {
+        sw.textContent = "✕"; // «нет метки»
+        sw.style.color = "rgba(255,255,255,.6)";
+      }
       sw.addEventListener("click", () => {
-        selectedTag = c;
+        selectedTag = css;
         renderSwatches();
       });
       swatches.push(sw);
@@ -1187,9 +1223,7 @@ class PlayerNotesManager {
     document
       .querySelectorAll(`${OWN_BUTTON_SELECTOR}, .${OWN.playerStats}`)
       .forEach((el) => el.remove());
-    document.querySelectorAll<HTMLElement>(SITE.player).forEach((p) => {
-      if (p.style.boxShadow) p.style.boxShadow = "";
-    });
+    document.querySelectorAll(".pn-tag-ring").forEach((r) => r.remove());
     document.querySelectorAll(`.${OWN.playerIcons}`).forEach((group) => {
       if (!group.children.length) group.remove();
     });
