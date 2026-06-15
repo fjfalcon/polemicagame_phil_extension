@@ -16,7 +16,6 @@ import { matchStatsFeature } from "./features/match-stats";
 import { tooltipFeature } from "./features/tooltip";
 import { roleFakerFeature } from "./features/role-faker";
 import { pauseHotkeyFeature } from "./features/pause-hotkey";
-import { cameraRotateFeature } from "./features/camera-rotate";
 import { f5RefreshFeature } from "./features/f5-refresh";
 import { playerVolumeFeature } from "./features/player-volume";
 import { updateNotifyFeature } from "./features/update-notify";
@@ -31,7 +30,6 @@ const manager = new FeatureManager().register(
   tooltipFeature,
   roleFakerFeature,
   pauseHotkeyFeature,
-  cameraRotateFeature,
   f5RefreshFeature,
   playerVolumeFeature,
   updateNotifyFeature,

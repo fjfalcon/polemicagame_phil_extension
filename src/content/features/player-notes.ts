@@ -22,6 +22,7 @@ import { browser } from "@core/env";
 import { log } from "@core/log";
 import { onDomChange } from "@core/dom";
 import { onMessage } from "@core/messaging";
+import { toggleFlipForPlayer, isPlayerFlipped } from "../camera-flip";
 import { escapeHtml } from "@core/escape";
 import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
@@ -646,6 +647,43 @@ class PlayerNotesManager {
     return noteButton;
   }
 
+  /** Кнопка переворота камеры игрока (один клик, без режима). */
+  private createRotateButton(username: string, container: Element): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.className = OWN.rotateButton;
+    btn.dataset.username = username;
+    btn.title = "Повернуть камеру на 180°";
+    btn.style.cssText = BUTTON_PLAIN_CSS;
+    btn.innerHTML = `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="color: rgba(66, 103, 178, 0.9);">
+        <path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M21 3v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    `;
+    const sync = () => {
+      btn.style.opacity = isPlayerFlipped(container as HTMLElement) ? "1" : "0.7";
+    };
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleFlipForPlayer(container as HTMLElement);
+      sync();
+    });
+    this.applyButtonTheme(btn);
+    sync();
+    return btn;
+  }
+
+  /** Добавить/убрать кнопку переворота в зависимости от настройки camera_rotate_enabled. */
+  private ensureRotateButton(iconsGroup: Element, container: Element, username: string): void {
+    const existing = iconsGroup.querySelector(`.${OWN.rotateButton}`);
+    if (this.settings.camera_rotate_enabled) {
+      if (!existing) iconsGroup.appendChild(this.createRotateButton(username, container));
+    } else if (existing) {
+      existing.remove();
+    }
+  }
+
   /** Жёлтая точка на кнопке заметки, если у игрока есть заметка. */
   private updateNoteIndicator(button: HTMLElement, username: string): void {
     const has = !!this.getNoteText(username);
@@ -1105,6 +1143,8 @@ class PlayerNotesManager {
         if (vid) vid.style.display = "none";
       }
       this.applyPlayerTag(container as HTMLElement, username);
+      const grp = infoContainer.querySelector(`.${OWN.playerIcons}`);
+      if (grp) this.ensureRotateButton(grp, container, username);
       return;
     }
 
@@ -1123,6 +1163,7 @@ class PlayerNotesManager {
     iconsGroup.appendChild(this.createNoteButton(username));
     iconsGroup.appendChild(this.createLastGamesButton(username));
     iconsGroup.appendChild(this.createHideVideoButton(username, container));
+    this.ensureRotateButton(iconsGroup, container, username);
 
     if (this.hiddenVideos.has(username.toLowerCase())) {
       const vid = container.querySelector<HTMLElement>(SITE.playerVideo);

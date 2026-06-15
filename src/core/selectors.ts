@@ -142,6 +142,7 @@ export const OWN = {
   noteButton: "note-button",
   lastGamesButton: "last-games-button",
   hideVideoButton: "hide-video-button",
+  rotateButton: "rotate-button",
   roleHideStyle: "polemica-role-hide",
   /** Контейнер для иконок, добавляемых к игроку. */
   playerIcons: "player-icons",
@@ -155,4 +156,4 @@ export const OWN = {
 
 /** Все классы наших элементов, которые надо удалять при выключении фичи. */
 export const OWN_BUTTON_SELECTOR =
-  ".stats-button, .note-button, .last-games-button, .hide-video-button";
+  ".stats-button, .note-button, .last-games-button, .hide-video-button, .rotate-button";
