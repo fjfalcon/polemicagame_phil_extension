@@ -667,9 +667,22 @@ class PlayerNotesManager {
   // ─────────── Модалка заметок ───────────
 
   private showNoteModal(username: string): void {
+    // Оверлей (затемнение + клик мимо окна закрывает). Класс нужен для очистки в disable().
+    const overlay = document.createElement("div");
+    overlay.className = "polemica-note-modal";
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 10000;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex; align-items: center; justify-content: center;
+    `;
+
     const modal = document.createElement("div");
-    modal.className = "polemica-note-modal";
-    modal.style.cssText = MODAL_CSS;
+    modal.style.cssText = `
+      background: rgba(11, 27, 57, 0.97);
+      padding: 20px; border-radius: 8px; min-width: 320px; max-width: 90vw;
+      border: 1px solid rgba(79, 129, 245, 0.3);
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    `;
 
     const title = document.createElement("h3");
     title.textContent = `Заметка для игрока ${username}`;
@@ -687,19 +700,15 @@ class PlayerNotesManager {
       color: white;
       padding: 8px;
       resize: vertical;
+      box-sizing: border-box;
     `;
 
-    const saveButton = document.createElement("button");
-    saveButton.textContent = "Сохранить";
-    saveButton.style.cssText = `
-      padding: 8px 16px;
-      background: rgba(99, 102, 241, 0.3);
-      color: white;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-    `;
-    saveButton.addEventListener("click", () => {
+    // ── общие действия ──
+    const close = () => {
+      document.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+    };
+    const save = () => {
       const value = textarea.value.trim();
       if (value) {
         this.notes[username] = { text: value, timestamp: Date.now(), version: VERSION };
@@ -707,17 +716,68 @@ class PlayerNotesManager {
         delete this.notes[username];
       }
       void this.saveNotes();
-      modal.remove();
       const tooltip = document.querySelector(
         `.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`,
       );
       if (tooltip) tooltip.innerHTML = this.generateTooltipContent(username);
+    };
+    const saveAndClose = () => {
+      save();
+      close();
+    };
+
+    // ── кнопки ──
+    const mkBtn = (text: string, bg: string): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.textContent = text;
+      b.style.cssText = `
+        padding: 8px 16px; color: white; border: none; border-radius: 8px;
+        cursor: pointer; font-size: 13px; background: ${bg};
+      `;
+      return b;
+    };
+    const saveBtn = mkBtn("Сохранить", "rgba(99, 102, 241, 0.3)");
+    const saveCloseBtn = mkBtn("Сохранить и закрыть", "rgba(99, 102, 241, 0.6)");
+    const closeBtn = mkBtn("Закрыть", "rgba(255, 255, 255, 0.12)");
+
+    let savedHint: ReturnType<typeof setTimeout> | null = null;
+    saveBtn.addEventListener("click", () => {
+      save();
+      // Короткий фидбек, окно остаётся открытым.
+      saveBtn.textContent = "Сохранено ✓";
+      if (savedHint) clearTimeout(savedHint);
+      savedHint = setTimeout(() => (saveBtn.textContent = "Сохранить"), 1200);
+    });
+    saveCloseBtn.addEventListener("click", saveAndClose);
+    closeBtn.addEventListener("click", close);
+
+    const buttons = document.createElement("div");
+    buttons.style.cssText = "display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;";
+    buttons.append(closeBtn, saveBtn, saveCloseBtn);
+
+    // ── закрытие по Esc / Ctrl+Enter сохранить-и-закрыть / клик мимо окна ──
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+      } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        saveAndClose();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    overlay.addEventListener("mousedown", (e) => {
+      if (e.target === overlay) close();
     });
 
-    modal.appendChild(title);
-    modal.appendChild(textarea);
-    modal.appendChild(saveButton);
-    document.body.appendChild(modal);
+    modal.append(title, textarea, buttons);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Фокус в поле, курсор в конец текста.
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
   }
 
   // ─────────── История последних игр (с кэшем) ───────────
@@ -1081,20 +1141,6 @@ const TOOLTIP_CSS = `
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   margin-bottom: 5px;
   color: white;
-`;
-
-const MODAL_CSS = `
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: rgba(11, 27, 57, 0.95);
-  padding: 20px;
-  border-radius: 8px;
-  z-index: 10000;
-  min-width: 300px;
-  border: 1px solid rgba(79, 129, 245, 0.3);
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
 `;
 
 /** Экранирование значения для подстановки в [data-username="..."] селектор. */
