@@ -2,12 +2,15 @@
  * Запоминание громкости игроков. Сайт не сохраняет выставленную громкость
  * видео игрока — после обновления страницы (F5) она снова на максимуме.
  *
- * Здесь мы храним громкость и mute каждого игрока (ключ — ник) в storage.local
+ * Здесь мы храним УРОВЕНЬ громкости каждого игрока (ключ — ник) в storage.local
  * и восстанавливаем при появлении его видео.
  *
- * Тонкость: сохраняем только пользовательские изменения. Когда сами выставляем
- * сохранённое значение — событие volumechange игнорируется (флаг applying),
- * чтобы не затирать данные.
+ * ВАЖНО: флаг `muted` НЕ трогаем и НЕ сохраняем. Видео при автозапуске часто
+ * стартует с muted=true (политика автоплея браузера) — если это сохранять и
+ * восстанавливать, у игроков пропадает звук. Поэтому работаем только с .volume.
+ *
+ * Тонкость: когда сами выставляем сохранённое значение — событие volumechange
+ * игнорируется (флаг applying), чтобы не затирать данные.
  */
 import { onDomChange } from "@core/dom";
 import { browser } from "@core/env";
@@ -19,7 +22,6 @@ const STORAGE_KEY = "playerVolumes";
 
 interface VolEntry {
   v: number;
-  m: boolean;
 }
 type VolMap = Record<string, VolEntry>;
 
@@ -49,7 +51,7 @@ function applyTo(video: HTMLVideoElement, username: string): void {
   applying.add(video);
   try {
     video.volume = saved.v;
-    video.muted = saved.m;
+    // muted НЕ трогаем — иначе ловим автоплейный mute и глушим игроков.
   } catch {
     /* элемент мог отвалиться */
   }
@@ -68,7 +70,7 @@ function process(video: HTMLVideoElement): void {
     if (applying.has(video)) return; // наше же изменение — не сохраняем
     const u = usernameOf(video);
     if (!u) return;
-    volumes[u] = { v: video.volume, m: video.muted };
+    volumes[u] = { v: video.volume };
     log.debug("player-volume", "save", u, volumes[u]);
     scheduleSave();
   };
