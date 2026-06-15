@@ -29,8 +29,18 @@ class CameraRotator {
     this.updateButton();
 
     this.onClick = (e: MouseEvent) => {
-      const player = (e.target as HTMLElement).closest<HTMLElement>(SITE.player);
-      if (player) this.toggleFlip(player);
+      if (!this.rotationMode) return;
+      const target = e.target as HTMLElement;
+      const player = target.closest<HTMLElement>(SITE.player);
+      if (!player) return;
+      // Не мешаем кликам по меню/кнопкам/ссылкам игрока.
+      if (target.closest("button, a, input, .player__menu, [class*='menu']")) return;
+      const flipped = this.toggleFlip(player);
+      // Если перевернули — гасим клик, чтобы сайт не выключил камеру этим же кликом.
+      if (flipped) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
     document.addEventListener("click", this.onClick, { capture: true });
 
@@ -100,13 +110,20 @@ class CameraRotator {
     });
   }
 
-  private toggleFlip(player: HTMLElement): void {
-    if (!this.rotationMode) return;
+  /** Возвращает true, если переворот/возврат выполнен (для гашения клика сайта). */
+  private toggleFlip(player: HTMLElement): boolean {
     const wrapper = player.querySelector<HTMLElement>(SITE.playerVideoWrapper);
     const video = wrapper?.querySelector<HTMLVideoElement>(SITE.playerVideoEl) ?? null;
     const order = player.style.order || getComputedStyle(player).order;
     player.dataset[ORDER_ATTR] = order;
-    if (!wrapper || !video) return;
+
+    if (!wrapper || !video) {
+      log.debug("camera-rotate", "no video/wrapper in player", {
+        wrapper: !!wrapper,
+        video: !!video,
+      });
+      return false;
+    }
 
     if (video.dataset.flipped === "true") {
       this.unflip(wrapper, video);
@@ -115,11 +132,10 @@ class CameraRotator {
     }
 
     if (player.style.order !== order) player.style.order = order;
+    return true;
   }
 
   private flip(wrapper: HTMLElement, video: HTMLVideoElement): void {
-    if (video.readyState < 2) video.play().catch(() => undefined);
-
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
@@ -128,30 +144,45 @@ class CameraRotator {
     video.style.opacity = "0";
 
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      log.warn("camera-rotate", "no 2d context");
+      return;
+    }
     ctx.scale(-1, -1); // поворот на 180°
     ctx.translate(-canvas.width, -canvas.height);
 
-    const draw = () => {
-      if (video.paused || video.ended || video.dataset.flipped !== "true") return;
-      try {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        requestAnimationFrame(draw);
-      } catch {
-        /* видео ещё не готово к отрисовке */
-      }
-    };
-    video.addEventListener("play", draw);
-    if (!video.paused && video.readyState >= 2) draw();
-    else video.play().catch(() => undefined);
-
+    // ВАЖНО: флаг ставим ДО запуска отрисовки, иначе первый кадр сразу выходит
+    // по условию и канвас остаётся пустым (чёрным).
     video.dataset.flipped = "true";
+
+    const draw = () => {
+      if (video.ended || video.dataset.flipped !== "true") return;
+      try {
+        if (video.readyState >= 2) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      } catch {
+        /* кадр ещё не готов — попробуем на следующем тике */
+      }
+      requestAnimationFrame(draw);
+    };
+    (video as any).__rotDraw = draw;
+    if (video.paused) video.play().catch(() => undefined);
+    requestAnimationFrame(draw);
+
+    log.debug("camera-rotate", "flip", {
+      paused: video.paused,
+      readyState: video.readyState,
+      w: canvas.width,
+      h: canvas.height,
+    });
   }
 
   private unflip(wrapper: HTMLElement, video: HTMLVideoElement): void {
+    const draw = (video as any).__rotDraw as (() => void) | undefined;
+    if (draw) delete (video as any).__rotDraw;
     wrapper.querySelector("canvas")?.remove();
     video.style.opacity = "1";
     video.dataset.flipped = "false";
+    log.debug("camera-rotate", "unflip");
   }
 
   /** Вернуть все перевёрнутые видео в исходное состояние и снять наши data-атрибуты/стили. */
