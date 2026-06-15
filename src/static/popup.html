@@ -19,7 +19,10 @@
         * { box-sizing: border-box; }
         body {
             width: 360px;
+            max-height: 580px;
             margin: 0;
+            display: flex;
+            flex-direction: column;
             background: var(--bg);
             color: var(--text);
             font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
@@ -27,6 +30,7 @@
 
         /* Шапка */
         .hdr {
+            flex: 0 0 auto;
             display: flex; align-items: baseline; gap: 8px;
             padding: 14px 16px 12px;
             background: linear-gradient(135deg, rgba(99,102,241,.25), rgba(59,130,246,.10));
@@ -37,10 +41,10 @@
 
         /* Вкладки */
         .tabs {
+            flex: 0 0 auto;
             display: flex; gap: 2px;
             padding: 8px 8px 0;
             background: var(--bg);
-            position: sticky; top: 0; z-index: 5;
         }
         .tab {
             flex: 1; padding: 8px 4px; text-align: center;
@@ -52,7 +56,7 @@
         .tab.active { color: var(--text); background: var(--panel); }
 
         /* Панели */
-        .panels { max-height: 70vh; overflow-y: auto; padding: 12px; background: var(--panel); }
+        .panels { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px; background: var(--panel); }
         .panel { display: none; }
         .panel.active { display: block; }
         .panels::-webkit-scrollbar { width: 8px; }
@@ -131,8 +135,10 @@
         }
 
         .footer {
+            flex: 0 0 auto;
             padding: 10px; text-align: center; font-size: 11px; color: var(--muted);
             border-top: 1px solid var(--border); font-style: italic;
+            background: var(--bg);
         }
 
         /* Тост */
