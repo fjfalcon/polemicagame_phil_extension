@@ -51,3 +51,35 @@ class KeyboardRouter {
 }
 
 export const keyboard = new KeyboardRouter();
+
+/** Чисто модификаторные клавиши — не годятся как самостоятельный хоткей. */
+export function isModifierCode(code: string): boolean {
+  return /^(Shift|Control|Alt|Meta|OS)(Left|Right)?$/.test(code);
+}
+
+/** Человекочитаемая подпись для KeyboardEvent.code (для UI настроек). */
+export function formatKeyCode(code: string): string {
+  if (!code) return "—";
+  if (code.startsWith("Key")) return code.slice(3); // KeyP → P
+  if (code.startsWith("Digit")) return code.slice(5); // Digit5 → 5
+  if (code.startsWith("Numpad")) return `Num ${code.slice(6)}`;
+  if (code.startsWith("Arrow")) return code.slice(5); // ArrowUp → Up
+  const named: Record<string, string> = {
+    Escape: "Esc",
+    Space: "Space",
+    Enter: "Enter",
+    Backquote: "`",
+    Minus: "-",
+    Equal: "=",
+    BracketLeft: "[",
+    BracketRight: "]",
+    Backslash: "\\",
+    Semicolon: ";",
+    Quote: "'",
+    Comma: ",",
+    Period: ".",
+    Slash: "/",
+    Tab: "Tab",
+  };
+  return named[code] ?? code; // F1..F12 и прочее — как есть
+}

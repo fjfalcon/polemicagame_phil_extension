@@ -17,6 +17,8 @@ export interface Settings {
   auto_accept_enabled: boolean;
   skip_start_screen_enabled: boolean;
   pause_hotkey_enabled: boolean;
+  /** Физическая клавиша паузы (KeyboardEvent.code, напр. "F8", "KeyP"). */
+  pause_hotkey_code: string;
   disable_webcam_clicks: boolean;
   enable_role_faker: boolean;
   auto_hide_roles_enabled: boolean;

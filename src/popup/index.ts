@@ -12,6 +12,7 @@
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { getSettings, setSettings } from "@core/settings";
+import { formatKeyCode, isModifierCode } from "@core/keyboard";
 import {
   sendRuntime,
   sendToActiveTab,
@@ -129,8 +130,32 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
 
+  // ───────────────────────── Захват клавиши паузы ─────────────────────────
+  let pauseHotkeyCode = "F8";
+  const pauseCaptureBtn = $<HTMLButtonElement>("pause_hotkey_capture");
+  const renderPauseKey = () => {
+    if (pauseCaptureBtn) pauseCaptureBtn.textContent = formatKeyCode(pauseHotkeyCode);
+  };
+  if (pauseCaptureBtn) {
+    pauseCaptureBtn.addEventListener("click", () => {
+      pauseCaptureBtn.textContent = "Нажми клавишу…";
+      const onKey = (e: KeyboardEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isModifierCode(e.code)) return; // ждём не-модификатор
+        window.removeEventListener("keydown", onKey, true);
+        pauseHotkeyCode = e.code;
+        renderPauseKey();
+        saveSettings();
+      };
+      window.addEventListener("keydown", onKey, true);
+    });
+  }
+
   // ───────────────────────── Загрузка настроек в контролы ─────────────────────────
   void getSettings().then((items) => {
+    pauseHotkeyCode = items.pause_hotkey_code || "F8";
+    renderPauseKey();
     const set = (id: string, val: boolean) => {
       const el = $<HTMLInputElement>(id);
       if (el) el.checked = val;
@@ -215,6 +240,7 @@ document.addEventListener("DOMContentLoaded", () => {
       camera_rotate_enabled: cb("camera_rotate_enabled", false),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       pause_hotkey_enabled: cb("pause_hotkey_enabled", true),
+      pause_hotkey_code: pauseHotkeyCode,
       statistics_enabled: cb("statistics_enabled", true),
       match_page_stats_enabled: cb("match_page_stats_enabled", true),
       stats_button_theme: ($<HTMLSelectElement>("stats_button_theme")?.value || "default"),

@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: Settings = {
   auto_accept_enabled: true,
   skip_start_screen_enabled: true,
   pause_hotkey_enabled: true,
+  pause_hotkey_code: "F8",
   disable_webcam_clicks: false,
   enable_role_faker: false,
   auto_hide_roles_enabled: false,

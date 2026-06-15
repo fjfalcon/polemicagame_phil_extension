@@ -4,7 +4,7 @@
  */
 import { keyboard } from "@core/keyboard";
 import { isVisible } from "@core/dom";
-import type { Feature } from "@core/feature";
+import type { Feature, FeatureContext } from "@core/feature";
 
 const TEXT = {
   settingsRu: "настро",
@@ -233,24 +233,37 @@ class PauseHotkey {
 }
 
 let off: (() => void) | null = null;
+let hk: PauseHotkey | null = null;
+let boundCode = "";
+
+function bind(code: string) {
+  off?.();
+  boundCode = code || "F8";
+  off = keyboard.register(
+    boundCode,
+    (e) => {
+      if (e.repeat) return;
+      e.stopPropagation();
+      void hk?.togglePause();
+    },
+    { preventDefault: true },
+  );
+}
 
 export const pauseHotkeyFeature: Feature = {
   id: "pause-hotkey",
   settingKey: "pause_hotkey_enabled",
-  enable() {
-    const hk = new PauseHotkey();
-    off = keyboard.register(
-      "F8",
-      (e) => {
-        if (e.repeat) return;
-        e.stopPropagation();
-        void hk.togglePause();
-      },
-      { preventDefault: true },
-    );
+  enable(ctx: FeatureContext) {
+    hk = new PauseHotkey();
+    bind(ctx.settings.pause_hotkey_code);
+  },
+  update(ctx: FeatureContext) {
+    // Пользователь сменил клавишу в настройках — переустанавливаем хоткей на лету.
+    if (ctx.settings.pause_hotkey_code !== boundCode) bind(ctx.settings.pause_hotkey_code);
   },
   disable() {
     off?.();
     off = null;
+    hk = null;
   },
 };
