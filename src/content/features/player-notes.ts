@@ -345,13 +345,16 @@ class PlayerNotesManager {
       ring.className = "pn-tag-ring";
       container.appendChild(ring);
     }
-    // Градиентная рамка: маской вырезаем середину, остаётся рамка 2.5px.
+    // Градиентная рамка: маской вырезаем середину, остаётся рамка 3px.
+    // ВАЖНО: mask-composite ставим ПОСЛЕ shorthand-ов mask/-webkit-mask,
+    // иначе shorthand сбрасывает composite в add и градиент заливает всю плитку.
     ring.style.cssText = `
       position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 5;
-      padding: 2.5px; background: ${tag};
+      padding: 3px; background: ${tag};
       -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-      -webkit-mask-composite: xor; mask-composite: exclude;
       mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
       filter: drop-shadow(0 0 4px rgba(0,0,0,.4));
     `;
   }
