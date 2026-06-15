@@ -185,6 +185,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("disable_webcam_clicks", items.disable_webcam_clicks);
     set("auto_accept_enabled", items.auto_accept_enabled);
     set("camera_rotate_enabled", items.camera_rotate_enabled);
+    set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
 
     // OBS
     const obsEnabled = $<HTMLInputElement>("obs_enabled");
@@ -238,6 +239,7 @@ document.addEventListener("DOMContentLoaded", () => {
       disable_webcam_clicks: cb("disable_webcam_clicks", false),
       auto_accept_enabled: cb("auto_accept_enabled", true),
       camera_rotate_enabled: cb("camera_rotate_enabled", false),
+      f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       pause_hotkey_enabled: cb("pause_hotkey_enabled", true),
       pause_hotkey_code: pauseHotkeyCode,
@@ -288,6 +290,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "disable_webcam_clicks",
     "auto_accept_enabled",
     "camera_rotate_enabled",
+    "f5_refresh_fix_enabled",
   ];
   simpleChangeIds.forEach((id) => {
     const el = $(id);

@@ -28,6 +28,7 @@ export const DEFAULT_SETTINGS: Settings = {
   auto_hide_roles_enabled: false,
   role_phase_auto_switch_enabled: false,
   camera_rotate_enabled: false,
+  f5_refresh_fix_enabled: true,
   obs_enabled: false,
   obs_host: "ws://localhost:4455",
   obs_password: "",

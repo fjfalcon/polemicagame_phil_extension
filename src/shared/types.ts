@@ -25,6 +25,8 @@ export interface Settings {
   role_phase_auto_switch_enabled: boolean;
   /** Режим поворота камер: клик по игроку переворачивает его видео на 180°. */
   camera_rotate_enabled: boolean;
+  /** Возвращать F5 нормальное обновление страницы (сайт перехватывает его под настройки). */
+  f5_refresh_fix_enabled: boolean;
   // OBS
   obs_enabled: boolean;
   obs_host: string;
