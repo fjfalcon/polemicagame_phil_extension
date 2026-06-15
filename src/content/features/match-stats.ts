@@ -139,6 +139,7 @@ function renderVotesBlock(
   voteList: any[],
   players: any[],
   extraStyle = "",
+  tip = "",
 ): string {
   const spans = voteList
     .map((v) => {
@@ -149,7 +150,8 @@ function renderVotesBlock(
       )}">${escapeHtml(String(v.from))}</span>`;
     })
     .join("");
-  return `<div class="action"${extraStyle ? ` style="${extraStyle}"` : ""}>${spans}</div>`;
+  const tipAttr = tip ? ` data-tip="${escapeHtml(tip)}"` : "";
+  return `<div class="action"${extraStyle ? ` style="${extraStyle}"` : ""}${tipAttr}>${spans}</div>`;
 }
 
 function enhanceTable(table: HTMLElement, gameData: any): void {
@@ -193,10 +195,20 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
 
       let html = "";
       if (firstVotes.length > 0) {
-        html += renderVotesBlock(firstVotes, players);
+        html += renderVotesBlock(
+          firstVotes,
+          players,
+          "",
+          `Голосование за выставление №${player.position}`,
+        );
       }
       if (secondVotes.length > 0) {
-        html += renderVotesBlock(secondVotes, players, "margin-top: 4px;");
+        html += renderVotesBlock(
+          secondVotes,
+          players,
+          "margin-top: 4px;",
+          `Переголосование за №${player.position}`,
+        );
       }
 
       cell.style.cssText = `
@@ -247,7 +259,9 @@ function createNightRow(phaseNumber: number, phase: any, players: any[]): HTMLEl
     cell.innerHTML = actions
       .map((action: any) => {
         const icon = getActionIcon(action.type);
-        return `<div class="action ${escapeHtml(String(action.type))}">
+        return `<div class="action ${escapeHtml(String(action.type))}" data-tip="${escapeHtml(
+          actionTip(action.type, action.to),
+        )}">
           ${icon} ${escapeHtml(String(action.to))}
         </div>`;
       })
@@ -528,6 +542,23 @@ function addBestMoveStyles(): void {
 }
 
 // ───────────────────────── фазы / иконки ─────────────────────────
+
+/** Пояснение к иконке ночного действия (показывается на hover). */
+function actionTip(type: string, to: unknown): string {
+  const n = `№${to}`;
+  switch (type) {
+    case "kill":
+      return `Выстрел мафии → ${n}`;
+    case "check":
+      return `Проверка шерифа → ${n}`;
+    case "don_check":
+      return `Проверка дона → ${n}`;
+    case "vote":
+      return `Голос → ${n}`;
+    default:
+      return `Действие → ${n}`;
+  }
+}
 
 function getActionIcon(type: string): string {
   switch (type) {
@@ -1109,6 +1140,44 @@ function injectBaseStyles(): void {
       gap: 4px;
     }
     .cell.player img { width: 26px; height: 26px; }
+  `);
+
+  // Пояснения к иконкам действий на hover (выстрел/проверки/голосования).
+  appendStyle(`
+    .cell .action[data-tip] { cursor: help; position: relative; }
+    .cell .action[data-tip]:hover::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 7px);
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: 200px;
+      width: max-content;
+      white-space: normal;
+      text-align: center;
+      background: #1e1f26;
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.3;
+      z-index: 1000;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+    }
+    .cell .action[data-tip]:hover::before {
+      content: '';
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-top-color: #1e1f26;
+      z-index: 1000;
+      pointer-events: none;
+    }
   `);
 }
 
