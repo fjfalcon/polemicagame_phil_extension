@@ -1,11 +1,12 @@
 /**
  * Метки ролей («мой read»). У каждого игрока — квадратик; по клику выпадает список
- * ролей (Серый/Мирный/Шериф/Мафия/Дон). Выбранная роль красит квадратик.
+ * ролей. Выбранная роль красит квадратик.
  *
- * Хранится В ПАМЯТИ на сессию: переживает смену день/ночь и пересборку DOM,
- * но сбрасывается при перезагрузке страницы / выходе из игры — это личное
- * мнение на текущую игру, а не постоянная заметка (для постоянных — цветные метки).
+ * Хранится в storage.local с привязкой к игре (gameKey): переживает перезагрузку
+ * страницы (F5) в рамках одной игры и сбрасывается для новой игры.
+ * gameKey = id матча/игры (из URL или встроенных данных), иначе подпись состава.
  */
+import { browser } from "@core/env";
 import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
 import { SITE } from "@core/selectors";
@@ -19,27 +20,78 @@ interface RoleDef {
   text: string;
 }
 
+// Цвета: Мирный — красный, Шериф — жёлтый, Мафия — серый, Дон — фиолетовый.
+// «Серый» (по умолчанию) = нейтральный тёмный «?», отличается от серой Мафии.
 const ROLES: RoleDef[] = [
-  { id: "none", label: "Серый", abbr: "?", color: "#6b7280", text: "#ffffff" },
-  { id: "civ", label: "Мирный", abbr: "Мир", color: "#22c55e", text: "#06210f" },
+  { id: "none", label: "Серый (сброс)", abbr: "?", color: "#374151", text: "#cbd5e1" },
+  { id: "civ", label: "Мирный", abbr: "Мир", color: "#ef4444", text: "#ffffff" },
   { id: "sheriff", label: "Шериф", abbr: "Шер", color: "#eab308", text: "#2b2000" },
-  { id: "mafia", label: "Мафия", abbr: "Маф", color: "#111827", text: "#ffffff" },
-  { id: "don", label: "Дон", abbr: "Дон", color: "#7f1d1d", text: "#ffffff" },
+  { id: "mafia", label: "Мафия", abbr: "Маф", color: "#9ca3af", text: "#111827" },
+  { id: "don", label: "Дон", abbr: "Дон", color: "#9333ea", text: "#ffffff" },
 ];
 const roleById = (id: string) => ROLES.find((r) => r.id === id) || ROLES[0];
 
-// Метки на текущую игру (в памяти). Ключ — ник игрока.
-const marks = new Map<string, string>();
-
+const STORAGE_KEY = "roleMarks";
+const MAX_GAMES = 50;
 const MARKER_CLASS = "pn-role-marker";
 const MENU_CLASS = "pn-role-menu";
 
+type Marks = Record<string, string>; // username -> roleId
+let storeAll: Record<string, Marks> = {}; // gameKey -> Marks
+let gameKey: string | null = null;
+let marks: Marks = {};
+
 let offDom: (() => void) | null = null;
 let closeMenu: (() => void) | null = null;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 function usernameOf(player: Element): string | null {
   const name = player.querySelector(SITE.playerName)?.textContent?.trim();
   return name || null;
+}
+
+function resolveGameKey(): string | null {
+  // 1) id матча/игры в URL
+  const mUrl = location.pathname.match(/\/(?:match|game|room)\/(\d+)/);
+  if (mUrl) return `g:${mUrl[1]}`;
+  // 2) data-game-id
+  const byAttr = document.querySelector("[data-game-id]")?.getAttribute("data-game-id");
+  if (byAttr && /^\d+$/.test(byAttr)) return `g:${byAttr}`;
+  // 3) встроенные данные игры (как у match-parser)
+  const raw = document.querySelector("[data-game]")?.getAttribute("data-game");
+  if (raw) {
+    try {
+      const id = JSON.parse(raw)?.id;
+      if (id) return `g:${id}`;
+    } catch {
+      /* не JSON */
+    }
+  }
+  // 4) фолбэк: подпись состава (отсортированные ники)
+  const names = Array.from(document.querySelectorAll(SITE.player))
+    .map((p) => p.querySelector(SITE.playerName)?.textContent?.trim())
+    .filter((n): n is string => !!n);
+  if (names.length >= 4) return "l:" + names.slice().sort().join("|");
+  return null;
+}
+
+function scheduleSave(): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    // Ограничиваем число хранимых игр.
+    const keys = Object.keys(storeAll);
+    if (keys.length > MAX_GAMES) {
+      for (const k of keys.slice(0, keys.length - MAX_GAMES)) delete storeAll[k];
+    }
+    void browser.storage.local.set({ [STORAGE_KEY]: storeAll });
+  }, 400);
+}
+
+function persist(): void {
+  if (!gameKey) return;
+  if (Object.keys(marks).length) storeAll[gameKey] = { ...marks };
+  else delete storeAll[gameKey];
+  scheduleSave();
 }
 
 function paintMarker(marker: HTMLElement, roleId: string): void {
@@ -52,14 +104,13 @@ function paintMarker(marker: HTMLElement, roleId: string): void {
 
 function openMenu(marker: HTMLElement, username: string): void {
   closeMenu?.();
-
   const menu = document.createElement("div");
   menu.className = MENU_CLASS;
   const rect = marker.getBoundingClientRect();
   menu.style.cssText = `
     position: fixed; top: ${rect.bottom + 4}px; left: ${rect.left}px; z-index: 2147483600;
     background: #1e1f26; border: 1px solid rgba(255,255,255,.15); border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.5); padding: 4px; min-width: 120px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5); padding: 4px; min-width: 130px;
     font: 12px system-ui, sans-serif;
   `;
 
@@ -76,16 +127,16 @@ function openMenu(marker: HTMLElement, username: string): void {
     item.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (r.id === "none") marks.delete(username);
-      else marks.set(username, r.id);
+      if (r.id === "none") delete marks[username];
+      else marks[username] = r.id;
       paintMarker(marker, r.id);
+      persist();
       closeMenu?.();
     });
     menu.appendChild(item);
   }
 
   document.body.appendChild(menu);
-
   const onOutside = (e: Event) => {
     if (!menu.contains(e.target as Node) && e.target !== marker) closeMenu?.();
   };
@@ -95,7 +146,6 @@ function openMenu(marker: HTMLElement, username: string): void {
     menu.remove();
     closeMenu = null;
   };
-  // Вешаем на следующий тик, чтобы текущий клик не закрыл меню сразу.
   setTimeout(() => {
     document.addEventListener("click", onOutside, true);
     window.addEventListener("scroll", closeMenu as () => void, true);
@@ -105,7 +155,6 @@ function openMenu(marker: HTMLElement, username: string): void {
 function ensureMarker(player: HTMLElement): void {
   const username = usernameOf(player);
   if (!username) return;
-
   let marker = player.querySelector<HTMLElement>(`.${MARKER_CLASS}`);
   if (!marker) {
     if (getComputedStyle(player).position === "static") player.style.position = "relative";
@@ -125,26 +174,50 @@ function ensureMarker(player: HTMLElement): void {
     player.appendChild(marker);
   }
   marker.dataset.username = username;
-  paintMarker(marker, marks.get(username) || "none");
+  paintMarker(marker, marks[username] || "none");
 }
 
 function scan(): void {
+  const key = resolveGameKey();
+  if (key && key !== gameKey) {
+    gameKey = key;
+    if (storeAll[key]) {
+      marks = { ...storeAll[key] };
+    } else if (Object.keys(marks).length) {
+      // Метки сделаны до того, как gameKey определился — привяжем их к игре.
+      storeAll[key] = { ...marks };
+      scheduleSave();
+    } else {
+      marks = {};
+    }
+  }
   document.querySelectorAll<HTMLElement>(SITE.player).forEach(ensureMarker);
 }
 
 export const roleMarkerFeature: Feature = {
   id: "role-marker",
   settingKey: "role_marker_enabled",
-  enable() {
+  async enable() {
+    const res = (await browser.storage.local.get({ [STORAGE_KEY]: {} })) as {
+      [STORAGE_KEY]: Record<string, Marks>;
+    };
+    storeAll = res[STORAGE_KEY] || {};
+    gameKey = null;
+    marks = {};
     scan();
     offDom = onDomChange(() => scan());
-    log.info("role-marker", "enabled");
+    log.info("role-marker", "enabled", Object.keys(storeAll).length, "games stored");
   },
   disable() {
     offDom?.();
     offDom = null;
     closeMenu?.();
     document.querySelectorAll(`.${MARKER_CLASS}, .${MENU_CLASS}`).forEach((el) => el.remove());
-    marks.clear();
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    gameKey = null;
+    marks = {};
   },
 };
