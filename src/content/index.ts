@@ -17,6 +17,7 @@ import { tooltipFeature } from "./features/tooltip";
 import { roleFakerFeature } from "./features/role-faker";
 import { pauseHotkeyFeature } from "./features/pause-hotkey";
 import { f5RefreshFeature } from "./features/f5-refresh";
+import { roleMarkerFeature } from "./features/role-marker";
 import { updateNotifyFeature } from "./features/update-notify";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
@@ -30,6 +31,7 @@ const manager = new FeatureManager().register(
   roleFakerFeature,
   pauseHotkeyFeature,
   f5RefreshFeature,
+  roleMarkerFeature,
   updateNotifyFeature,
   obsPanelFeature,
   twitchPanelFeature,

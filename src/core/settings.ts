@@ -28,6 +28,7 @@ export const DEFAULT_SETTINGS: Settings = {
   auto_hide_roles_enabled: false,
   role_phase_auto_switch_enabled: false,
   camera_rotate_enabled: true,
+  role_marker_enabled: true,
   f5_refresh_fix_enabled: true,
   hotkey_role_fake: "KeyF",
   hotkey_role_reset: "KeyE",

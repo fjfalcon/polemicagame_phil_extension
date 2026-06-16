@@ -313,6 +313,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("disable_webcam_clicks", items.disable_webcam_clicks);
     set("auto_accept_enabled", items.auto_accept_enabled);
     set("camera_rotate_enabled", items.camera_rotate_enabled);
+    set("role_marker_enabled", items.role_marker_enabled);
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
 
@@ -368,6 +369,7 @@ document.addEventListener("DOMContentLoaded", () => {
       disable_webcam_clicks: cb("disable_webcam_clicks", false),
       auto_accept_enabled: cb("auto_accept_enabled", true),
       camera_rotate_enabled: cb("camera_rotate_enabled", true),
+      role_marker_enabled: cb("role_marker_enabled", true),
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
@@ -423,6 +425,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "disable_webcam_clicks",
     "auto_accept_enabled",
     "camera_rotate_enabled",
+    "role_marker_enabled",
     "f5_refresh_fix_enabled",
     "update_check_enabled",
   ];
