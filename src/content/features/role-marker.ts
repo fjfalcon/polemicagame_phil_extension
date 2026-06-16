@@ -23,10 +23,10 @@ interface RoleDef {
 // Цвета: Мирный — красный, Шериф — жёлтый, Мафия — серый, Дон — фиолетовый.
 // «Серый» (по умолчанию) = нейтральный тёмный «?», отличается от серой Мафии.
 const ROLES: RoleDef[] = [
-  { id: "none", label: "Серый (сброс)", abbr: "?", color: "#374151", text: "#cbd5e1" },
+  { id: "none", label: "Серый (сброс)", abbr: "?", color: "#9ca3af", text: "#111827" },
   { id: "civ", label: "Мирный", abbr: "Мир", color: "#ef4444", text: "#ffffff" },
   { id: "sheriff", label: "Шериф", abbr: "Шер", color: "#eab308", text: "#2b2000" },
-  { id: "mafia", label: "Мафия", abbr: "Маф", color: "#9ca3af", text: "#111827" },
+  { id: "mafia", label: "Мафия", abbr: "Маф", color: "#374151", text: "#cbd5e1" },
   { id: "don", label: "Дон", abbr: "Дон", color: "#9333ea", text: "#ffffff" },
 ];
 const roleById = (id: string) => ROLES.find((r) => r.id === id) || ROLES[0];
