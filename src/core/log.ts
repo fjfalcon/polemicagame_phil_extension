@@ -1,34 +1,158 @@
 /**
- * Лёгкий логгер с уровнями. В проде по умолчанию молчит (кроме warn/error),
- * чтобы убрать сотни console.log из старого кода.
- * Уровень можно поднять в DevTools: localStorage.setItem('polemica:loglevel','debug')
+ * Логгер с уровнями + кольцевой буфер, сбрасываемый в storage.local.
+ *
+ * Зачем буфер: консоль недоступна для диагностики у пользователя, а при «сумасшествии»
+ * сайта Firefox перезапускают и консольные логи теряются. Буфер переживает перезапуск
+ * (storage.local) и выгружается кнопкой в popup — так мы видим, что было перед сбоем.
+ *
+ * Уровни:
+ *   - консоль: по умолчанию warn; поднять — localStorage.setItem('polemica:loglevel','debug')
+ *   - буфер:   по умолчанию info; поднять — localStorage.setItem('polemica:buflevel','debug')
  */
-type Level = "debug" | "info" | "warn" | "error" | "silent";
+import { browser } from "./env";
 
+type Level = "debug" | "info" | "warn" | "error" | "silent";
 const ORDER: Record<Level, number> = { debug: 0, info: 1, warn: 2, error: 3, silent: 4 };
 
-function resolveLevel(): Level {
+function detectCtx(): string {
   try {
-    const v = (globalThis as any).localStorage?.getItem("polemica:loglevel") as Level | null;
+    if (typeof document === "undefined") return "bg"; // service worker / event page
+    const p = location.protocol;
+    if (p.startsWith("moz-extension") || p.startsWith("chrome-extension")) return "popup";
+    return "content";
+  } catch {
+    return "bg";
+  }
+}
+
+function resolveLevel(key: string, fallback: Level): Level {
+  try {
+    const v = (globalThis as any).localStorage?.getItem(key) as Level | null;
     if (v && v in ORDER) return v;
   } catch {
     /* localStorage недоступен в service worker */
   }
-  return "warn";
+  return fallback;
 }
 
-let current: Level = resolveLevel();
+const CTX = detectCtx();
+const STORAGE_KEY = `polemica:logs:${CTX}`;
+const LOG_PREFIX = "polemica:logs:";
+const CAP = 600;
+const MAX_MSG = 600;
 
-function emit(level: Exclude<Level, "silent">, scope: string, args: unknown[]) {
-  if (ORDER[level] < ORDER[current]) return;
-  const tag = `[polemica:${scope}]`;
+interface Entry {
+  t: number;
+  c: string;
+  l: string;
+  s: string;
+  m: string;
+}
+
+let buffer: Entry[] = [];
+let persist = true;
+let consoleLevel: Level = resolveLevel("polemica:loglevel", "warn");
+let bufferLevel: Level = resolveLevel("polemica:buflevel", "info");
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let dirty = false;
+
+function fmtArgs(args: unknown[]): string {
+  return args
+    .map((a) => {
+      if (typeof a === "string") return a;
+      if (a instanceof Error) return a.stack || a.message;
+      try {
+        return JSON.stringify(a);
+      } catch {
+        return String(a);
+      }
+    })
+    .join(" ")
+    .slice(0, MAX_MSG);
+}
+
+async function doFlush(): Promise<void> {
+  flushTimer = null;
+  if (!dirty) return;
+  dirty = false;
+  try {
+    await browser.storage.local.set({ [STORAGE_KEY]: buffer });
+  } catch {
+    /* квота / недоступно */
+  }
+}
+
+function scheduleFlush(minDelay: number, urgent = false): void {
+  dirty = true;
+  if (flushTimer) {
+    if (!urgent) return; // флеш уже запланирован — покроет и нас
+    clearTimeout(flushTimer);
+  }
+  flushTimer = setTimeout(() => void doFlush(), minDelay);
+}
+
+function record(level: Level, scope: string, args: unknown[]): void {
+  if (ORDER[level] < ORDER[bufferLevel]) return;
+  buffer.push({ t: Date.now(), c: CTX, l: level, s: scope, m: fmtArgs(args) });
+  if (buffer.length > CAP) buffer.splice(0, buffer.length - CAP);
+  if (persist) scheduleFlush(level === "error" ? 400 : 3000, level === "error");
+}
+
+function emit(level: Exclude<Level, "silent">, scope: string, args: unknown[]): void {
+  record(level, scope, args);
+  if (ORDER[level] < ORDER[consoleLevel]) return;
   // eslint-disable-next-line no-console
-  (console[level] ?? console.log)(tag, ...args);
+  (console[level] ?? console.log)(`[polemica:${scope}]`, ...args);
 }
 
 export const log = {
   setLevel(l: Level) {
-    current = l;
+    consoleLevel = l;
+  },
+  setBufferLevel(l: Level) {
+    bufferLevel = l;
+  },
+  setPersist(on: boolean) {
+    persist = on;
+  },
+  /** Немедленно сбросить буфер в storage (например, перед закрытием вкладки). */
+  flushNow(): void {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    dirty = true;
+    void doFlush();
+  },
+  /** Записи текущего контекста (в памяти). */
+  getBuffer(): Entry[] {
+    return buffer.slice();
+  },
+  /** Собрать логи всех контекстов из storage.local, отсортировать по времени. */
+  async collectAll(): Promise<Entry[]> {
+    try {
+      const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
+      const merged: Entry[] = [];
+      for (const [k, v] of Object.entries(all)) {
+        if (k.startsWith(LOG_PREFIX) && Array.isArray(v)) merged.push(...(v as Entry[]));
+      }
+      // Плюс несброшенные записи текущего контекста.
+      merged.push(...buffer.filter((e) => !merged.includes(e)));
+      return merged.sort((a, b) => a.t - b.t);
+    } catch {
+      return buffer.slice();
+    }
+  },
+  /** Очистить логи всех контекстов. */
+  async clearAll(): Promise<void> {
+    buffer = [];
+    try {
+      const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
+      const keys = Object.keys(all).filter((k) => k.startsWith(LOG_PREFIX));
+      if (keys.length) await browser.storage.local.remove(keys);
+    } catch {
+      /* no-op */
+    }
   },
   debug: (scope: string, ...a: unknown[]) => emit("debug", scope, a),
   info: (scope: string, ...a: unknown[]) => emit("info", scope, a),

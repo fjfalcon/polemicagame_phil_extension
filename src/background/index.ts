@@ -5,8 +5,9 @@
  */
 import { browser } from "@core/env";
 import { log } from "@core/log";
+import { installErrorCapture } from "@core/errors";
 import { onMessage } from "@core/messaging";
-import { getSettings } from "@core/settings";
+import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
 import { ObsClient } from "./obs-client";
 import { handleGameSearch } from "./auto-accept";
 import type { ExtMessage, ObsCommandMsg } from "@shared/types";
@@ -61,5 +62,12 @@ async function restoreObsConnection(): Promise<void> {
 
 browser.runtime.onStartup.addListener(() => void restoreObsConnection());
 browser.runtime.onInstalled.addListener(() => void restoreObsConnection());
+
+// Диагностика: перехват ошибок + гейт персиста логов по настройке.
+installErrorCapture("bg");
+void getSetting("debug_logging_enabled").then((on) => log.setPersist(on));
+onSettingsChanged((patch) => {
+  if ("debug_logging_enabled" in patch) log.setPersist(patch.debug_logging_enabled === true);
+});
 
 log.info("background", "ready");

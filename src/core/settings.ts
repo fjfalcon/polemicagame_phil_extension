@@ -34,6 +34,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkey_role_reset: "KeyE",
   hotkey_role_hide: "KeyD",
   update_check_enabled: true,
+  debug_logging_enabled: true,
   obs_enabled: false,
   obs_host: "ws://localhost:4455",
   obs_password: "",

@@ -11,6 +11,7 @@
  */
 import { browser } from "@core/env";
 import { log } from "@core/log";
+import { installErrorCapture } from "@core/errors";
 import { getSettings, setSettings } from "@core/settings";
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
 import {
@@ -33,9 +34,38 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T | null =>
 const SCOPE = "popup";
 
 document.addEventListener("DOMContentLoaded", () => {
+  installErrorCapture("popup");
+
   // ───────────────────────── Версия в шапке ─────────────────────────
   const verEl = $("popup_version");
   if (verEl) verEl.textContent = `v${browser.runtime.getManifest().version}`;
+
+  // ───────────────────────── Логи: скачать / очистить ─────────────────────────
+  $("download_logs")?.addEventListener("click", async () => {
+    const entries = await log.collectAll();
+    const head = [
+      `Polemica Notes ${browser.runtime.getManifest().version}`,
+      `UA: ${navigator.userAgent}`,
+      `exported: ${new Date().toISOString()}`,
+      `entries: ${entries.length}`,
+      "",
+    ].join("\n");
+    const body = entries
+      .map((e) => `${new Date(e.t).toISOString()} [${e.c}/${e.l}] ${e.s}: ${e.m}`)
+      .join("\n");
+    const blob = new Blob([head + body], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `polemica-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showPopupToast(`Логов: ${entries.length}`);
+  });
+  $("clear_logs")?.addEventListener("click", async () => {
+    await log.clearAll();
+    showPopupToast("Логи очищены");
+  });
 
   // ───────────────────────── Вкладки ─────────────────────────
   const tabs = Array.from(document.querySelectorAll<HTMLElement>(".tab"));
@@ -316,6 +346,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("role_marker_enabled", items.role_marker_enabled);
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
+    set("debug_logging_enabled", items.debug_logging_enabled);
 
     // OBS
     const obsEnabled = $<HTMLInputElement>("obs_enabled");
@@ -372,6 +403,7 @@ document.addEventListener("DOMContentLoaded", () => {
       role_marker_enabled: cb("role_marker_enabled", true),
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
+      debug_logging_enabled: cb("debug_logging_enabled", true),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       pause_hotkey_enabled: cb("pause_hotkey_enabled", true),
       pause_hotkey_code: pauseHotkeyCode,
@@ -428,6 +460,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "role_marker_enabled",
     "f5_refresh_fix_enabled",
     "update_check_enabled",
+    "debug_logging_enabled",
   ];
   simpleChangeIds.forEach((id) => {
     const el = $(id);

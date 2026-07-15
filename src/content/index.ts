@@ -4,6 +4,8 @@
  * поэтому отдельный роутинг сообщений в каждом модуле больше не нужен.
  */
 import { log } from "@core/log";
+import { installErrorCapture } from "@core/errors";
+import { getSetting, onSettingsChanged } from "@core/settings";
 import { FeatureManager } from "@core/feature";
 import { parseMatchOnPage } from "./match-data";
 import { setupNicknameLengthsResponder } from "./nickname-lengths";
@@ -37,9 +39,18 @@ const manager = new FeatureManager().register(
   twitchPanelFeature,
 );
 
+// Диагностика: перехват ошибок + гейт персиста логов по настройке.
+installErrorCapture("content");
+void getSetting("debug_logging_enabled").then((on) => log.setPersist(on));
+onSettingsChanged((patch) => {
+  if ("debug_logging_enabled" in patch) log.setPersist(patch.debug_logging_enabled === true);
+});
+// Успеть сбросить буфер перед закрытием/перезагрузкой вкладки.
+window.addEventListener("pagehide", () => log.flushNow());
+
 void manager.start();
 void parseMatchOnPage();
 setupNicknameLengthsResponder();
 setupDiagnostics();
 
-log.info("content", "booted");
+log.info("content", "booted", navigator.userAgent, location.href);

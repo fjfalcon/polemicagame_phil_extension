@@ -4,3 +4,7 @@ dist/
 *.zip
 .DS_Store
 web-ext-artifacts/
+
+# stray/pre-existing, not part of project
+2796351392.ts
+tools/

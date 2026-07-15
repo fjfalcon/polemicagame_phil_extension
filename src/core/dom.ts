@@ -94,12 +94,21 @@ class SharedDomObserver {
     this.rafScheduled = false;
     const batch = this.pending;
     this.pending = [];
+    const started = performance.now();
     for (const fn of this.subscribers) {
       try {
         fn(batch);
       } catch (e) {
         log.error("dom", "subscriber threw", e);
       }
+    }
+    // Watchdog: тяжёлый проход по DOM — кандидат в «сайт сходит с ума».
+    const dur = performance.now() - started;
+    if (dur > 50) {
+      log.warn(
+        "dom",
+        `slow flush ${Math.round(dur)}ms, subs=${this.subscribers.size}, muts=${batch.length}`,
+      );
     }
   }
 

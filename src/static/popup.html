@@ -369,6 +369,18 @@
                 </span>
             </div>
             <div class="note-box">Экспортируй заметки в файл, чтобы не потерять их при сбросе браузера.</div>
+
+            <div class="sub" style="color: var(--muted);">🩺 Диагностика</div>
+            <div class="row"><span>Вести логи<span class="hint">для диагностики сбоев, переживают перезапуск</span></span>
+                <label class="switch"><input type="checkbox" id="debug_logging_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Логи</span>
+                <span class="btn-row">
+                    <button id="download_logs" class="btn btn-primary">Скачать</button>
+                    <button id="clear_logs" class="btn btn-ghost">Очистить</button>
+                </span>
+            </div>
+            <div class="note-box">Если сайт «сходит с ума» — скачай логи после сбоя и пришли их, по ним найдём причину.</div>
         </div>
     </div>
 
