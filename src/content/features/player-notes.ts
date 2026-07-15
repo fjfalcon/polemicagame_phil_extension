@@ -104,6 +104,8 @@ class PlayerNotesManager {
   private settings: Settings;
 
   private notes: NotesMap = {};
+  /** Пользовательские цвета меток (палитра), хранятся в storage.sync. */
+  private customTags: string[] = [];
   /** Кэш статистики по нику (lowercase) — не дёргаем API повторно на hover. */
   private playerStats = new Map<string, PlayerStatsEntry>();
   /** Кэш последних игр по нику (lowercase). */
@@ -300,12 +302,22 @@ class PlayerNotesManager {
       const result = (await browser.storage.sync.get({
         playerNotes: {},
         version: VERSION,
-      })) as { playerNotes: NotesMap };
+        tagCustomColors: [],
+      })) as { playerNotes: NotesMap; tagCustomColors: string[] };
       this.notes = result.playerNotes || {};
+      this.customTags = Array.isArray(result.tagCustomColors) ? result.tagCustomColors : [];
       log.debug("player-notes", "notes loaded", Object.keys(this.notes).length);
     } catch (e) {
       log.error("player-notes", "loadNotes failed", e);
       this.notes = {};
+    }
+  }
+
+  private async saveCustomTags(): Promise<void> {
+    try {
+      await browser.storage.sync.set({ tagCustomColors: this.customTags });
+    } catch (e) {
+      log.error("player-notes", "saveCustomTags failed", e);
     }
   }
 
@@ -861,23 +873,17 @@ class PlayerNotesManager {
     tagLabel.style.cssText = "color: rgba(255,255,255,.7); font-size: 12px; margin-bottom: 6px;";
     const tagRow = document.createElement("div");
     tagRow.style.cssText = "display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap;";
-    const swatches: HTMLButtonElement[] = [];
-    const renderSwatches = () => {
-      swatches.forEach((s) => {
-        const isSel = s.dataset.css === selectedTag;
-        s.style.outline = isSel ? "2px solid #fff" : "2px solid transparent";
-        s.style.outlineOffset = "2px";
-      });
-    };
-    TAG_PRESETS.forEach(({ css, name }) => {
+
+    const makeSwatch = (css: string, name: string, custom: boolean): HTMLButtonElement => {
       const sw = document.createElement("button");
       sw.dataset.css = css;
-      sw.title = name;
+      sw.title = custom ? `${name} (ПКМ — удалить)` : name;
       sw.style.cssText = `
         width: 24px; height: 24px; border-radius: 50%; cursor: pointer; padding: 0;
         border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto;
         background: ${css || "transparent"};
-        display: flex; align-items: center; justify-content: center;
+        outline: ${css === selectedTag ? "2px solid #fff" : "2px solid transparent"};
+        outline-offset: 2px; display: flex; align-items: center; justify-content: center;
       `;
       if (!css) {
         sw.textContent = "✕"; // «нет метки»
@@ -885,12 +891,51 @@ class PlayerNotesManager {
       }
       sw.addEventListener("click", () => {
         selectedTag = css;
-        renderSwatches();
+        rebuild();
       });
-      swatches.push(sw);
-      tagRow.appendChild(sw);
-    });
-    renderSwatches();
+      if (custom) {
+        sw.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          this.customTags = this.customTags.filter((c) => c !== css);
+          void this.saveCustomTags();
+          if (selectedTag === css) selectedTag = "";
+          rebuild();
+        });
+      }
+      return sw;
+    };
+
+    const rebuild = () => {
+      tagRow.replaceChildren();
+      for (const { css, name } of TAG_PRESETS) tagRow.appendChild(makeSwatch(css, name, false));
+      for (const css of this.customTags) tagRow.appendChild(makeSwatch(css, "свой цвет", true));
+
+      // Кнопка «+» — выбрать свой цвет и сохранить в палитру.
+      const add = document.createElement("button");
+      add.textContent = "+";
+      add.title = "Добавить свой цвет";
+      add.style.cssText = `
+        width: 24px; height: 24px; border-radius: 50%; cursor: pointer; padding: 0;
+        border: 1px dashed rgba(255,255,255,.4); background: transparent; color: #fff;
+        font-size: 15px; line-height: 1; flex: 0 0 auto;
+      `;
+      const picker = document.createElement("input");
+      picker.type = "color";
+      picker.value = "#3b82f6";
+      picker.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
+      add.addEventListener("click", () => picker.click());
+      picker.addEventListener("change", () => {
+        const c = picker.value;
+        if (c && !this.customTags.includes(c) && !TAG_PRESETS.some((p) => p.css === c)) {
+          this.customTags.push(c);
+          void this.saveCustomTags();
+        }
+        selectedTag = c;
+        rebuild();
+      });
+      tagRow.append(add, picker);
+    };
+    rebuild();
 
     // ── общие действия ──
     const close = () => {
