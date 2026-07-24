@@ -1,6 +1,6 @@
 {
   "name": "polemica-notes",
-  "version": "8.1.21",
+  "version": "8.1.22",
   "private": true,
   "description": "Расширение для Polemica Game: статистика, заметки, OBS, Twitch",
   "type": "module",
@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",
+    "@types/webextension-polyfill": "^0.12.5",
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",

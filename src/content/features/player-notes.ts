@@ -25,6 +25,16 @@ import { onMessage } from "@core/messaging";
 import { toggleFlipForPlayer, isPlayerFlipped } from "../camera-flip";
 import { escapeHtml } from "@core/escape";
 import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
+import {
+  loadNotes as loadNotesFromStore,
+  saveNotes as saveNotesToStore,
+  saveCustomTags as saveCustomTagsToStore,
+  isSafeNoteKey,
+  NOTES_KEY,
+  TAGS_KEY,
+  NOTES_VERSION,
+} from "@core/notes-store";
+import type { NoteRecord, NotesMap } from "@core/notes-store";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings, ExtMessage } from "@shared/types";
 
@@ -59,7 +69,7 @@ interface LastGameEntry {
   mmrChange: number;
 }
 
-type NoteRecord = { text: string; timestamp: number; version?: string; tag?: string };
+/* NoteRecord / NotesMap живут в @core/notes-store — их делят content и popup. */
 
 /**
  * Палитра меток игроков. `css` — любое значение для background:
@@ -84,9 +94,7 @@ const TAG_PRESETS: Array<{ css: string; name: string }> = [
   { css: "linear-gradient(135deg,#ff512f,#f09819)", name: "огонь" },
   { css: "linear-gradient(135deg,#ef4444,#eab308,#22c55e,#3b82f6,#a855f7)", name: "радуга" },
 ];
-type NotesMap = Record<string, NoteRecord | string>;
-
-const VERSION = "1.0";
+const VERSION = NOTES_VERSION;
 
 const THEME_COLORS: Record<string, string> = {
   default: "rgb(66, 103, 178)",
@@ -112,6 +120,8 @@ class PlayerNotesManager {
   private lastGamesCache = new Map<string, LastGameEntry[]>();
   /** Ники с временно скрытым видео (в пределах сессии). */
   private hiddenVideos = new Set<string>();
+  /** Закрытие открытой модалки заметки — нужно, чтобы disable() снял её слушатели. */
+  private closeOpenModal: (() => void) | null = null;
 
   private roleSpriteBaseUrl: string | null = null;
 
@@ -199,8 +209,14 @@ class PlayerNotesManager {
       changes: Record<string, { newValue?: unknown }>,
       area: string,
     ) => {
-      if (area !== "sync" || !changes.playerNotes) return;
-      this.notes = (changes.playerNotes.newValue as NotesMap) || {};
+      if (area !== "local") return;
+      // Палитра меток тоже общая — раньше её изменения из другой вкладки терялись.
+      if (changes[TAGS_KEY]) {
+        const next = changes[TAGS_KEY].newValue;
+        if (Array.isArray(next)) this.customTags = next as string[];
+      }
+      if (!changes[NOTES_KEY]) return;
+      this.notes = (changes[NOTES_KEY].newValue as NotesMap) || {};
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
       this.updateAllTooltips();
@@ -271,7 +287,10 @@ class PlayerNotesManager {
 
     // Удаляем все созданные элементы.
     this.removeStatisticsElements();
-    // Открытые модалки заметок/истории.
+    // Открытые модалки заметок/истории: через close(), иначе останется
+    // висеть capture-слушатель keydown вместе со всем DOM модалки.
+    this.closeOpenModal?.();
+    this.closeOpenModal = null;
     document.querySelectorAll(".polemica-note-modal").forEach((el) => el.remove());
 
     if (this.matchStyleEl) {
@@ -295,39 +314,22 @@ class PlayerNotesManager {
     this.updateAllTooltips();
   }
 
-  // ─────────── Заметки (storage.sync) ───────────
+  // ─────────── Заметки (storage.local, см. @core/notes-store) ───────────
 
   private async loadNotes(): Promise<void> {
-    try {
-      const result = (await browser.storage.sync.get({
-        playerNotes: {},
-        version: VERSION,
-        tagCustomColors: [],
-      })) as { playerNotes: NotesMap; tagCustomColors: string[] };
-      this.notes = result.playerNotes || {};
-      this.customTags = Array.isArray(result.tagCustomColors) ? result.tagCustomColors : [];
-      log.debug("player-notes", "notes loaded", Object.keys(this.notes).length);
-    } catch (e) {
-      log.error("player-notes", "loadNotes failed", e);
-      this.notes = {};
-    }
+    const { notes, customTags } = await loadNotesFromStore();
+    this.notes = notes;
+    this.customTags = customTags;
+    log.debug("player-notes", "notes loaded", Object.keys(this.notes).length);
   }
 
   private async saveCustomTags(): Promise<void> {
-    try {
-      await browser.storage.sync.set({ tagCustomColors: this.customTags });
-    } catch (e) {
-      log.error("player-notes", "saveCustomTags failed", e);
-    }
+    await saveCustomTagsToStore(this.customTags);
   }
 
-  private async saveNotes(): Promise<void> {
-    try {
-      await browser.storage.sync.set({ playerNotes: this.notes, version: VERSION });
-      log.debug("player-notes", "notes saved");
-    } catch (e) {
-      log.error("player-notes", "saveNotes failed", e);
-    }
+  /** Возвращает false, если запись не удалась — интерфейс обязан это показать. */
+  private async saveNotes(): Promise<boolean> {
+    return await saveNotesToStore(this.notes);
   }
 
   private getNoteText(username: string): string {
@@ -945,9 +947,21 @@ class PlayerNotesManager {
     const close = () => {
       document.removeEventListener("keydown", onKey, true);
       overlay.remove();
+      if (this.closeOpenModal === close) this.closeOpenModal = null;
     };
-    const save = () => {
+    // disable() раньше сносил оверлей через remove() мимо close() — capture-слушатель
+    // keydown оставался жить и продолжал глотать Escape и сохранять в отсоединённую форму.
+    this.closeOpenModal?.();
+    this.closeOpenModal = close;
+
+    /** true — заметка записана; false — запись не удалась, окно закрывать нельзя. */
+    const save = async (): Promise<boolean> => {
+      if (!isSafeNoteKey(username)) {
+        log.warn("player-notes", "unsafe username, note not saved", username);
+        return false;
+      }
       const value = textarea.value.trim();
+      const previous = this.notes[username];
       if (value || selectedTag) {
         this.notes[username] = {
           text: value,
@@ -958,17 +972,20 @@ class PlayerNotesManager {
       } else {
         delete this.notes[username];
       }
-      void this.saveNotes();
+      if (!(await this.saveNotes())) {
+        // Откатываем память под состояние хранилища, иначе интерфейс будет
+        // показывать заметку, которой на диске нет.
+        if (previous === undefined) delete this.notes[username];
+        else this.notes[username] = previous;
+        return false;
+      }
       const tooltip = document.querySelector(
         `.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`,
       );
       if (tooltip) tooltip.innerHTML = this.generateTooltipContent(username);
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
-    };
-    const saveAndClose = () => {
-      save();
-      close();
+      return true;
     };
 
     // ── кнопки ──
@@ -986,14 +1003,31 @@ class PlayerNotesManager {
     const closeBtn = mkBtn("Закрыть", "rgba(255, 255, 255, 0.12)");
 
     let savedHint: ReturnType<typeof setTimeout> | null = null;
-    saveBtn.addEventListener("click", () => {
-      save();
-      // Короткий фидбек, окно остаётся открытым.
-      saveBtn.textContent = "Сохранено ✓";
+    /** Фидбек по РЕАЛЬНОМУ результату записи: раньше «Сохранено ✓» рисовалось всегда. */
+    const showResult = (btn: HTMLButtonElement, ok: boolean, label: string, bg: string) => {
+      btn.textContent = ok ? "Сохранено ✓" : "Не сохранено!";
+      btn.style.background = ok ? bg : "rgba(239, 68, 68, 0.7)";
       if (savedHint) clearTimeout(savedHint);
-      savedHint = setTimeout(() => (saveBtn.textContent = "Сохранить"), 1200);
+      savedHint = setTimeout(
+        () => {
+          btn.textContent = label;
+          btn.style.background = bg;
+        },
+        ok ? 1200 : 4000,
+      );
+    };
+    saveBtn.addEventListener("click", () => {
+      void save().then((ok) =>
+        showResult(saveBtn, ok, "Сохранить", "rgba(99, 102, 241, 0.3)"),
+      );
     });
-    saveCloseBtn.addEventListener("click", saveAndClose);
+    saveCloseBtn.addEventListener("click", () => {
+      // При неудачной записи окно НЕ закрываем — иначе текст заметки пропадёт.
+      void save().then((ok) => {
+        if (ok) close();
+        else showResult(saveCloseBtn, false, "Сохранить и закрыть", "rgba(99, 102, 241, 0.6)");
+      });
+    });
     closeBtn.addEventListener("click", close);
 
     const buttons = document.createElement("div");
@@ -1008,7 +1042,9 @@ class PlayerNotesManager {
         close();
       } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        saveAndClose();
+        void save().then((ok) => {
+          if (ok) close();
+        });
       }
     };
     document.addEventListener("keydown", onKey, true);

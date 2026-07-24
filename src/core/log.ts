@@ -76,9 +76,36 @@ function fmtArgs(args: unknown[]): string {
     .slice(0, MAX_MSG);
 }
 
+/**
+ * Перед первой записью подтягиваем то, что уже лежит под нашим ключом.
+ * Раньше буфер стартовал пустым и первый же flush затирал накопленное —
+ * то есть логи НЕ переживали перезагрузку страницы (а в Chrome ключ `bg`
+ * обнулялся при каждом рестарте service worker'а). Ровно тот сценарий,
+ * ради которого буфер сделан, и не работал.
+ */
+let primed = false;
+let priming: Promise<void> | null = null;
+
+async function primeFromStorage(): Promise<void> {
+  try {
+    const res = (await browser.storage.local.get(STORAGE_KEY)) as Record<string, unknown>;
+    const prev = res[STORAGE_KEY];
+    if (Array.isArray(prev) && prev.length) {
+      buffer = [...(prev as Entry[]), ...buffer].slice(-CAP);
+    }
+  } catch {
+    /* недоступно — пишем что есть */
+  }
+  primed = true;
+}
+
 async function doFlush(): Promise<void> {
   flushTimer = null;
   if (!dirty) return;
+  if (!primed) {
+    priming ??= primeFromStorage();
+    await priming;
+  }
   dirty = false;
   try {
     await browser.storage.local.set({ [STORAGE_KEY]: buffer });

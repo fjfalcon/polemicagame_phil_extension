@@ -15,7 +15,7 @@
  *
  * update(ctx) переприменяет настройки без выкл/вкл фичи.
  */
-import { onDomChange, safeClick } from "@core/dom";
+import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { keyboard } from "@core/keyboard";
 import { log } from "@core/log";
 import { SITE, TEXT, OWN } from "@core/selectors";
@@ -98,13 +98,38 @@ function findAcceptTextElements(): HTMLElement[] {
   return matched.filter((el) => !matched.some((other) => other !== el && el.contains(other)));
 }
 
+/**
+ * Бюджет автокликов: не больше нескольких попыток на один и тот же элемент.
+ * Если элемент не ушёл из DOM после трёх кликов — он не про приём игры,
+ * и продолжать жать его значит воевать с интерфейсом (или с игроком).
+ */
+const acceptClickCounts = new WeakMap<Element, number>();
+const MAX_ACCEPT_CLICKS_PER_ELEMENT = 3;
+
+function consumeClickBudget(el: Element): boolean {
+  if (!isVisible(el)) return false;
+  const used = acceptClickCounts.get(el) ?? 0;
+  if (used >= MAX_ACCEPT_CLICKS_PER_ELEMENT) return false;
+  acceptClickCounts.set(el, used + 1);
+  return true;
+}
+
 function clickAcceptButtons() {
-  log.debug(SCOPE, "checking accept buttons");
+  // Игрок только что кликал сам — не вмешиваемся, он пользуется интерфейсом.
+  if (Date.now() - lastUserClickAt < USER_ACTION_BACKOFF_MS) return;
 
   const acceptGameElements = findAcceptTextElements();
 
+  // ТОЧНОЕ совпадение текста, а не подстрока: «Не готов» содержит «готов»,
+  // «Подтвердить пароль» — «подтвердить». Прежний вариант жал любую такую
+  // кнопку на любой странице сайта, включая подтверждения во время голосования.
+  // Кнопки внутри стартового окна не трогаем — у clickStartGameButton свой
+  // лимит попыток и бэкофф, и обходить их отсюда нельзя (окно настроек камеры —
+  // то же самое окно).
   const readyButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter(
-    (btn) => containsAny((btn.textContent || "").toLowerCase(), TEXT.acceptGameButton),
+    (btn) =>
+      (TEXT.acceptGameButton as readonly string[]).includes(norm(btn)) &&
+      !btn.closest(SITE.welcomeModal),
   );
 
   let gameAcceptDivs: HTMLElement[] = [];
@@ -133,15 +158,10 @@ function clickAcceptButtons() {
     log.debug(SCOPE, "cursor-pointer accept selector failed", e);
   }
 
-  // Fallback: по тексту «Принять игру» ИЛИ по названию режима
-  if (gameAcceptDivs.length === 0) {
-    gameAcceptDivs = Array.from(
-      document.querySelectorAll<HTMLElement>(SITE.acceptGameDivLoose),
-    ).filter((div) => {
-      const t = norm(div);
-      return containsAny(t, TEXT.acceptGameText) || containsAny(t, TEXT.gameMode);
-    });
-  }
+  // Прежний fallback «по названию режима» (культурный/обычный/без цензуры)
+  // удалён: textContent наследуется, и под фильтр попадал любой крупный
+  // cursor-pointer контейнер с названием режима где-то внутри — расширение
+  // кликало по нему на каждый батч мутаций. Это был главный оставшийся цикл.
 
   try {
     Array.from(document.querySelectorAll<HTMLElement>(SITE.profileAccept)).forEach((el) =>
@@ -155,13 +175,14 @@ function clickAcceptButtons() {
 
   // Клик по обычным кнопкам
   readyButtons.forEach((button) => {
+    if (!consumeClickBudget(button)) return;
     log.debug(SCOPE, "click accept button", button.textContent);
     button.click();
 
     // После старта — один раз пытаемся включить видео
     if (!videoButtonClicked) {
       setTimeout(() => {
-        const videoButton = document.querySelector<HTMLElement>(SITE.webcamButtonStartIcon);
+        const videoButton = findWebcamButton();
         if (videoButton) {
           if (cfg.disableWebcam) {
             log.debug(SCOPE, "skip webcam autoclick (disabled by setting)");
@@ -176,14 +197,13 @@ function clickAcceptButtons() {
 
   // Клик по карточкам приёма игры
   gameAcceptDivs.forEach((div) => {
-    safeClick(div);
+    if (consumeClickBudget(div)) safeClick(div);
   });
 
   // Доп. элементы с текстом «Принять игру»
   acceptGameElements.forEach((el) => {
-    if (!readyButtons.includes(el as HTMLButtonElement) && !gameAcceptDivs.includes(el)) {
-      safeClick(el);
-    }
+    if (readyButtons.includes(el as HTMLButtonElement) || gameAcceptDivs.includes(el)) return;
+    if (consumeClickBudget(el)) safeClick(el);
   });
 }
 
@@ -192,8 +212,18 @@ function enableAutoAccept() {
   log.info(SCOPE, "auto-accept enabled");
   videoButtonClicked = false;
   acceptInterval = setInterval(clickAcceptButtons, 1000);
+  // Подписка на мутации нужна только чтобы отреагировать на появление карточки
+  // быстрее, чем раз в секунду. Без дросселя она вызывала скан+клики на каждый
+  // батч мутаций (до 60 раз/с) и обходила интервал-ограничитель: клик порождал
+  // перерисовку, перерисовка — новый клик.
+  let acceptScanTimer: ReturnType<typeof setTimeout> | null = null;
   unsubAcceptDom = onDomChange((muts) => {
-    if (muts.some((m) => m.addedNodes.length)) clickAcceptButtons();
+    if (acceptScanTimer !== null) return;
+    if (!muts.some((m) => m.addedNodes.length)) return;
+    acceptScanTimer = setTimeout(() => {
+      acceptScanTimer = null;
+      clickAcceptButtons();
+    }, 250);
   });
 }
 
@@ -705,6 +735,28 @@ function clickStartGameButton() {
   if (startElements.length > 0) safeClick(startElements[0]);
 }
 
+/**
+ * У кнопки камеры и кнопки настроек ОДИН И ТОТ ЖЕ класс
+ * (div.button.preset-1.small.desktop-version) — селектором их не различить.
+ * Раньше брался первый попавшийся элемент, и если это оказывалась шестерёнка,
+ * расширение открывало/закрывало окно настроек до 10 раз подряд.
+ * Различаем по иконке/подписи; если уверенности нет — не кликаем вовсе.
+ */
+function findWebcamButton(): HTMLElement | null {
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>(SITE.webcamButton));
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  const looksLikeCamera = (el: HTMLElement): boolean => {
+    const use = el.querySelector("use");
+    const href = (use?.getAttribute("href") || use?.getAttribute("xlink:href") || "").toLowerCase();
+    const label = `${el.getAttribute("title") || ""} ${el.getAttribute("aria-label") || ""}`.toLowerCase();
+    return /video|camera|cam\b|веб|камер/.test(`${href} ${label}`);
+  };
+  const match = candidates.find(looksLikeCamera);
+  if (!match) log.debug(SCOPE, "several candidate buttons, none looks like a camera — skip");
+  return match ?? null;
+}
+
 function isInLobby(): boolean {
   const stageName = document.querySelector<HTMLElement>(SITE.lobbyStageName);
   const invitationLink = document.querySelector(SITE.invitationLink);
@@ -721,7 +773,7 @@ function disableWebcams() {
     return;
   }
 
-  const webcamButton = document.querySelector<HTMLElement>(SITE.webcamButton);
+  const webcamButton = findWebcamButton();
   if (!webcamButton) return;
 
   if (webcamButton.classList.contains(SITE.webcamButtonOffClass)) {
@@ -741,7 +793,7 @@ function disableWebcams() {
         webcamClickInterval = null;
         return;
       }
-      const currentButton = document.querySelector<HTMLElement>(SITE.webcamButton);
+      const currentButton = findWebcamButton();
       if (!currentButton) {
         if (webcamClickInterval) clearInterval(webcamClickInterval);
         webcamClickInterval = null;

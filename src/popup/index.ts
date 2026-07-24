@@ -15,6 +15,8 @@ import { installErrorCapture } from "@core/errors";
 import { getSettings, setSettings } from "@core/settings";
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
 import { escapeHtml } from "@core/escape";
+import { loadNotes, saveNotes, mergeNotes } from "@core/notes-store";
+import type { NotesMap } from "@core/notes-store";
 import {
   sendRuntime,
   sendToActiveTab,
@@ -197,25 +199,32 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (exportBtn) {
     exportBtn.addEventListener("click", async () => {
-      const { playerNotes = {} } = (await browser.storage.sync.get("playerNotes")) as {
-        playerNotes?: Record<string, unknown>;
-      };
-      const count = Object.keys(playerNotes).length;
-      const payload = {
-        app: "polemica-notes",
-        type: "notes-backup",
-        version: browser.runtime.getManifest().version,
-        exportedAt: new Date().toISOString(),
-        notes: playerNotes,
-      };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `polemica-notes-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showPopupToast(`Экспортировано заметок: ${count}`);
+      try {
+        const { notes } = await loadNotes();
+        const count = Object.keys(notes).length;
+        if (count === 0) {
+          showPopupToast("Заметок пока нет — нечего выгружать", "error");
+          return;
+        }
+        const payload = {
+          app: "polemica-notes",
+          type: "notes-backup",
+          version: browser.runtime.getManifest().version,
+          exportedAt: new Date().toISOString(),
+          notes,
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `polemica-notes-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showPopupToast(`Экспортировано заметок: ${count}`);
+      } catch (e) {
+        log.error(SCOPE, "export failed", e);
+        showPopupToast("Не удалось выгрузить заметки", "error");
+      }
     });
   }
 
@@ -226,27 +235,32 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!file) return;
       try {
         const data = JSON.parse(await file.text());
-        const incoming = (data?.notes ?? (data?.app ? {} : data)) as Record<
-          string,
-          { text?: string; timestamp?: number }
-        >;
-        if (!incoming || typeof incoming !== "object") throw new Error("bad format");
-
-        const { playerNotes = {} } = (await browser.storage.sync.get("playerNotes")) as {
-          playerNotes?: Record<string, { text?: string; timestamp?: number }>;
-        };
-        const merged: Record<string, { text?: string; timestamp?: number }> = { ...playerNotes };
-        let added = 0;
-        for (const [user, note] of Object.entries(incoming)) {
-          if (!note || typeof note.text !== "string") continue;
-          const cur = merged[user];
-          if (!cur || (note.timestamp ?? 0) >= (cur.timestamp ?? 0)) {
-            merged[user] = note;
-            added++;
-          }
+        const incoming = (data?.notes ?? (data?.app ? {} : data)) as NotesMap;
+        if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+          throw new Error("bad format");
         }
-        await browser.storage.sync.set({ playerNotes: merged });
-        showPopupToast(`Импортировано заметок: ${added}`);
+        if (Object.keys(incoming).length === 0) {
+          showPopupToast("В файле нет заметок", "error");
+          return;
+        }
+
+        // mergeNotes понимает и старый строковый формат заметок — прежний импорт
+        // молча выбрасывал такие записи и всё равно рисовал зелёный тост.
+        const { notes } = await loadNotes();
+        const { merged, added, replaced } = mergeNotes(notes, incoming);
+        if (!added && !replaced) {
+          showPopupToast("Все заметки из файла уже есть");
+          return;
+        }
+        if (!(await saveNotes(merged))) {
+          showPopupToast("Не удалось сохранить заметки", "error");
+          return;
+        }
+        showPopupToast(
+          replaced
+            ? `Добавлено: ${added}, обновлено: ${replaced}`
+            : `Импортировано заметок: ${added}`,
+        );
       } catch (e) {
         log.error(SCOPE, "import failed", e);
         showPopupToast("Не удалось импортировать файл", "error");

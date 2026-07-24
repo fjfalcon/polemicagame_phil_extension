@@ -77,7 +77,7 @@ export async function getSettings(): Promise<Settings> {
 export async function getSetting<K extends SettingKey>(key: K): Promise<Settings[K]> {
   const area = isLocal(key) ? browser.storage.local : browser.storage.sync;
   const res = await area.get({ [key]: DEFAULT_SETTINGS[key] });
-  return (res as Settings)[key];
+  return res[key] as Settings[K];
 }
 
 /** Записать частичный патч настроек (секреты автоматически уйдут в local). */

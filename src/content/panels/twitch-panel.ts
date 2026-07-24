@@ -38,6 +38,9 @@ const MAX_MESSAGES = 100;
 const VISIBLE_MESSAGES = 3;
 /** Базовая задержка переподключения. */
 const RECONNECT_DELAY = 5000;
+/** Потолок попыток: опечатка в имени канала не должна долбить IRC вечно. */
+const MAX_RECONNECT_ATTEMPTS = 10;
+let reconnectAttempts = 0;
 
 interface ChatMessage {
   username?: string;
@@ -241,12 +244,20 @@ function clearReconnect(): void {
 
 function scheduleReconnect(): void {
   if (intentionalClose || !channelName) return;
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    log.warn(SCOPE, "reconnect limit reached, giving up");
+    panel?.addSystemMessage("Не удалось подключиться — проверьте имя канала");
+    return;
+  }
+  reconnectAttempts++;
   clearReconnect();
+  // Растущая задержка: 5с, 10с, 15с… до 30с.
+  const delay = Math.min(RECONNECT_DELAY * reconnectAttempts, 30_000);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    log.debug(SCOPE, "reconnecting to", channelName);
+    log.debug(SCOPE, "reconnecting to", channelName, `attempt ${reconnectAttempts}`);
     connectToTwitch();
-  }, RECONNECT_DELAY);
+  }, delay);
 }
 
 function connectToTwitch(): void {
@@ -256,9 +267,16 @@ function connectToTwitch(): void {
   }
 
   // Закрываем предыдущий сокет (смена канала / повторное подключение).
+  // Флаг intentionalClose для этого НЕ годится: close() асинхронный, а флаг
+  // сбрасывался синхронно — onclose старого сокета приходил уже после сброса,
+  // видел false и планировал реконнект, который через 5 с убивал свежее
+  // рабочее соединение. Получался вечный цикл переподключений.
+  // Вместо флага снимаем со старого сокета обработчики: его close нас не касается.
   clearReconnect();
   if (socket) {
-    intentionalClose = true;
+    socket.onclose = null;
+    socket.onerror = null;
+    socket.onmessage = null;
     socket.close();
     socket = null;
   }
@@ -277,6 +295,7 @@ function connectToTwitch(): void {
       ws.send(`NICK justinfan${Math.floor(Math.random() * 100000)}`);
       ws.send(`JOIN #${channelName.toLowerCase()}`);
       isConnected = true;
+      reconnectAttempts = 0;
       panel?.addSystemMessage("Подключились к чату");
     };
 
@@ -285,10 +304,11 @@ function connectToTwitch(): void {
     };
 
     ws.onclose = () => {
+      // Сокет мог смениться, пока ждали close — чужой close игнорируем целиком.
+      if (socket !== ws) return;
       log.debug(SCOPE, "IRC disconnected");
       isConnected = false;
-      // Сокет мог смениться, пока ждали close — реагируем только на актуальный.
-      if (socket === ws) socket = null;
+      socket = null;
       if (!intentionalClose) {
         panel?.addSystemMessage("Отключились от чата");
         scheduleReconnect();
@@ -362,6 +382,7 @@ function handleControlMessage(msg: TwitchControlMsg): void {
       break;
     case "twitch_connect":
       if (msg.channel) channelName = msg.channel;
+      reconnectAttempts = 0; // явное действие пользователя — свежий лимит попыток
       connectToTwitch();
       break;
     case "twitch_disconnect":
@@ -406,6 +427,7 @@ export const twitchPanelFeature: TwitchFeature = {
     const next = ctx.settings.twitch_channel_name || "";
     if (next !== channelName) {
       channelName = next;
+      reconnectAttempts = 0; // сменили канал — свежий лимит попыток
       // Переподключение к новому каналу (или отключение, если канал убрали).
       if (channelName && gameUiVisible) connectToTwitch();
       else disconnect();
