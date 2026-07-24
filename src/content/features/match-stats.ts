@@ -43,12 +43,35 @@ function trackTimeout(fn: () => void, ms: number): ReturnType<typeof setTimeout>
 }
 
 function appendStyle(css: string, id?: string): HTMLStyleElement {
+  // С id — переиспользуем существующий элемент. Без этого вызовы из
+  // периодических задач добавляли новый <style> на каждый тик.
+  if (id) {
+    const existing = document.getElementById(id) as HTMLStyleElement | null;
+    if (existing) {
+      if (existing.textContent !== css) existing.textContent = css;
+      return existing;
+    }
+  }
   const style = document.createElement("style");
   if (id) style.id = id;
   style.textContent = css;
   document.head.appendChild(style);
   injectedStyles.push(style);
   return style;
+}
+
+/**
+ * Идемпотентная запись style. applyAutoHeight крутится по таймеру раз в 5 сек
+ * и раньше переписывал десятки атрибутов на каждом тике — это будило общий
+ * MutationObserver и всех его подписчиков вхолостую.
+ */
+function setStyleAttr(el: Element, css: string): void {
+  if (el.getAttribute("style") !== css) el.setAttribute("style", css);
+}
+
+/** То же для отдельного свойства. */
+function setStyleProp(el: HTMLElement, prop: "height" | "maxHeight", value: string): void {
+  if (el.style[prop] !== value) el.style[prop] = value;
 }
 
 function statsEnabled(): boolean {
@@ -791,10 +814,10 @@ function applyAutoHeight(): void {
     }
   }
   if (dataVAttribute) {
-    appendStyle(`[${dataVAttribute}] { height: auto !important; }`);
+    appendStyle(`[${dataVAttribute}] { height: auto !important; }`, "pn-stats-auto-height");
   }
 
-  gameStatsTable.style.height = "auto";
+  setStyleProp(gameStatsTable, "height", "auto");
 
   // Чиним прокручиваемых родителей.
   let parent = gameStatsTable.parentElement;
@@ -807,8 +830,8 @@ function applyAutoHeight(): void {
       parent.classList.contains("__panel") ||
       parent.classList.contains("__view")
     ) {
-      parent.style.height = "auto";
-      parent.style.maxHeight = "none";
+      setStyleProp(parent, "height", "auto");
+      setStyleProp(parent, "maxHeight", "none");
     }
     parent = parent.parentElement;
   }
@@ -820,65 +843,35 @@ function applyAutoHeight(): void {
     const totalRow = tableRows[tableRows.length - 2];
 
     if (mmrRow && totalRow) {
-      mmrRow.setAttribute(
-        "style",
-        "background: #1a1c29 !important; border-bottom: 2px solid #2c3347 !important;",
-      );
-      totalRow.setAttribute(
-        "style",
-        "background: #1a1c29 !important; border-top: 2px solid #2c3347 !important;",
-      );
+      setStyleAttr(mmrRow, "background: #1a1c29 !important; border-bottom: 2px solid #2c3347 !important;");
+      setStyleAttr(totalRow, "background: #1a1c29 !important; border-top: 2px solid #2c3347 !important;");
 
       const mmrTitle = mmrRow.querySelector(SITE.statsCellTitle);
       const totalTitle = totalRow.querySelector(SITE.statsCellTitle);
       if (mmrTitle && totalTitle) {
-        mmrTitle.setAttribute(
-          "style",
-          "background: #151824 !important; font-weight: 700 !important; color: #d1d5db !important;",
-        );
-        totalTitle.setAttribute(
-          "style",
-          "background: #151824 !important; font-weight: 700 !important; color: #d1d5db !important;",
-        );
+        setStyleAttr(mmrTitle, "background: #151824 !important; font-weight: 700 !important; color: #d1d5db !important;");
+        setStyleAttr(totalTitle, "background: #151824 !important; font-weight: 700 !important; color: #d1d5db !important;");
       }
 
       totalRow.querySelectorAll<HTMLElement>(".cell:not(.title)").forEach((cell) => {
         const value = parseFloat(cell.textContent?.trim() || "") || 0;
         if (value > 0) {
-          cell.setAttribute(
-            "style",
-            "color: #10b981 !important; font-weight: 600 !important; font-size: 16px !important;",
-          );
+          setStyleAttr(cell, "color: #10b981 !important; font-weight: 600 !important; font-size: 16px !important;");
         } else if (value < 0) {
-          cell.setAttribute(
-            "style",
-            "color: #ef4444 !important; font-weight: 600 !important; font-size: 16px !important;",
-          );
+          setStyleAttr(cell, "color: #ef4444 !important; font-weight: 600 !important; font-size: 16px !important;");
         } else {
-          cell.setAttribute(
-            "style",
-            "color: #94a3b8 !important; font-weight: 600 !important; font-size: 16px !important;",
-          );
+          setStyleAttr(cell, "color: #94a3b8 !important; font-weight: 600 !important; font-size: 16px !important;");
         }
       });
 
       mmrRow.querySelectorAll<HTMLElement>(".cell:not(.title)").forEach((cell) => {
         const value = parseInt(cell.textContent?.trim() || "", 10) || 0;
         if (value > 0) {
-          cell.setAttribute(
-            "style",
-            "color: #10b981 !important; font-weight: 700 !important; font-size: 17px !important;",
-          );
+          setStyleAttr(cell, "color: #10b981 !important; font-weight: 700 !important; font-size: 17px !important;");
         } else if (value < 0) {
-          cell.setAttribute(
-            "style",
-            "color: #ef4444 !important; font-weight: 700 !important; font-size: 17px !important;",
-          );
+          setStyleAttr(cell, "color: #ef4444 !important; font-weight: 700 !important; font-size: 17px !important;");
         } else {
-          cell.setAttribute(
-            "style",
-            "color: #94a3b8 !important; font-weight: 700 !important; font-size: 17px !important;",
-          );
+          setStyleAttr(cell, "color: #94a3b8 !important; font-weight: 700 !important; font-size: 17px !important;");
         }
       });
     }

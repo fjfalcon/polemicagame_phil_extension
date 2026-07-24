@@ -357,6 +357,10 @@ class PlayerNotesManager {
       ring.className = "pn-tag-ring";
       container.appendChild(ring);
     }
+    // Перерисовываем только при смене метки: безусловная запись style будила
+    // общий MutationObserver (он следит за атрибутом style) на каждом проходе.
+    if (ring.dataset.tag === tag) return;
+    ring.dataset.tag = tag;
     // Градиентная рамка: маской вырезаем середину, остаётся рамка 3px.
     // ВАЖНО: mask-composite ставим ПОСЛЕ shorthand-ов mask/-webkit-mask,
     // иначе shorthand сбрасывает composite в add и градиент заливает всю плитку.
@@ -1224,7 +1228,8 @@ class PlayerNotesManager {
     if (alreadyHas) {
       if (this.hiddenVideos.has(username.toLowerCase())) {
         const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
-        if (vid) vid.style.display = "none";
+        // Только при реальном изменении — иначе будим MutationObserver вхолостую.
+        if (vid && vid.style.display !== "none") vid.style.display = "none";
       }
       this.applyPlayerTag(container as HTMLElement, username);
       const grp = infoContainer.querySelector(`.${OWN.playerIcons}`);
@@ -1232,8 +1237,8 @@ class PlayerNotesManager {
       return;
     }
 
-    // Удаляем старые кнопки этого ника (глобально) и пересобираем контейнер.
-    this.removeOldButtons(username);
+    // Чистим кнопки этого ника ТОЛЬКО в своей плитке и пересобираем её.
+    this.removeOldButtons(username, container as HTMLElement);
     infoContainer
       .querySelectorAll(`.${OWN.playerIcons}`)
       .forEach((g) => g.remove());
@@ -1257,14 +1262,21 @@ class PlayerNotesManager {
     this.applyPlayerTag(container as HTMLElement, username);
   }
 
-  private removeOldButtons(username: string): void {
+  /**
+   * Удалить кнопки ника в пределах его плитки.
+   *
+   * Раньше чистка шла по всему документу: если сайт показывал одного игрока
+   * в двух плитках (десктоп/мобайл), они по очереди сносили кнопки друг друга
+   * на каждом проходе — вечная пересборка и шквал запросов статистики.
+   */
+  private removeOldButtons(username: string, root: ParentNode = document): void {
     const sel = cssAttr(username);
     [
       `.${OWN.noteButton}[data-username="${sel}"]`,
       `.${OWN.statsButton}[data-username="${sel}"]`,
       `.${OWN.lastGamesButton}[data-username="${sel}"]`,
       `.${OWN.hideVideoButton}[data-username="${sel}"]`,
-    ].forEach((s) => document.querySelectorAll(s).forEach((b) => b.remove()));
+    ].forEach((s) => root.querySelectorAll(s).forEach((b) => b.remove()));
   }
 
   private removeStatisticsElements(): void {
@@ -1312,10 +1324,15 @@ class PlayerNotesManager {
       const url = data.savedAvatarUrl;
 
       const gameAvatar = document.querySelector<HTMLImageElement>(SITE.profileImg);
-      if (gameAvatar) gameAvatar.src = url;
+      if (gameAvatar && gameAvatar.src !== url) gameAvatar.src = url;
 
       const profileAvatar = document.querySelector<HTMLElement>(SITE.profileAvatar);
       if (profileAvatar) {
+        // Если наш аватар уже вставлен — выходим. Иначе получается цикл:
+        // подписчик onDomChange вызывает эту функцию, она пересобирает
+        // содержимое (childList), наблюдатель ловит мутацию и зовёт снова.
+        if (profileAvatar.dataset.pnAvatar === url) return;
+        profileAvatar.dataset.pnAvatar = url;
         profileAvatar.innerHTML = "";
         const containerEl = document.createElement("div");
         containerEl.style.cssText = `

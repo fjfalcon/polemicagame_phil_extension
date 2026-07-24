@@ -456,6 +456,23 @@ async function hideRoleBeforeDaySceneSwitch(): Promise<void> {
 // ─────────────────────────── определение времени суток ───────────────────────────
 
 /**
+ * Текст самого глубокого элемента, содержащего фразу (или "" если её нет).
+ *
+ * Раньше тут был querySelectorAll("*") с чтением textContent каждого узла —
+ * квадратичный проход по всему документу на каждой проверке времени суток.
+ * Спуск по дереву даёт тот же результат за O(глубина × братья).
+ */
+function findDeepestTextWith(phrase: string): string {
+  let node: Element = document.body;
+  if (!norm(node).includes(phrase)) return "";
+  for (;;) {
+    const child = Array.from(node.children).find((c) => norm(c).includes(phrase));
+    if (!child) return norm(node);
+    node = child;
+  }
+}
+
+/**
  * Определяет время суток на основе DOM элементов страницы игры.
  * Логика сохранена 1-в-1 из obs-floating-panel.js.
  */
@@ -468,13 +485,8 @@ function detectTimeOfDay(): TimeOfDay {
       return "day";
     }
 
-    // 2. Ищем элементы "До смены этапа"
-    const stageChangeElements = document.querySelectorAll("*");
-    let stageChangeText = "";
-    stageChangeElements.forEach((element) => {
-      const text = norm(element);
-      if (text.includes("до смены этапа")) stageChangeText = text;
-    });
+    // 2. Ищем надпись "До смены этапа"
+    const stageChangeText = findDeepestTextWith("до смены этапа");
 
     if (stageChangeText) {
       const nextStage = document.querySelector(SITE.substageNext);

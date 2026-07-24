@@ -129,6 +129,14 @@
             max-height: 110px; overflow-y: auto; border: 1px solid var(--border);
             border-radius: 8px; background: var(--bg); font-size: 12px;
         }
+        .scene-item {
+            padding: 8px 12px; cursor: pointer; font-size: 12px;
+            border-bottom: 1px solid var(--border); color: var(--text);
+        }
+        .scene-item:last-child { border-bottom: none; }
+        .scene-item:hover { background: rgba(255,255,255,.06); }
+        .scene-item.active { color: var(--accent); font-weight: 700; background: rgba(255,255,255,.04); }
+        .scenes-empty { padding: 10px; text-align: center; color: var(--muted); font-size: 11px; }
         .note-box {
             margin: 6px 0 0; padding: 8px 10px; font-size: 10px; color: var(--muted);
             background: rgba(255,255,255,.04); border-radius: 8px;

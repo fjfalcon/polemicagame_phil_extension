@@ -30,6 +30,9 @@ export class FeatureManager {
   private features: Feature[] = [];
   private active = new Set<string>();
   private settings: Settings | null = null;
+  /** Хвост очереди: sync() никогда не выполняется параллельно сам с собой. */
+  private queue: Promise<void> = Promise.resolve();
+  private coalesceTimer: ReturnType<typeof setTimeout> | null = null;
 
   register(...f: Feature[]): this {
     this.features.push(...f);
@@ -38,11 +41,26 @@ export class FeatureManager {
 
   async start(): Promise<void> {
     this.settings = await getSettings();
-    await this.sync();
+    await this.enqueueSync();
     onSettingsChanged((patch) => {
       this.settings = { ...(this.settings as Settings), ...patch };
-      void this.sync();
+      // Сохранение настроек пишет в sync и local раздельно → два события подряд.
+      // Склеиваем их, чтобы не гонять sync() дважды на одно нажатие тумблера.
+      if (this.coalesceTimer) clearTimeout(this.coalesceTimer);
+      this.coalesceTimer = setTimeout(() => {
+        this.coalesceTimer = null;
+        void this.enqueueSync();
+      }, 50);
     });
+  }
+
+  /** Ставит проход в очередь; параллельных enable() для одной фичи не будет. */
+  private enqueueSync(): Promise<void> {
+    this.queue = this.queue.then(
+      () => this.sync(),
+      () => this.sync(),
+    );
+    return this.queue;
   }
 
   private isEnabled(f: Feature): boolean {
@@ -56,11 +74,14 @@ export class FeatureManager {
       const shouldEnable = this.isEnabled(f);
       const isActive = this.active.has(f.id);
       if (shouldEnable && !isActive) {
+        // Резервируем id ДО await: иначе повторный проход успеет вызвать
+        // enable() второй раз и оставит второй набор слушателей навсегда.
+        this.active.add(f.id);
         try {
           await f.enable(ctx);
-          this.active.add(f.id);
           log.info("feature", "enabled", f.id);
         } catch (e) {
+          this.active.delete(f.id);
           log.error("feature", "enable failed", f.id, e);
         }
       } else if (!shouldEnable && isActive) {

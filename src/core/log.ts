@@ -16,10 +16,15 @@ const ORDER: Record<Level, number> = { debug: 0, info: 1, warn: 2, error: 3, sil
 
 function detectCtx(): string {
   try {
-    if (typeof document === "undefined") return "bg"; // service worker / event page
+    if (typeof document === "undefined") return "bg"; // service worker (Chrome)
     const p = location.protocol;
-    if (p.startsWith("moz-extension") || p.startsWith("chrome-extension")) return "popup";
-    return "content";
+    if (!p.startsWith("moz-extension") && !p.startsWith("chrome-extension")) return "content";
+    // В Firefox фон — обычная скрытая страница с document, и раньше он писал
+    // в тот же ключ, что и popup: логи затирали друг друга.
+    const path = location.pathname;
+    if (path.includes("background")) return "bg";
+    if (path.includes("popup")) return "popup";
+    return "ext";
   } catch {
     return "bg";
   }

@@ -53,6 +53,7 @@ let unsubGameDom: (() => void) | null = null;
 let unsubKeyboard: (() => void) | null = null;
 let roleHideKey = "KeyD";
 let onRoleMenuClick: ((e: MouseEvent) => void) | null = null;
+let onUserClick: ((e: Event) => void) | null = null;
 let webcamDisabled = false;
 let webcamClickInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -78,12 +79,29 @@ let nightAutoShowStartedAt = 0;
 
 // ─────────────────────────── автопринятие игр ───────────────────────────
 
+/** Кликабельные кандидаты на «Принять игру» — вместо обхода всего документа. */
+const ACCEPT_CANDIDATE_SELECTOR =
+  'button, a, [role="button"], div.cursor-pointer, [class*="accept"]';
+
+/**
+ * Элементы с текстом «Принять игру».
+ *
+ * Раньше здесь был querySelectorAll("*"): textContent наследуется, поэтому под
+ * фильтр попадали html, body и вся цепочка контейнеров — и все они получали
+ * safeClick раз в секунду. Берём только кликабельные узлы и оставляем самые
+ * глубокие совпадения.
+ */
+function findAcceptTextElements(): HTMLElement[] {
+  const matched = Array.from(
+    document.querySelectorAll<HTMLElement>(ACCEPT_CANDIDATE_SELECTOR),
+  ).filter((el) => containsAny(norm(el), TEXT.acceptGameText));
+  return matched.filter((el) => !matched.some((other) => other !== el && el.contains(other)));
+}
+
 function clickAcceptButtons() {
   log.debug(SCOPE, "checking accept buttons");
 
-  const acceptGameElements = Array.from(document.querySelectorAll<HTMLElement>("*")).filter((el) =>
-    containsAny(norm(el), TEXT.acceptGameText),
-  );
+  const acceptGameElements = findAcceptTextElements();
 
   const readyButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter(
     (btn) => containsAny((btn.textContent || "").toLowerCase(), TEXT.acceptGameButton),
@@ -619,11 +637,42 @@ function queueRolePhaseCheck() {
 
 // ─────────────────────────── стартовый экран / лобби / веб-камера ───────────────────────────
 
+/**
+ * Скип стартового окна не должен воевать с игроком.
+ *
+ * Раньше эта функция вызывалась раз в секунду И на каждый батч мутаций, и жала
+ * «Начать игру» безусловно. Если игрок сам открывал настройки камеры/звука
+ * (это то же модальное окно), расширение закрывало их снова и снова.
+ *
+ * Теперь: не больше нескольких попыток на одно появление окна и пауза после
+ * любого действия игрока — окно, которое он открыл сам, остаётся открытым.
+ */
+const MAX_START_CLICK_ATTEMPTS = 3;
+const USER_ACTION_BACKOFF_MS = 5000;
+let startClickAttempts = 0;
+let startModalSeen = false;
+let lastUserClickAt = 0;
+
 function clickStartGameButton() {
   if (!cfg.skipStartScreen) return;
 
   const welcomeModal = document.querySelector<HTMLElement>(SITE.welcomeModal);
-  if (!welcomeModal) return;
+  if (!welcomeModal) {
+    // Окно закрылось — следующее появление получит свежий лимит попыток.
+    startModalSeen = false;
+    startClickAttempts = 0;
+    return;
+  }
+  if (!startModalSeen) {
+    startModalSeen = true;
+    startClickAttempts = 0;
+  }
+
+  // Игрок только что кликал — он пользуется интерфейсом, не мешаем.
+  if (Date.now() - lastUserClickAt < USER_ACTION_BACKOFF_MS) return;
+
+  // Окно не ушло после нескольких попыток — значит оно нужно игроку.
+  if (startClickAttempts >= MAX_START_CLICK_ATTEMPTS) return;
 
   const modalText = norm(welcomeModal);
   const hasWelcomeText = containsAny(modalText, TEXT.welcome);
@@ -633,6 +682,11 @@ function clickStartGameButton() {
   );
 
   if (!hasWelcomeText && startButtons.length === 0) return;
+
+  startClickAttempts++;
+  if (startClickAttempts === MAX_START_CLICK_ATTEMPTS) {
+    log.info(SCOPE, "start-screen skip: attempt limit reached, leaving modal alone");
+  }
 
   if (startButtons.length > 0) {
     log.debug(SCOPE, "click start-game button", startButtons[0].textContent);
@@ -769,6 +823,14 @@ function enableGamePage() {
   onRoleMenuClick = handleRoleMenuClick;
   document.addEventListener("click", onRoleMenuClick, true);
 
+  // Отмечаем действия игрока, чтобы автоклики не спорили с ним.
+  // isTrusted отсекает наши же синтетические клики.
+  onUserClick = (e: Event) => {
+    if ((e as MouseEvent).isTrusted) lastUserClickAt = Date.now();
+  };
+  document.addEventListener("click", onUserClick, true);
+  document.addEventListener("pointerdown", onUserClick, true);
+
   unsubKeyboard = keyboard.register(roleHideKey, handleRoleKey, { preventDefault: false });
 
   unsubGameDom = onDomChange((muts) => {
@@ -798,6 +860,13 @@ function disableGamePage() {
   unsubKeyboard = null;
   if (onRoleMenuClick) document.removeEventListener("click", onRoleMenuClick, true);
   onRoleMenuClick = null;
+  if (onUserClick) {
+    document.removeEventListener("click", onUserClick, true);
+    document.removeEventListener("pointerdown", onUserClick, true);
+  }
+  onUserClick = null;
+  startModalSeen = false;
+  startClickAttempts = 0;
   if (rolePhaseCheckTimer) {
     clearTimeout(rolePhaseCheckTimer);
     rolePhaseCheckTimer = null;

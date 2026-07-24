@@ -44,6 +44,8 @@ let marks: Marks = {};
 let offDom: (() => void) | null = null;
 let closeMenu: (() => void) | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let scanTimer: ReturnType<typeof setTimeout> | null = null;
+let lastPath = "";
 
 function usernameOf(player: Element): string | null {
   const name = player.querySelector(SITE.playerName)?.textContent?.trim();
@@ -94,8 +96,17 @@ function persist(): void {
   scheduleSave();
 }
 
+/**
+ * Красит квадратик — ТОЛЬКО если роль реально изменилась.
+ *
+ * Важно: общий наблюдатель следит за атрибутом style и childList. Безусловная
+ * запись style/textContent здесь порождала цикл «мутация → scan → мутация»
+ * на частоте кадров и подвешивала страницу. Сверяемся с dataset.role и выходим.
+ */
 function paintMarker(marker: HTMLElement, roleId: string): void {
+  if (marker.dataset.role === roleId) return;
   const r = roleById(roleId);
+  marker.dataset.role = roleId;
   marker.style.background = r.color;
   marker.style.color = r.text;
   marker.textContent = r.abbr;
@@ -173,12 +184,23 @@ function ensureMarker(player: HTMLElement): void {
     });
     player.appendChild(marker);
   }
-  marker.dataset.username = username;
+  if (marker.dataset.username !== username) marker.dataset.username = username;
   paintMarker(marker, marks[username] || "none");
 }
 
+/**
+ * Пересчитывать ключ игры на каждый батч мутаций дорого: фолбэк перебирает
+ * весь состав и сортирует ники. Стабильный ключ (из URL/атрибута) кэшируем,
+ * пока не сменился путь.
+ */
+function refreshGameKey(): string | null {
+  if (gameKey?.startsWith("g:") && location.pathname === lastPath) return gameKey;
+  lastPath = location.pathname;
+  return resolveGameKey();
+}
+
 function scan(): void {
-  const key = resolveGameKey();
+  const key = refreshGameKey();
   if (key && key !== gameKey) {
     gameKey = key;
     if (storeAll[key]) {
@@ -205,7 +227,14 @@ export const roleMarkerFeature: Feature = {
     gameKey = null;
     marks = {};
     scan();
-    offDom = onDomChange(() => scan());
+    // Троттлим: разметка игроков не требует реакции на каждый кадр.
+    offDom = onDomChange(() => {
+      if (scanTimer) return;
+      scanTimer = setTimeout(() => {
+        scanTimer = null;
+        scan();
+      }, 250);
+    });
     log.info("role-marker", "enabled", Object.keys(storeAll).length, "games stored");
   },
   disable() {
@@ -217,7 +246,12 @@ export const roleMarkerFeature: Feature = {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
+    if (scanTimer) {
+      clearTimeout(scanTimer);
+      scanTimer = null;
+    }
     gameKey = null;
+    lastPath = "";
     marks = {};
   },
 };

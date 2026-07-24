@@ -58,12 +58,23 @@ export function isVisible(el: Element): boolean {
 
 type DomSubscriber = (mutations: MutationRecord[]) => void;
 
+/**
+ * Максимум накопленных записей между проходами. Подписчики всё равно
+ * пересканируют DOM, поэтому терять «хвост» безопасно — а вот держать
+ * ссылки на сотни тысяч узлов (фоновая вкладка) уже нет.
+ */
+const MAX_PENDING = 4000;
+
 /** Общий наблюдатель за всем документом с debounce и набором подписчиков. */
 class SharedDomObserver {
   private observer: MutationObserver | null = null;
   private subscribers = new Set<DomSubscriber>();
   private pending: MutationRecord[] = [];
-  private rafScheduled = false;
+  private dropped = 0;
+  private scheduled = false;
+  private timerId: ReturnType<typeof setTimeout> | null = null;
+  private lastSlowLog = 0;
+  private onVisibility: (() => void) | null = null;
 
   subscribe(fn: DomSubscriber): () => void {
     this.subscribers.add(fn);
@@ -77,10 +88,13 @@ class SharedDomObserver {
   private ensureStarted() {
     if (this.observer) return;
     this.observer = new MutationObserver((muts) => {
-      this.pending.push(...muts);
-      if (this.rafScheduled) return;
-      this.rafScheduled = true;
-      requestAnimationFrame(() => this.flush());
+      const room = MAX_PENDING - this.pending.length;
+      if (room > 0) {
+        // Без spread: `push(...muts)` на большой пачке даёт RangeError.
+        for (let i = 0; i < muts.length && i < room; i++) this.pending.push(muts[i]);
+      }
+      if (muts.length > room) this.dropped += muts.length - Math.max(room, 0);
+      this.schedule();
     });
     this.observer.observe(document.documentElement, {
       childList: true,
@@ -88,12 +102,45 @@ class SharedDomObserver {
       attributes: true,
       attributeFilter: ["class", "style"],
     });
+    // Если вкладку свернули после того, как rAF уже был запланирован, он
+    // никогда не вызовется — подхватываем проход таймером.
+    this.onVisibility = () => {
+      if (document.hidden && this.scheduled && !this.timerId) {
+        this.timerId = setTimeout(() => {
+          this.timerId = null;
+          this.flush();
+        }, 500);
+      }
+    };
+    document.addEventListener("visibilitychange", this.onVisibility);
+  }
+
+  /**
+   * В фоновой вкладке requestAnimationFrame не вызывается вовсе — раньше
+   * мутации копились без разбора до возвращения на вкладку. Там переходим
+   * на таймер, чтобы буфер регулярно опустошался.
+   */
+  private schedule() {
+    if (this.scheduled) return;
+    this.scheduled = true;
+    if (typeof document !== "undefined" && document.hidden) {
+      this.timerId = setTimeout(() => {
+        this.timerId = null;
+        this.flush();
+      }, 500);
+    } else {
+      requestAnimationFrame(() => this.flush());
+    }
   }
 
   private flush() {
-    this.rafScheduled = false;
+    this.scheduled = false;
     const batch = this.pending;
     this.pending = [];
+    if (this.dropped) {
+      log.warn("dom", `dropped ${this.dropped} mutation records (buffer cap)`);
+      this.dropped = 0;
+    }
     const started = performance.now();
     for (const fn of this.subscribers) {
       try {
@@ -103,8 +150,10 @@ class SharedDomObserver {
       }
     }
     // Watchdog: тяжёлый проход по DOM — кандидат в «сайт сходит с ума».
+    // Не чаще раза в 5 секунд: иначе сам watchdog забивает лог и storage.
     const dur = performance.now() - started;
-    if (dur > 50) {
+    if (dur > 50 && started - this.lastSlowLog > 5000) {
+      this.lastSlowLog = started;
       log.warn(
         "dom",
         `slow flush ${Math.round(dur)}ms, subs=${this.subscribers.size}, muts=${batch.length}`,
@@ -115,7 +164,17 @@ class SharedDomObserver {
   private stop() {
     this.observer?.disconnect();
     this.observer = null;
+    if (this.onVisibility) {
+      document.removeEventListener("visibilitychange", this.onVisibility);
+      this.onVisibility = null;
+    }
+    if (this.timerId) {
+      clearTimeout(this.timerId);
+      this.timerId = null;
+    }
+    this.scheduled = false;
     this.pending = [];
+    this.dropped = 0;
   }
 }
 

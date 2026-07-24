@@ -66,13 +66,16 @@ export abstract class FloatingPanel {
     this.mounted = false;
   }
 
+  // show/hide идемпотентны: их зовут из подписчиков onDomChange на каждый
+  // батч мутаций, а общий наблюдатель следит за атрибутом style — безусловная
+  // запись здесь порождала бы новую мутацию и новый вызов.
   show(): void {
     this.mount();
-    this.root.style.display = "flex";
+    if (this.root.style.display !== "flex") this.root.style.display = "flex";
   }
 
   hide(): void {
-    if (this.mounted) this.root.style.display = "none";
+    if (this.mounted && this.root.style.display !== "none") this.root.style.display = "none";
   }
 
   toggle(): void {

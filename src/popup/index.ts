@@ -14,6 +14,7 @@ import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
 import { getSettings, setSettings } from "@core/settings";
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
+import { escapeHtml } from "@core/escape";
 import {
   sendRuntime,
   sendToActiveTab,
@@ -255,6 +256,12 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Последние известные сцены OBS. Списки сцен заполняются только после
+  // подключения к OBS; без этого saveSettings читал пустые <select> и стирал
+  // выбор пользователя при любом переключении тумблера.
+  let knownDayScene = "";
+  let knownNightScene = "";
+
   // ───────────────────────── Захват клавиши паузы ─────────────────────────
   let pauseHotkeyCode = "F8";
   const pauseCaptureBtn = $<HTMLButtonElement>("pause_hotkey_capture");
@@ -362,6 +369,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     set("obs_floating_panel_enabled", items.obs_floating_panel_enabled);
 
+    knownDayScene = items.obs_day_scene || "";
+    knownNightScene = items.obs_night_scene || "";
+
     const obsAutoModeEnabled = $<HTMLInputElement>("obs_auto_mode_enabled");
     const obsAutoSettings = $("obs_auto_settings");
     if (obsAutoModeEnabled) {
@@ -387,6 +397,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const cb = (id: string, fallback = false): boolean =>
       $<HTMLInputElement>(id)?.checked ?? fallback;
     const val = (id: string, fallback = ""): string => $<HTMLInputElement>(id)?.value || fallback;
+    /** Пустой список сцен = OBS не подключён; сохранённый выбор трогать нельзя. */
+    const sceneVal = (id: string, known: string): string => {
+      const sel = $<HTMLSelectElement>(id);
+      if (!sel || sel.options.length === 0) return known;
+      return sel.value || known;
+    };
 
     const autoHideRolesEnabled = cb("auto_hide_roles_enabled", false);
     const settings: Settings = {
@@ -422,8 +438,8 @@ document.addEventListener("DOMContentLoaded", () => {
       obs_password: val("obs_password", ""),
       obs_floating_panel_enabled: cb("obs_floating_panel_enabled", false),
       obs_auto_mode_enabled: cb("obs_auto_mode_enabled", false),
-      obs_day_scene: val("obs_day_scene", ""),
-      obs_night_scene: val("obs_night_scene", ""),
+      obs_day_scene: sceneVal("obs_day_scene", knownDayScene),
+      obs_night_scene: sceneVal("obs_night_scene", knownNightScene),
       // Twitch
       twitch_chat_enabled: cb("twitch_chat_enabled", false),
       twitch_channel_name: val("twitch_channel_name", ""),
@@ -739,8 +755,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const obsDayScene = $<HTMLSelectElement>("obs_day_scene");
     const obsNightScene = $<HTMLSelectElement>("obs_night_scene");
-    if (obsDayScene) obsDayScene.addEventListener("change", saveSettings);
-    if (obsNightScene) obsNightScene.addEventListener("change", saveSettings);
+    if (obsDayScene)
+      obsDayScene.addEventListener("change", () => {
+        knownDayScene = obsDayScene.value;
+        saveSettings();
+      });
+    if (obsNightScene)
+      obsNightScene.addEventListener("change", () => {
+        knownNightScene = obsNightScene.value;
+        saveSettings();
+      });
 
     if (showFloatingPanel) {
       showFloatingPanel.addEventListener("click", () => {
@@ -816,35 +840,21 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!scenesList) return;
 
     if (!scenes || scenes.length === 0) {
-      scenesList.innerHTML =
-        '<div style="padding: 10px; text-align: center; color: #999; font-size: 11px;">Нет доступных сцен</div>';
+      scenesList.innerHTML = '<div class="scenes-empty">Нет доступных сцен</div>';
       if (obsDayScene) obsDayScene.innerHTML = '<option value="">Выберите сцену</option>';
       if (obsNightScene) obsNightScene.innerHTML = '<option value="">Выберите сцену</option>';
       return;
     }
 
+    // Никаких inline-обработчиков: они запрещены CSP в MV3. Ховер — в CSS,
+    // имя сцены приходит из OBS и экранируется.
     scenesList.innerHTML = scenes
       .map((scene) => {
         const isActive = scene.sceneName === currentScene;
-        return `
-                <div class="scene-item ${isActive ? "active" : ""}"
-                     data-scene="${scene.sceneName}"
-                     style="
-                         padding: 8px 12px;
-                         cursor: pointer;
-                         border-bottom: 1px solid #eee;
-                         font-size: 12px;
-                         background: ${isActive ? "#e3f2fd" : "white"};
-                         color: ${isActive ? "#1976d2" : "#333"};
-                         font-weight: ${isActive ? "bold" : "normal"};
-                     "
-                     onmouseover="this.style.background='#f5f5f5'"
-                     onmouseout="this.style.background='${isActive ? "#e3f2fd" : "white"}'"
-                >
-                    ${scene.sceneName}
-                    ${isActive ? " (активная)" : ""}
-                </div>
-            `;
+        const safe = escapeHtml(scene.sceneName);
+        return `<div class="scene-item${isActive ? " active" : ""}" data-scene="${safe}">${safe}${
+          isActive ? " (активная)" : ""
+        }</div>`;
       })
       .join("");
 
@@ -861,21 +871,23 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
 
+    // Имя сцены приходит из OBS — экранируем перед вставкой в разметку.
     const sceneOptions =
       '<option value="">Выберите сцену</option>' +
-      scenes.map((scene) => `<option value="${scene.sceneName}">${scene.sceneName}</option>`).join("");
+      scenes
+        .map((scene) => {
+          const safe = escapeHtml(scene.sceneName);
+          return `<option value="${safe}">${safe}</option>`;
+        })
+        .join("");
 
     if (obsDayScene) {
       obsDayScene.innerHTML = sceneOptions;
-      void getSettings().then((s) => {
-        if (s.obs_day_scene) obsDayScene.value = s.obs_day_scene;
-      });
+      obsDayScene.value = knownDayScene;
     }
     if (obsNightScene) {
       obsNightScene.innerHTML = sceneOptions;
-      void getSettings().then((s) => {
-        if (s.obs_night_scene) obsNightScene.value = s.obs_night_scene;
-      });
+      obsNightScene.value = knownNightScene;
     }
   }
 
@@ -884,14 +896,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!scenesList) return;
     scenesList.querySelectorAll<HTMLElement>(".scene-item").forEach((item) => {
       const isActive = item.dataset.scene === sceneName;
-      item.style.background = isActive ? "#e3f2fd" : "white";
-      item.style.color = isActive ? "#1976d2" : "#333";
-      item.style.fontWeight = isActive ? "bold" : "normal";
+      item.classList.toggle("active", isActive);
       const baseName = item.dataset.scene ?? "";
       item.textContent = baseName + (isActive ? " (активная)" : "");
-      item.onmouseout = () => {
-        item.style.background = isActive ? "#e3f2fd" : "white";
-      };
     });
   }
 });

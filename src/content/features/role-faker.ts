@@ -118,13 +118,18 @@ class RoleFaker {
       el.style.display = "none";
     });
     if (!this.offDom) {
+      // Пишем только при реальном расхождении: общий наблюдатель следит за
+      // атрибутом style, и безусловная запись превращалась в пинг-понг
+      // «сайт перерисовал → мы переписали → мутация → мы снова».
       this.offDom = onDomChange(() => {
         if (!this.isFaked) return;
         document.querySelectorAll<HTMLElement>(SITE.anyRole).forEach((el) => {
-          if (!el.closest(".my-role") && !el.closest(".my-player")) el.style.display = "none";
+          if (el.closest(".my-role") || el.closest(".my-player")) return;
+          if (el.style.display !== "none") el.style.display = "none";
         });
         document.querySelectorAll<HTMLElement>(SITE.playerMenuWithRole).forEach((menu) => {
-          if (!menu.closest(".my-role") && !menu.closest(".my-player")) menu.style.right = "0.5rem";
+          if (menu.closest(".my-role") || menu.closest(".my-player")) return;
+          if (menu.style.right !== "0.5rem") menu.style.right = "0.5rem";
         });
       });
     }
