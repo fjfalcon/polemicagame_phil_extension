@@ -437,6 +437,24 @@ class PlayerNotesManager {
    *  карта в памяти при следующем save стёрла бы все заметки на диске). */
   private notesReadOnly = false;
 
+  /**
+   * Все записи карты заметок этой вкладки — строго по очереди. Миграция
+   * (автоматический писатель с hover'а) и сохранение из модалки иначе могли
+   * переплестись: миграция читала диск, модалка писала заметку другого
+   * игрока, миграция записывала свою карту БЕЗ неё. Кросс-вкладочная гонка
+   * остаётся (§6 п.19), внутривкладочная — устранена.
+   */
+  private notesWriteQueue: Promise<unknown> = Promise.resolve();
+
+  private enqueueNotesWrite<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.notesWriteQueue.then(task, task);
+    this.notesWriteQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   private async loadNotes(): Promise<void> {
     const { notes, customTags, loadFailed } = await loadNotesFromStore();
     this.notes = notes;
@@ -516,8 +534,12 @@ class PlayerNotesManager {
    * «Vasya» и «vasya» сливаются в одну запись (побеждает более свежая),
    * ник сохраняется внутри записи для экспорта и отображения.
    */
-  private async migrateNoteToId(username: string, userId: number | string): Promise<void> {
-    if (this.nickKeysFor(username).length === 0) return;
+  private migrateNoteToId(username: string, userId: number | string): Promise<void> {
+    if (this.nickKeysFor(username).length === 0) return Promise.resolve();
+    return this.enqueueNotesWrite(() => this.doMigrateNoteToId(username, userId));
+  }
+
+  private async doMigrateNoteToId(username: string, userId: number | string): Promise<void> {
     const key = idKey(userId);
 
     // Миграция — АВТОМАТИЧЕСКИЙ писатель всей карты (срабатывает без действий
@@ -1257,10 +1279,13 @@ class PlayerNotesManager {
     // Что пользователь РЕАЛЬНО видел при открытии: если за время набора текста
     // статистика резолвила id и под u:-ключом появилась/жила запись, которую
     // он не видел, — не даём слепо перезаписать или удалить её.
-    const openedKey = this.noteKeyFor(username);
+    // let: после успешного сохранения под новым ключом ОН становится
+    // «виденным» — иначе повторные «Сохранить» в живущей модалке считали бы
+    // собственную запись чужой (удаление/снятие метки молча не работали бы).
+    let openedKey = this.noteKeyFor(username);
 
     /** true — заметка записана; false — запись не удалась, окно закрывать нельзя. */
-    const save = async (): Promise<boolean> => {
+    const save = (): Promise<boolean> => this.enqueueNotesWrite(async (): Promise<boolean> => {
       if (!isSafeNoteKey(username)) {
         log.warn("player-notes", "unsafe username, note not saved", username);
         return false;
@@ -1313,8 +1338,11 @@ class PlayerNotesManager {
         });
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
+      // Сохранённый ключ теперь «виден» пользователю — следующие сохранения
+      // в этой же модалке работают с ним как со своим.
+      openedKey = key;
       return true;
-    };
+    });
 
     // ── кнопки ──
     const mkBtn = (text: string, bg: string): HTMLButtonElement => {
