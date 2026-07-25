@@ -330,6 +330,11 @@ document.addEventListener("DOMContentLoaded", () => {
    */
   let lastKnown: Settings | null = null;
 
+  /** Мастер-выключатель: визуально тушим всё, кроме шапки (контролы остаются кликабельны — бэкап заметок должен работать и при выключенном расширении). */
+  const applyExtOff = (enabled: boolean) => {
+    document.body.classList.toggle("ext-off", !enabled);
+  };
+
   const reflectPatch = (patch: Partial<Settings>) => {
     for (const [key, value] of Object.entries(patch)) {
       const el = $<HTMLInputElement>(key);
@@ -338,6 +343,7 @@ document.addEventListener("DOMContentLoaded", () => {
       else if (typeof value === "string") el.value = value;
     }
     // Зависимые блоки видимости.
+    if ("extension_enabled" in patch) applyExtOff(patch.extension_enabled !== false);
     if ("obs_enabled" in patch) {
       const s = $("obs_settings");
       if (s) s.style.display = patch.obs_enabled ? "block" : "none";
@@ -387,6 +393,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (el) el.checked = val;
     };
 
+    set("extension_enabled", items.extension_enabled);
+    applyExtOff(items.extension_enabled);
     set("show_mmr", items.show_mmr);
     set("show_games", items.show_games);
     set("show_id", items.show_id);
@@ -478,6 +486,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const autoHideRolesEnabled = cb("auto_hide_roles_enabled", false);
     const settings: Settings = {
+      extension_enabled: cb("extension_enabled", true),
       show_mmr: cb("show_mmr"),
       show_games: cb("show_games"),
       show_id: cb("show_id"),
@@ -553,6 +562,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ───────────────────────── Подписка контролов на change ─────────────────────────
   const simpleChangeIds = [
+    "extension_enabled",
     "show_mmr",
     "show_games",
     "show_id",
@@ -579,6 +589,11 @@ document.addEventListener("DOMContentLoaded", () => {
   simpleChangeIds.forEach((id) => {
     const el = $(id);
     if (el) el.addEventListener("change", saveSettings);
+  });
+
+  // Мгновенная визуальная реакция на мастер-выключатель (не ждём storage.onChanged).
+  $<HTMLInputElement>("extension_enabled")?.addEventListener("change", (e) => {
+    applyExtOff((e.target as HTMLInputElement).checked);
   });
 
   // Зависимость role_phase_auto_switch от auto_hide_roles.
@@ -714,6 +729,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (twitchConnect) {
       twitchConnect.addEventListener("click", () => {
+        // При выключенном мастер-тумблере content жив (diag/nickname-responder),
+        // поэтому sendToActiveTab не бросит — без этой проверки попап 5 секунд
+        // ждал бы ответа и врал «обновите вкладку».
+        if (lastKnown?.extension_enabled === false) {
+          updateTwitchStatus("Расширение выключено (тумблер в шапке)", false);
+          return;
+        }
         const channel = twitchChannelName?.value.trim() || "";
         if (!channel) {
           updateTwitchStatus("Введите имя канала", false);

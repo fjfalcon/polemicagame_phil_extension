@@ -3,6 +3,8 @@ export type StatsTheme = "default" | string;
 
 /** Полная схема пользовательских настроек расширения. */
 export interface Settings {
+  /** Мастер-выключатель: false гасит ВСЕ функции расширения разом. */
+  extension_enabled: boolean;
   // Статистика игроков
   show_mmr: boolean;
   show_games: boolean;

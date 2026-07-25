@@ -39,7 +39,8 @@ const manager = new FeatureManager().register(
   twitchPanelFeature,
 );
 
-function setupUrlRouter(): void {
+function setupUrlRouter(extensionEnabledAtBoot: boolean): void {
+  let extensionOn = extensionEnabledAtBoot;
   let lastHref = "";
   let lastMatchId: string | null | undefined;
   let scheduled = false;
@@ -55,7 +56,9 @@ function setupUrlRouter(): void {
     syncMatchStatsRoute(matchId);
     if (matchId !== lastMatchId) {
       lastMatchId = matchId;
-      void parseMatchOnPage(matchId);
+      // Мастер-выключатель: не качаем страницу матча впустую — все
+      // потребители gameDataParsed всё равно выключены FeatureManager'ом.
+      if (extensionOn) void parseMatchOnPage(matchId);
     }
   };
   const schedule = () => {
@@ -80,6 +83,18 @@ function setupUrlRouter(): void {
   window.addEventListener("pageshow", onPageShow);
   window.addEventListener("pagehide", onPageHide);
 
+  onSettingsChanged((patch) => {
+    if (!("extension_enabled" in patch)) return;
+    extensionOn = patch.extension_enabled !== false;
+    if (extensionOn) {
+      // Пока расширение было выключено, парсинг пропускался — форсируем
+      // полный проход, чтобы открытая страница матча ожила без F5.
+      lastHref = "";
+      lastMatchId = undefined;
+      schedule();
+    }
+  });
+
   reconcile();
 }
 
@@ -92,7 +107,17 @@ onSettingsChanged((patch) => {
 // (pagehide-флеш логов теперь внутри core/log — общий для content и popup.)
 
 void manager.start().catch((e) => log.error("content", "manager start failed", e));
-setupUrlRouter();
+// Роутер стартует после чтения мастер-выключателя: иначе первый reconcile()
+// успел бы дёрнуть parseMatchOnPage до того, как мы узнали, что расширение
+// выключено. Фичи всё равно инертны до manager.start() — задержка безвредна.
+// catch ДО then: иначе синхронный throw из setupUrlRouter (например, из
+// enhance при готовом кэше) поставил бы второй роутер поверх живого первого.
+void getSetting("extension_enabled")
+  .catch((e) => {
+    log.error("content", "router boot failed", e);
+    return true;
+  })
+  .then((on) => setupUrlRouter(on));
 setupNicknameLengthsResponder();
 setupDiagnostics();
 

@@ -10,6 +10,7 @@ import { log } from "./log";
 import type { Settings, SettingKey } from "@shared/types";
 
 export const DEFAULT_SETTINGS: Settings = {
+  extension_enabled: true,
   show_mmr: true,
   show_games: true,
   show_id: false,

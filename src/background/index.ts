@@ -52,7 +52,7 @@ async function setObsWatchdog(enabled: boolean): Promise<void> {
 async function reconcileObsConnection(probe = false, ignorePersistedBlock = false): Promise<void> {
   const s = await getSettings();
   const suspended = await isManuallyDisconnected();
-  if (!s.obs_enabled || !s.obs_host || suspended) {
+  if (!s.extension_enabled || !s.obs_enabled || !s.obs_host || suspended) {
     try {
       await setObsWatchdog(false);
     } finally {
@@ -79,6 +79,9 @@ async function handleObsCommand(cmd: ObsCommandMsg["command"], data: ObsCommandM
   return enqueueObs(async () => {
     switch (cmd) {
       case "connect":
+        if (!(await getSetting("extension_enabled"))) {
+          throw new Error("Расширение выключено (тумблер в шапке настроек)");
+        }
         await setManualDisconnect(false);
         await obs.allowAutoReconnect();
         await setObsWatchdog(true);
@@ -199,9 +202,15 @@ onSettingsChanged((patch) => {
   // Живая реакция на тумблер OBS: раньше выключение obs_enabled (в т.ч. с
   // другого устройства через sync) не рвало соединение — background смотрел
   // на настройку только при onStartup/onInstalled.
-  if ("obs_enabled" in patch || "obs_host" in patch || "obs_password" in patch) {
+  if (
+    "obs_enabled" in patch ||
+    "obs_host" in patch ||
+    "obs_password" in patch ||
+    "extension_enabled" in patch
+  ) {
     void enqueueObs(async () => {
-      if (patch.obs_enabled === false) {
+      // Мастер-выключатель рвёт OBS так же, как выключение obs_enabled.
+      if (patch.obs_enabled === false || patch.extension_enabled === false) {
         try {
           await Promise.all([
             setManualDisconnect(false),
@@ -213,7 +222,7 @@ onSettingsChanged((patch) => {
         }
         return;
       }
-      if (patch.obs_enabled === true) {
+      if (patch.obs_enabled === true || patch.extension_enabled === true) {
         await setManualDisconnect(false);
         await obs.allowAutoReconnect();
       }

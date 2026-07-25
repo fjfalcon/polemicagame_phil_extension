@@ -38,6 +38,15 @@
         }
         .hdr-title { font-size: 15px; font-weight: 700; }
         .hdr-ver { font-size: 11px; color: var(--muted); }
+        .hdr .switch { margin-left: auto; align-self: center; }
+
+        /* Мастер-выключатель: расширение выключено — всё, кроме шапки, притушено. */
+        body.ext-off .hdr {
+            background: linear-gradient(135deg, rgba(239,68,68,.22), rgba(239,68,68,.06));
+        }
+        body.ext-off .tabs, body.ext-off .panels, body.ext-off .footer {
+            opacity: .45; filter: grayscale(.6);
+        }
 
         /* Вкладки */
         .tabs {
@@ -188,6 +197,9 @@
     <div class="hdr">
         <span class="hdr-title">Polemica Notes</span>
         <span class="hdr-ver" id="popup_version"></span>
+        <label class="switch" title="Выключить всё расширение разом (заметки не пропадут)">
+            <input type="checkbox" id="extension_enabled" checked><span class="slider"></span>
+        </label>
     </div>
 
     <div class="tabs">

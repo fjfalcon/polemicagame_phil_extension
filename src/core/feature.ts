@@ -65,6 +65,8 @@ export class FeatureManager {
 
   private isEnabled(f: Feature): boolean {
     const s = this.settings as Settings;
+    // Мастер-выключатель гасит все фичи разом, включая безусловные (settingKey null).
+    if (s.extension_enabled === false) return false;
     return f.settingKey === null || s[f.settingKey] === true;
   }
 
