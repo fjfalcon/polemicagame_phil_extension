@@ -332,7 +332,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           players,
           "",
           `Голосование за №${player.position}`,
-          "осн.",
+          "выставление",
         );
       }
       if (secondVotes.length > 0) {
@@ -401,7 +401,8 @@ function buildPhaseTimeline(
     const n = parseInt(m[1], 10);
     if (!detailRowsByPhase.has(n)) detailRowsByPhase.set(n, []);
     detailRowsByPhase.get(n)!.push(row);
-    row.style.display = "none";
+    // По умолчанию РАСКРЫТО (решение владельца): таймлайн — оглавление,
+    // клик по строке дня сворачивает/разворачивает детали фазы.
     row.classList.add("pn-phase-detail");
   });
   if (detailRowsByPhase.size === 0) return;
@@ -460,7 +461,7 @@ function buildPhaseTimeline(
     const line = document.createElement("div");
     line.className = "pn-tl-line";
     line.innerHTML =
-      `<span class="pn-tl-toggle">▸</span>` +
+      `<span class="pn-tl-toggle">▾</span>` +
       `<span class="pn-tl-phase">${n} ☀️</span><span class="pn-tl-group">${dayHtml}</span>` +
       (nightHtml ? `<span class="pn-tl-phase">🌙</span><span class="pn-tl-group">${nightHtml}</span>` : "") +
       penaltyHtml;
