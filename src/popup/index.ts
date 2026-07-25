@@ -27,6 +27,7 @@ import type {
   Settings,
   ObsScene,
   ObsEventMsg,
+  TwitchStatusMsg,
   ExtMessage,
 } from "@shared/types";
 import type { NickLengths } from "../content/nickname-lengths";
@@ -440,6 +441,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (twitchChannelName) twitchChannelName.value = items.twitch_channel_name;
     set("twitch_floating_panel_enabled", items.twitch_floating_panel_enabled);
+    if (items.twitch_chat_enabled) {
+      void sendMessageToContentScript({ type: "twitch_get_status" });
+    }
   });
 
   // ───────────────────────── Сохранение настроек ─────────────────────────
@@ -570,14 +574,33 @@ document.addEventListener("DOMContentLoaded", () => {
   // ───────────────────────── OBS / Twitch ─────────────────────────
   setupOBSHandlers();
   setupTwitchHandlers();
+  let twitchStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Приём событий OBS от background.
-  onMessage((message: ExtMessage) => {
+  onMessage((message: ExtMessage, sender) => {
     if ("type" in message && message.type === "obs_event") {
       const evt = message as ObsEventMsg;
       log.debug(SCOPE, "received obs_event", evt.eventType);
       handleOBSEvent(evt.eventType, evt.data);
       return { received: true };
+    }
+    if ("type" in message && message.type === "twitch_status") {
+      return browser.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+        if (sender.tab?.id !== tab?.id) return { received: false };
+        const status = message as TwitchStatusMsg;
+        if (twitchStatusTimer) clearTimeout(twitchStatusTimer);
+        twitchStatusTimer = null;
+        const connect = $<HTMLButtonElement>("twitch_connect");
+        if (connect) {
+          connect.textContent = "Подключиться";
+          connect.disabled = false;
+        }
+        updateTwitchStatus(
+          status.connected ? `Подключено: ${status.channel}` : "Не подключен",
+          status.connected,
+        );
+        return { received: true };
+      });
     }
     return undefined;
   });
@@ -606,30 +629,34 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ───────────────────────── Отправка простых сообщений в content ─────────────────────────
-  async function sendMessageToContentScript(msg: ExtMessage) {
+  async function sendMessageToContentScript(msg: ExtMessage): Promise<boolean> {
     log.debug(SCOPE, "send to content", msg);
+    const isTwitch = "type" in msg && msg.type.startsWith("twitch_");
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && tab.url.includes("polemicagame.com")) {
       try {
         await sendToActiveTab(msg);
+        return true;
       } catch (error) {
         log.debug(SCOPE, "content script not available", error);
-        showContentScriptError();
+        showContentScriptError(isTwitch);
+        return false;
       }
     } else {
-      showWrongPageError();
+      showWrongPageError(isTwitch);
+      return false;
     }
   }
 
-  function showContentScriptError() {
-    const statusElement = $("obs_status");
+  function showContentScriptError(isTwitch = false) {
+    const statusElement = $(isTwitch ? "twitch_status" : "obs_status");
     if (statusElement) {
       statusElement.textContent = "⚠️ Перезагрузите страницу игры";
       statusElement.style.color = "#ff9800";
     }
   }
-  function showWrongPageError() {
-    const statusElement = $("obs_status");
+  function showWrongPageError(isTwitch = false) {
+    const statusElement = $(isTwitch ? "twitch_status" : "obs_status");
     if (statusElement) {
       statusElement.textContent = "⚠️ Откройте страницу игры";
       statusElement.style.color = "#ff9800";
@@ -652,6 +679,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const enabled = (e.target as HTMLInputElement).checked;
         if (twitchSettings) twitchSettings.style.display = enabled ? "block" : "none";
         if (!enabled) {
+          if (twitchStatusTimer) clearTimeout(twitchStatusTimer);
+          twitchStatusTimer = null;
           void sendMessageToContentScript({ type: "twitch_disconnect" });
           updateTwitchStatus("Не подключен", false);
         }
@@ -670,13 +699,21 @@ document.addEventListener("DOMContentLoaded", () => {
           twitchConnect.disabled = true;
           twitchConnect.textContent = "Подключение...";
           updateTwitchStatus("Подключение к чату...", false);
-          void sendMessageToContentScript({ type: "twitch_connect", channel });
-          setTimeout(() => {
+          if (twitchStatusTimer) clearTimeout(twitchStatusTimer);
+          twitchStatusTimer = setTimeout(() => {
+            twitchStatusTimer = null;
             twitchConnect.textContent = "Подключиться";
             twitchConnect.disabled = false;
-            updateTwitchStatus("Подключено", true);
-            saveSettings();
-          }, 2000);
+            updateTwitchStatus("Нет ответа от страницы игры — обновите вкладку", false);
+          }, 5000);
+          void sendMessageToContentScript({ type: "twitch_connect", channel }).then((sent) => {
+            if (sent) return;
+            if (twitchStatusTimer) clearTimeout(twitchStatusTimer);
+            twitchStatusTimer = null;
+            twitchConnect.textContent = "Подключиться";
+            twitchConnect.disabled = false;
+          });
+          saveSettings();
         } catch (error) {
           log.error(SCOPE, "Twitch connection failed", error);
           updateTwitchStatus(`Ошибка: ${(error as Error)?.message}`, false);
@@ -688,6 +725,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (twitchDisconnect) {
       twitchDisconnect.addEventListener("click", () => {
+        if (twitchStatusTimer) clearTimeout(twitchStatusTimer);
+        twitchStatusTimer = null;
         void sendMessageToContentScript({ type: "twitch_disconnect" });
         updateTwitchStatus("Не подключен", false);
       });

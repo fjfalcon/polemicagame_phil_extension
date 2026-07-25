@@ -25,7 +25,7 @@ import { FloatingPanel } from "@core/FloatingPanel";
 import { onDomChange } from "@core/dom";
 import { escapeHtml } from "@core/escape";
 import { log } from "@core/log";
-import { onMessage } from "@core/messaging";
+import { onMessage, sendRuntime } from "@core/messaging";
 import { SITE } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { TwitchControlMsg } from "@shared/types";
@@ -207,6 +207,10 @@ let idleWatchdog: ReturnType<typeof setInterval> | null = null;
  */
 const IDLE_TIMEOUT_MS = 6 * 60 * 1000;
 
+function sendTwitchStatus(connected: boolean): void {
+  void sendRuntime({ type: "twitch_status", connected, channel: channelName });
+}
+
 function startIdleWatchdog(): void {
   if (idleWatchdog) return;
   idleWatchdog = setInterval(() => {
@@ -357,6 +361,7 @@ function connectToTwitch(): void {
       lastActivityAt = Date.now();
       startIdleWatchdog();
       panel?.addSystemMessage("Подключились к чату");
+      sendTwitchStatus(true);
     };
 
     ws.onmessage = (event) => {
@@ -370,6 +375,7 @@ function connectToTwitch(): void {
       log.debug(SCOPE, "IRC disconnected");
       isConnected = false;
       socket = null;
+      sendTwitchStatus(false);
       if (!intentionalClose) {
         panel?.addSystemMessage("Отключились от чата");
         scheduleReconnect();
@@ -387,6 +393,7 @@ function connectToTwitch(): void {
 }
 
 function disconnect(): void {
+  const hadConnection = isConnected || socket !== null;
   intentionalClose = true;
   clearReconnect();
   stopIdleWatchdog();
@@ -401,6 +408,7 @@ function disconnect(): void {
     socket = null;
   }
   isConnected = false;
+  if (hadConnection) sendTwitchStatus(false);
 }
 
 function handleTwitchData(data: string): void {
@@ -463,6 +471,9 @@ function handleControlMessage(msg: TwitchControlMsg): void {
     case "twitch_disconnect":
       disconnect();
       break;
+    case "twitch_get_status":
+      sendTwitchStatus(isConnected);
+      break;
   }
 }
 
@@ -473,7 +484,8 @@ function isTwitchControlMsg(msg: unknown): msg is TwitchControlMsg {
     t === "twitch_panel_hide" ||
     t === "twitch_panel_toggle" ||
     t === "twitch_connect" ||
-    t === "twitch_disconnect"
+    t === "twitch_disconnect" ||
+    t === "twitch_get_status"
   );
 }
 

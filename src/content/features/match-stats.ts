@@ -9,6 +9,7 @@
  * проверяем оба флага из ctx.settings, как в оригинале).
  */
 import { SITE } from "@core/selectors";
+import { onDomChange } from "@core/dom";
 import { escapeHtml } from "@core/escape";
 import { log } from "@core/log";
 import { getLastGameData, getMatchId } from "../match-data";
@@ -35,7 +36,9 @@ let previousRouteTable: WeakRef<HTMLElement> | null = null;
 let previousRouteTableHtml = "";
 let previousRouteMatchId: string | null = null;
 let routeReadyInterval: ReturnType<typeof setInterval> | null = null;
+let routeDomUnsub: (() => void) | null = null;
 let pendingGameData: any = null;
+let lastPendingRetryAt = 0;
 
 function trackInterval(id: ReturnType<typeof setInterval>): ReturnType<typeof setInterval> {
   intervals.add(id);
@@ -1268,6 +1271,10 @@ function stopMatchRoute(preserveSnapshot = true): void {
     document.removeEventListener("gameDataParsed", gameDataListener);
     gameDataListener = null;
   }
+  if (routeDomUnsub) {
+    routeDomUnsub();
+    routeDomUnsub = null;
+  }
   for (const id of intervals) clearInterval(id);
   intervals.clear();
   for (const id of timeouts) clearTimeout(id);
@@ -1278,6 +1285,7 @@ function stopMatchRoute(preserveSnapshot = true): void {
   restoreHeader();
   restoreInlineStyles();
   pendingGameData = null;
+  lastPendingRetryAt = 0;
   if (leavingMatchId && preserveSnapshot) {
     clearPreviousRouteSnapshot();
     previousRouteMatchId = leavingMatchId;
@@ -1301,6 +1309,18 @@ function startMatchRoute(matchId: string): void {
 
   injectBaseStyles();
 
+  routeDomUnsub = onDomChange(() => {
+    if (routeReadyInterval !== null || !pendingGameData || activeMatchId !== matchId) return;
+    const now = Date.now();
+    if (now - lastPendingRetryAt < 500) return;
+    lastPendingRetryAt = now;
+    if (!isRouteDomReady()) return;
+    clearPreviousRouteSnapshot();
+    applyAutoHeight();
+    trackInterval(setInterval(applyAutoHeight, 5000));
+    enhance(pendingGameData);
+  });
+
   const readyStarted = Date.now();
   routeReadyInterval = trackInterval(
     setInterval(() => {
@@ -1309,8 +1329,6 @@ function startMatchRoute(matchId: string): void {
         if (Date.now() - readyStarted < 10_000) return;
         clearTrackedInterval(routeReadyInterval!);
         routeReadyInterval = null;
-        pendingGameData = null;
-        clearPreviousRouteSnapshot();
         return;
       }
       clearTrackedInterval(routeReadyInterval!);

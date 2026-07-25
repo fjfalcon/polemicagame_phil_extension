@@ -945,14 +945,23 @@ class PlayerNotesManager {
       if (!videoEl) return;
       if (this.hiddenVideos.has(uname)) {
         videoEl.style.display = "";
+        delete videoEl.dataset.polemicaHidden;
         this.hiddenVideos.delete(uname);
       } else {
         videoEl.style.display = "none";
+        videoEl.dataset.polemicaHidden = "true";
         this.hiddenVideos.add(uname);
       }
+      this.syncHideVideoButton(button, username);
     });
     this.applyButtonTheme(button);
+    this.syncHideVideoButton(button, username);
     return button;
+  }
+
+  private syncHideVideoButton(button: HTMLElement, username: string): void {
+    const opacity = this.hiddenVideos.has(username.toLowerCase()) ? "1" : "0.7";
+    if (button.style.opacity !== opacity) button.style.opacity = opacity;
   }
 
   private createLastGamesButton(username: string): HTMLButtonElement {
@@ -1431,14 +1440,25 @@ class PlayerNotesManager {
       infoContainer.querySelector(`.${OWN.lastGamesButton}[data-username="${sel}"]`) &&
       infoContainer.querySelector(`.${OWN.hideVideoButton}[data-username="${sel}"]`);
     if (alreadyHas) {
-      if (this.hiddenVideos.has(username.toLowerCase())) {
-        const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
+      const uname = username.toLowerCase();
+      const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
+      if (this.hiddenVideos.has(uname)) {
         // Только при реальном изменении — иначе будим MutationObserver вхолостую.
-        if (vid && vid.style.display !== "none") vid.style.display = "none";
+        if (vid) {
+          if (vid.style.display !== "none") vid.style.display = "none";
+          if (vid.dataset.polemicaHidden !== "true") vid.dataset.polemicaHidden = "true";
+        }
+      } else if (vid?.dataset.polemicaHidden === "true") {
+        if (vid.style.display === "none") vid.style.display = "";
+        delete vid.dataset.polemicaHidden;
       }
       this.applyPlayerTag(container as HTMLElement, username);
       const grp = infoContainer.querySelector(`.${OWN.playerIcons}`);
-      if (grp) this.ensureRotateButton(grp, container, username);
+      if (grp) {
+        this.ensureRotateButton(grp, container, username);
+        const hideButton = grp.querySelector<HTMLElement>(`.${OWN.hideVideoButton}`);
+        if (hideButton) this.syncHideVideoButton(hideButton, username);
+      }
       return;
     }
 
@@ -1461,7 +1481,16 @@ class PlayerNotesManager {
 
     if (this.hiddenVideos.has(username.toLowerCase())) {
       const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
-      if (vid) vid.style.display = "none";
+      if (vid) {
+        if (vid.style.display !== "none") vid.style.display = "none";
+        if (vid.dataset.polemicaHidden !== "true") vid.dataset.polemicaHidden = "true";
+      }
+    } else {
+      const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
+      if (vid instanceof HTMLElement && vid.dataset.polemicaHidden === "true") {
+        if (vid.style.display === "none") vid.style.display = "";
+        delete vid.dataset.polemicaHidden;
+      }
     }
 
     this.applyPlayerTag(container as HTMLElement, username);

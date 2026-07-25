@@ -119,13 +119,13 @@ src/
 | local | playerNotes, tagCustomColors, pn_notes_migrated_v1 | notes-store.ts |
 | local | obs_password | settings.ts (LOCAL_KEYS) |
 | local | roleMarks | role-marker (метки «мой read», ключи g:<id> / l:<состав>) |
-| local | polemica:logs:{content,bg,popup,ext} | log.ts (CAP 600/контекст) |
+| local | polemica:logs:{content-<session>,bg,popup,ext} | log.ts (CAP 600/контекст; content-сессии старше 24ч чистятся) |
 | local | obs_connection_state, obs_auto_scene_state | obs-client/obs-panel |
 | local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |
 | localStorage страницы | fp:*, polemica:update*, polemica:loglevel/buflevel | панели/update-notify/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник |
 
-## 6. Техдолг (актуален на v8.1.27)
+## 6. Техдолг (актуален на v8.1.28)
 
 Отсортировано по (вред × вероятность). Файл:строка проверены на HEAD.
 Перед работой перепроверь — код живой.
@@ -135,10 +135,9 @@ src/
    reconcile при пробуждении SW, persisted-блоки со сбросом на onStartup.
    Мёртвый patch history из isolated world удалён в 8.1.27; роутер использует
    polling 500мс + popstate.
-2. ✅ ЗАКРЫТО в 8.1.25: единый URL-роутер (content/index.ts), route-sync у
-   match-stats/player-notes, AbortController в match-data. Остаток:
-   pendingGameData теряется, если Vue рендерит матч дольше 10с (give-up без
-   ретрая) — узкое окно «нет статистики до F5» на медленной сети.
+2. ✅ ЗАКРЫТО в 8.1.25/8.1.28: единый URL-роутер (content/index.ts), route-sync
+   у match-stats/player-notes, AbortController в match-data; pendingGameData
+   после 10-секундного give-up сохраняется и задросселенно ретраится по DOM.
 3. ✅ ЗАКРЫТО в 8.1.26: `loadPlayerStats` ищет ID вне активных игр через общий
    TTL-кэш `rating/get-list`, который переиспользуют статистика, профиль и
    история игр; отсутствие в топ-1000 честно показано в тултипе и по клику.
@@ -161,9 +160,10 @@ src/
 8. ✅ ЗАКРЫТО в 8.1.26: camera-flip хранит активные canvas/rAF, останавливается
    на отсоединённом video, откатывает неудачный flip и вызывает `unflipAll()`
    при disable фичи и выключении настройки поворота.
-9. Логи: две content-вкладки пишут в один ключ (last-writer-wins);
-   `polemica:buflevel` управляется localStorage сайта — сайт может включить
-   debug и собрать Twitch-чат в экспортируемый файл. → `log.ts:33-60`.
+9. Частично закрыто в 8.1.28: content-вкладки пишут в отдельные session-ключи,
+   неактивные дольше 24ч ключи чистятся. Остаток: `polemica:buflevel`
+   управляется localStorage сайта — сайт может включить debug и собрать
+   Twitch-чат в экспортируемый файл. → `log.ts:33-60`.
 10. ✅ ЗАКРЫТО в 8.1.27: F8 кликает только видимую паузу/продолжение,
     исключает навигационные `<a href>` из кандидатов и закрывает меню,
     открытые неудачным перебором.
@@ -179,9 +179,10 @@ src/
     permission "scripting"? (Осознанно оставлен как страховка.)
 14. Дефолты новичка агрессивны: auto_accept/skip_start/debug_logging = true
     из коробки. Продуктовое решение.
-15. Twitch «Подключено» в попапе — по setTimeout(2000) без подтверждения;
-    ошибки twitch пишутся в obs_status; showContentScriptError недостижим
-    (sendToTab глотает всё). → `popup/index.ts:~594-664`, `messaging.ts:22-28`.
+15. ✅ ЗАКРЫТО в 8.1.28: Twitch-статус в попапе приходит от реального
+    WebSocket open/close, ожидание ограничено 5с, ошибки выводятся в
+    twitch_status. Остаток: sendToTab глотает «нет получателя», но Twitch-путь
+    честно завершается по таймауту. → `popup/index.ts`, `messaging.ts:22-28`.
 16. `version` пишется в local при каждом сохранении заметок, никем не
     читается (карго-культ от legacy). → `notes-store.ts:163`.
 17. Полифилл webextension-polyfill забандлен ×3 (~97 КБ суммарно) — в MV3
@@ -249,5 +250,7 @@ src/
   FloatingPanel/tooltip/camera-flip.
 - **8.1.27** — устойчивый F8, EN-маркеры и дешёвый детект стадий OBS,
   безопасный SVG истории и упрощённый SPA-роутер.
+- **8.1.28** — честный Twitch-статус, раздельные логи content-вкладок,
+  поздний retry статистики матча и безопасное восстановление скрытых камер.
 
 Полные отчёты аудитов — в истории коммитов и release notes на GitHub.

@@ -110,8 +110,16 @@ export interface TwitchControlMsg {
     | "twitch_panel_hide"
     | "twitch_panel_toggle"
     | "twitch_connect"
-    | "twitch_disconnect";
+    | "twitch_disconnect"
+    | "twitch_get_status";
   channel?: string;
+}
+
+/** content → popup: фактическое состояние Twitch IRC. */
+export interface TwitchStatusMsg {
+  type: "twitch_status";
+  connected: boolean;
+  channel: string;
 }
 
 /** popup → content: запрос длины ников (замена executeScript). */
@@ -132,6 +140,7 @@ export type ExtMessage =
   | ObsEventMsg
   | UpdateNotesSettingsMsg
   | TwitchControlMsg
+  | TwitchStatusMsg
   | GetNicknameLengthsMsg
   | StartSearchMsg
   | StopSearchMsg;

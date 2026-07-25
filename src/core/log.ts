@@ -41,8 +41,16 @@ function resolveLevel(key: string, fallback: Level): Level {
 }
 
 const CTX = detectCtx();
-const STORAGE_KEY = `polemica:logs:${CTX}`;
 const LOG_PREFIX = "polemica:logs:";
+const LEGACY_CONTENT_LOG_KEY = `${LOG_PREFIX}content`;
+const CONTENT_LOG_PREFIX = `${LOG_PREFIX}content-`;
+const CONTENT_LOG_TTL_MS = 24 * 60 * 60 * 1000;
+const CONTENT_SESSION_ID =
+  CTX === "content"
+    ? `${Date.now().toString(36)}-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
+    : "";
+const STORAGE_KEY =
+  CTX === "content" ? `${CONTENT_LOG_PREFIX}${CONTENT_SESSION_ID}` : `${LOG_PREFIX}${CTX}`;
 const CAP = 600;
 const MAX_MSG = 600;
 
@@ -86,6 +94,29 @@ function fmtArgs(args: unknown[]): string {
 let primed = false;
 let priming: Promise<void> | null = null;
 
+async function cleanupStaleContentLogs(): Promise<void> {
+  if (CTX !== "content") return;
+  try {
+    const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
+    const cutoff = Date.now() - CONTENT_LOG_TTL_MS;
+    const stale = Object.entries(all)
+      .filter(([key, value]) => {
+        if (
+          (key !== LEGACY_CONTENT_LOG_KEY && !key.startsWith(CONTENT_LOG_PREFIX)) ||
+          key === STORAGE_KEY
+        ) {
+          return false;
+        }
+        if (!Array.isArray(value) || value.length === 0) return true;
+        return (value as Entry[]).every((entry) => typeof entry.t !== "number" || entry.t < cutoff);
+      })
+      .map(([key]) => key);
+    if (stale.length) await browser.storage.local.remove(stale);
+  } catch {
+    /* недоступно — следующая сессия попробует снова */
+  }
+}
+
 // Флеш при уходе со страницы — для ЛЮБОГО контекста с документом (content,
 // popup, фон Firefox). Раньше pagehide-флеш был только в content: popup
 // систематически терял хвост логов при закрытии.
@@ -94,6 +125,7 @@ if (typeof document !== "undefined" && typeof window !== "undefined") {
 }
 
 async function primeFromStorage(): Promise<void> {
+  await cleanupStaleContentLogs();
   try {
     const res = (await browser.storage.local.get(STORAGE_KEY)) as Record<string, unknown>;
     const prev = res[STORAGE_KEY];
