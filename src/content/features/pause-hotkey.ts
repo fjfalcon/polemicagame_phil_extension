@@ -4,28 +4,62 @@
  */
 import { keyboard } from "@core/keyboard";
 import { isVisible } from "@core/dom";
+import { SITE } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const TEXT = {
   settingsRu: "настро",
-  pauseRu: "пауз",
-  breakRu: "перерыв",
   closeRu: "закр",
   notFound: "Не нашёл кнопку паузы",
   unavailable: "Пауза сейчас недоступна",
 };
 
 const norm = (v: unknown) => (v ?? "").toString().toLowerCase().replace(/\s+/g, " ").trim();
+const PAUSE_ACTIONS = new Set([
+  "пауза",
+  "пауза игры",
+  "поставить на паузу",
+  "снять с паузы",
+  "перерыв",
+  "pause",
+  "pause game",
+  "break",
+  "продолжить",
+  "продолжить игру",
+  "возобновить",
+  "возобновить игру",
+  "resume",
+  "resume game",
+]);
+const CLICKABLE_SELECTOR =
+  'button, [role="button"], [role="menuitem"], li, a, div.button, .button, .button-comp, .base-menu__item';
+const MENU_SELECTOR =
+  '.game-room__settings, .base-menu, .base-menu__list, .base-menu__content, .dropdown-menu, .context-menu, [role="menu"], [class*="menu"]';
+const OWNING_MENU_SELECTOR =
+  '.game-room__settings, .base-menu, .dropdown-menu, .context-menu, [role="menu"]';
+
+interface OpenedMenu {
+  opener: Element;
+  roots: Element[];
+}
 
 class PauseHotkey {
   private handling = false;
+  private disposed = false;
+  private sleeps = new Set<{
+    id: ReturnType<typeof setTimeout>;
+    resolve: (active: boolean) => void;
+  }>();
+  private notifications = new Set<HTMLElement>();
+  private initialVisibleMenus = new Set<Element>();
+  private activeOpener: Element | null = null;
+  private activeMenuObserved = false;
+  private closingMenu = false;
 
   private clickableFrom(node: Element | null): Element | null {
     if (!node || typeof node.closest !== "function") return node;
     return (
-      node.closest(
-        'button, [role="button"], [role="menuitem"], li, a, div.button, .button, .button-comp, .base-menu__item',
-      ) || node
+      node.closest(CLICKABLE_SELECTOR) || node
     );
   }
 
@@ -66,38 +100,65 @@ class PauseHotkey {
 
   private matchesPause(node: Element): boolean {
     const text = norm(node?.textContent);
-    const label = norm(`${node?.getAttribute?.("aria-label") || ""} ${node?.getAttribute?.("title") || ""}`);
-    const cls = norm((node as HTMLElement)?.className?.toString?.() || "");
+    const ariaLabel = norm(node?.getAttribute?.("aria-label"));
+    const title = norm(node?.getAttribute?.("title"));
     return (
-      text.includes(TEXT.pauseRu) ||
-      text.includes("pause") ||
-      text.includes(TEXT.breakRu) ||
-      label.includes(TEXT.pauseRu) ||
-      label.includes("pause") ||
-      cls.includes("pause")
+      PAUSE_ACTIONS.has(text) ||
+      PAUSE_ACTIONS.has(ariaLabel) ||
+      PAUSE_ACTIONS.has(title)
+    );
+  }
+
+  private isNavigatingAnchor(node: Element): boolean {
+    return node.closest("a[href]") !== null;
+  }
+
+  private hasGameContext(): boolean {
+    return (
+      document.querySelectorAll(SITE.player).length >= 8 &&
+      !!document.querySelector(SITE.settingsButton)
     );
   }
 
   private notify(message: string) {
+    if (this.disposed) return;
     const n = document.createElement("div");
     n.style.cssText =
       "position:fixed;top:20px;right:20px;background:rgba(255,152,0,.9);color:#fff;padding:12px 24px;border-radius:8px;z-index:2147483600;box-shadow:0 4px 6px rgba(0,0,0,.1);font-size:14px";
     n.textContent = message;
     document.body.appendChild(n);
-    setTimeout(() => n.remove(), 3000);
+    this.notifications.add(n);
+    void this.sleep(3000).then(() => {
+      n.remove();
+      this.notifications.delete(n);
+    });
   }
 
-  private waitFor<T>(check: () => T | null, timeoutMs = 1800, intervalMs = 60): Promise<T | null> {
+  private sleep(ms: number): Promise<boolean> {
+    if (this.disposed) return Promise.resolve(false);
     return new Promise((resolve) => {
-      const start = Date.now();
-      const tick = () => {
-        const r = check();
-        if (r) return resolve(r);
-        if (Date.now() - start >= timeoutMs) return resolve(null);
-        setTimeout(tick, intervalMs);
-      };
-      tick();
+      let pending: { id: ReturnType<typeof setTimeout>; resolve: (active: boolean) => void };
+      const id = setTimeout(() => {
+        this.sleeps.delete(pending);
+        resolve(!this.disposed);
+      }, ms);
+      pending = { id, resolve };
+      this.sleeps.add(pending);
     });
+  }
+
+  private async waitFor<T>(
+    check: () => T | null,
+    timeoutMs = 1800,
+    intervalMs = 60,
+  ): Promise<T | null> {
+    const start = Date.now();
+    while (!this.disposed) {
+      const result = check();
+      if (result) return result;
+      if (Date.now() - start >= timeoutMs || !(await this.sleep(intervalMs))) return null;
+    }
+    return null;
   }
 
   private getSettingsButtons(): Element[] {
@@ -118,7 +179,15 @@ class PauseHotkey {
     const seen = new Set<Element>();
     const push = (node: Element | null) => {
       const c = this.clickableFrom(node);
-      if (!c || seen.has(c) || !isVisible(c)) return;
+      if (
+        !c ||
+        seen.has(c) ||
+        !isVisible(c) ||
+        this.isNavigatingAnchor(c) ||
+        !!c.querySelector("a[href]")
+      ) {
+        return;
+      }
       seen.add(c);
       out.push(c);
     };
@@ -137,34 +206,30 @@ class PauseHotkey {
   }
 
   private getMenuRoots(): Element[] {
-    const selectors = [".game-room__settings", ".base-menu", ".base-menu__list", ".base-menu__content", ".dropdown-menu", ".context-menu", '[role="menu"]', '[class*="menu"]'];
-    const roots: Element[] = [];
-    const seen = new Set<Element>();
-    selectors.forEach((s) =>
-      document.querySelectorAll(s).forEach((r) => {
-        if (!seen.has(r)) {
-          seen.add(r);
-          roots.push(r);
-        }
-      }),
-    );
-    return roots;
+    return Array.from(document.querySelectorAll(MENU_SELECTOR));
   }
 
   private getPauseButton(onlyMenuRoots = false): Element | null {
     if (!onlyMenuRoots) {
       for (const s of ['use[href*="#pause"]', 'use[xlink\\:href*="#pause"]']) {
         const c = this.clickableFrom(document.querySelector(s));
-        if (c) return c;
+        if (c && !this.isNavigatingAnchor(c) && isVisible(c)) return c;
       }
     }
     const roots = onlyMenuRoots ? this.getMenuRoots() : [...this.getMenuRoots(), document.body];
-    const sels = ["button", '[role="button"]', '[role="menuitem"]', "li", "a", "span", "div"];
     for (const root of roots) {
-      for (const s of sels) {
-        const found = Array.from(root.querySelectorAll(s)).find((n) => this.matchesPause(n));
-        if (found) return this.clickableFrom(found);
-      }
+      const found = Array.from(root.querySelectorAll(CLICKABLE_SELECTOR)).find(
+        (candidate) =>
+          !this.isNavigatingAnchor(candidate) &&
+          !candidate.querySelector("a[href]") &&
+          isVisible(candidate) &&
+          this.matchesPause(candidate) &&
+          !Array.from(candidate.querySelectorAll(CLICKABLE_SELECTOR)).some(
+            (child) =>
+              !this.isNavigatingAnchor(child) && isVisible(child) && this.matchesPause(child),
+          ),
+      );
+      if (found) return found;
     }
     return null;
   }
@@ -180,19 +245,32 @@ class PauseHotkey {
     );
   }
 
-  private getCloseButton(): HTMLElement | null {
-    const selectors = [".game-room__settings .close", ".base-menu .close", ".context-menu .close", '[class*="menu"] [aria-label]', '[class*="menu"] button[title]', '[role="menu"] [aria-label]', '[role="menu"] button[title]'];
-    for (const s of selectors) {
-      const found = Array.from(document.querySelectorAll<HTMLElement>(s)).find((n) => {
-        const label = norm(`${n.getAttribute?.("aria-label") || ""} ${n.getAttribute?.("title") || ""}`);
-        return label.includes(TEXT.closeRu) || label.includes("close");
-      });
-      if (found) return found;
+  private getCloseButton(root?: ParentNode): HTMLElement | null {
+    const selectors = [".close", '[aria-label]', "button[title]"];
+    const scopes = root ? [root] : this.getMenuRoots().filter((menu) => isVisible(menu));
+    for (const scope of scopes) {
+      for (const s of selectors) {
+        const found = Array.from(scope.querySelectorAll<HTMLElement>(s)).find((n) => {
+          const label = norm(`${n.getAttribute?.("aria-label") || ""} ${n.getAttribute?.("title") || ""}`);
+          const scopeElement = scope as Element;
+          const scopeOwner = scopeElement.matches(OWNING_MENU_SELECTOR)
+            ? scopeElement
+            : scopeElement.closest(OWNING_MENU_SELECTOR);
+          const candidateOwner = n.closest(OWNING_MENU_SELECTOR);
+          return (
+            (candidateOwner ? candidateOwner === scopeOwner : !scopeOwner) &&
+            isVisible(n) &&
+            (label.includes(TEXT.closeRu) || label.includes("close"))
+          );
+        });
+        if (found) return found;
+      }
     }
     return null;
   }
 
   private dispatchClick(node: Element | null): boolean {
+    if (this.disposed) return false;
     const target = this.clickableFrom(node);
     if (!target) return false;
     ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((name) =>
@@ -201,34 +279,118 @@ class PauseHotkey {
     return true;
   }
 
+  private targetedRoot(roots: Element[]): Element | null {
+    const innerFirst = [...roots].sort((a, b) => {
+      if (a.contains(b)) return 1;
+      if (b.contains(a)) return -1;
+      return 0;
+    });
+    return innerFirst.find((root) => this.getCloseButton(root)) || innerFirst[0] || null;
+  }
+
+  private owningMenu(node: Element): Element | null {
+    return this.targetedRoot(
+      this.getMenuRoots().filter((root) => isVisible(root) && root.contains(node)),
+    );
+  }
+
+  private async closeOpenedMenu(menu: OpenedMenu): Promise<void> {
+    const root = this.targetedRoot(menu.roots);
+    if (!root || !isVisible(root)) return;
+    const close = this.getCloseButton(root);
+    this.closingMenu = true;
+    if (close) {
+      this.dispatchClick(close);
+      await this.waitFor(
+        () => (menu.roots.every((item) => !isVisible(item)) ? true : null),
+        700,
+        30,
+      );
+    } else {
+      this.dispatchClick(menu.opener);
+      await this.waitFor(
+        () => (menu.roots.every((item) => !isVisible(item)) ? true : null),
+        300,
+        30,
+      );
+    }
+    this.closingMenu = false;
+  }
+
+  private closeCurrentAutomatedMenu(): void {
+    if (!this.activeOpener || this.closingMenu) return;
+    const roots = this.getMenuRoots().filter(
+      (root) => isVisible(root) && !this.initialVisibleMenus.has(root),
+    );
+    const outer = this.targetedRoot(roots);
+    const close = outer ? this.getCloseButton(outer) : null;
+    if (close) this.dispatchClick(close);
+    else if (roots.length > 0 || !this.activeMenuObserved) this.dispatchClick(this.activeOpener);
+  }
+
   private async ensureMenuOpen(): Promise<Element | null> {
     const existing = this.getPauseButton(true);
     if (existing) return existing;
     const buttons = this.getSettingsButtons();
+    this.initialVisibleMenus = new Set(this.getMenuRoots().filter((root) => isVisible(root)));
     for (const b of buttons) {
+      this.activeOpener = b;
+      this.activeMenuObserved = false;
       this.dispatchClick(b);
       const pause = await this.waitFor(() => this.getPauseButton(true), 700, 50);
-      if (pause) return pause;
+      if (this.disposed) return null;
+      const roots = this.getMenuRoots().filter(
+        (root) => isVisible(root) && !this.initialVisibleMenus.has(root),
+      );
+      if (roots.length > 0) this.activeMenuObserved = true;
+      if (pause) {
+        return pause;
+      }
+      if (roots.length > 0) {
+        await this.closeOpenedMenu({ opener: b, roots: [...new Set(roots)] });
+      }
     }
+    this.activeOpener = null;
     return null;
   }
 
   async togglePause(): Promise<void> {
-    if (this.handling) return;
+    if (this.handling || this.disposed) return;
+    if (!this.hasGameContext()) return this.notify(TEXT.unavailable);
     this.handling = true;
     try {
       const pause = await this.ensureMenuOpen();
+      if (this.disposed) return;
       if (!pause) return this.notify(TEXT.notFound);
+      const menu = this.owningMenu(pause);
       if (this.isPauseDisabled(pause)) {
-        this.getCloseButton()?.click();
+        this.dispatchClick(menu ? this.getCloseButton(menu) : null);
         return this.notify(TEXT.unavailable);
       }
       this.dispatchClick(pause);
-      await new Promise((r) => setTimeout(r, 120));
-      this.dispatchClick(this.getCloseButton());
+      if (!(await this.sleep(120))) return;
+      this.dispatchClick(menu && isVisible(menu) ? this.getCloseButton(menu) : null);
     } finally {
-      setTimeout(() => (this.handling = false), 250);
+      if (!this.disposed) await this.sleep(250);
+      this.activeOpener = null;
+      this.activeMenuObserved = false;
+      this.initialVisibleMenus.clear();
+      this.handling = false;
     }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.closeCurrentAutomatedMenu();
+    this.disposed = true;
+    for (const pending of this.sleeps) {
+      clearTimeout(pending.id);
+      pending.resolve(false);
+    }
+    this.sleeps.clear();
+    for (const notification of this.notifications) notification.remove();
+    this.notifications.clear();
+    this.handling = false;
   }
 }
 
@@ -264,6 +426,7 @@ export const pauseHotkeyFeature: Feature = {
   disable() {
     off?.();
     off = null;
+    hk?.dispose();
     hk = null;
   },
 };

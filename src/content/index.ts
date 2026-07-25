@@ -64,22 +64,10 @@ function setupUrlRouter(): void {
     queueMicrotask(reconcile);
   };
 
-  const originalPushState = history.pushState;
-  const originalReplaceState = history.replaceState;
-  const pushStateWrapper: History["pushState"] = function (this: History, ...args): void {
-    originalPushState.apply(this, args);
-    schedule();
-  };
-  const replaceStateWrapper: History["replaceState"] = function (this: History, ...args): void {
-    originalReplaceState.apply(this, args);
-    schedule();
-  };
-  history.pushState = pushStateWrapper;
-  history.replaceState = replaceStateWrapper;
   window.addEventListener("popstate", schedule);
 
-  // В Chromium page и content script живут в разных JS-world: polling страхует
-  // вызовы history API сайта, не видимые обёрткам isolated world.
+  // pushState/replaceState сайта выполняются в другом JS-world, поэтому SPA-переходы
+  // отслеживает дешёвое сравнение URL; back/forward дополнительно будит popstate.
   const fallbackTimer = window.setInterval(schedule, 500);
   const onPageShow = () => schedule();
   const onPageHide = (event: PageTransitionEvent) => {
@@ -88,8 +76,6 @@ function setupUrlRouter(): void {
     window.removeEventListener("popstate", schedule);
     window.removeEventListener("pageshow", onPageShow);
     window.removeEventListener("pagehide", onPageHide);
-    if (history.pushState === pushStateWrapper) history.pushState = originalPushState;
-    if (history.replaceState === replaceStateWrapper) history.replaceState = originalReplaceState;
   };
   window.addEventListener("pageshow", onPageShow);
   window.addEventListener("pagehide", onPageHide);

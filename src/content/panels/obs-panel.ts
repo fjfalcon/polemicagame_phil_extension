@@ -23,7 +23,7 @@ import { onDomChange } from "@core/dom";
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { onMessage, sendRuntime } from "@core/messaging";
-import { SITE } from "@core/selectors";
+import { SITE, TEXT } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { ObsConnectionState, ObsScene } from "@shared/types";
 
@@ -472,8 +472,8 @@ async function hideRoleBeforeDaySceneSwitch(): Promise<void> {
  * квадратичный проход по всему документу на каждой проверке времени суток.
  * Спуск по дереву даёт тот же результат за O(глубина × братья).
  */
-function findDeepestTextWith(phrase: string): string {
-  let node: Element = document.body;
+function findDeepestTextWith(root: Element, phrase: string): string {
+  let node = root;
   if (!norm(node).includes(phrase)) return "";
   for (;;) {
     const child = Array.from(node.children).find((c) => norm(c).includes(phrase));
@@ -482,21 +482,49 @@ function findDeepestTextWith(phrase: string): string {
   }
 }
 
+function getStageContainer(): Element | null {
+  const stages = Array.from(document.querySelectorAll(SITE.stage));
+  if (stages.length === 0) return null;
+  let container: Element = stages[0].parentElement || stages[0];
+  while (
+    container.parentElement &&
+    container.parentElement !== document.body &&
+    !stages.every((stage) => container.contains(stage))
+  ) {
+    container = container.parentElement;
+  }
+  // Таймер обычно сосед списка стадий, поэтому берём один общий уровень выше,
+  // но никогда не поднимаемся до body.
+  return container.parentElement && container.parentElement !== document.body
+    ? container.parentElement
+    : container;
+}
+
+function hasMarker(text: string, markers: readonly string[]): boolean {
+  return markers.some((marker) => text.includes(marker));
+}
+
 /**
  * Определяет время суток на основе DOM элементов страницы игры.
- * Логика сохранена 1-в-1 из obs-floating-panel.js.
+ * RU-логика сохранена из obs-floating-panel.js; EN-маркеры — best-effort.
  */
 function detectTimeOfDay(): TimeOfDay {
   try {
     // 1. Надпись "Промах" — всегда день
     const missElement = document.querySelector(SITE.endedTitle);
-    if (missElement && (missElement.textContent || "").includes("Промах")) {
+    const missText = norm(missElement);
+    if (missElement && (missText.includes("промах") || missText.includes("miss"))) {
       log.debug(SCOPE, "Detected MISS - forcing DAY scene");
       return "day";
     }
 
     // 2. Ищем надпись "До смены этапа"
-    const stageChangeText = findDeepestTextWith("до смены этапа");
+    const stageContainer = getStageContainer();
+    // EN — best-effort, не проверено на живом EN-интерфейсе.
+    const stageChangeText = stageContainer
+      ? findDeepestTextWith(stageContainer, "до смены этапа") ||
+        findDeepestTextWith(stageContainer, "until stage change")
+      : "";
 
     if (stageChangeText) {
       const nextStage = document.querySelector(SITE.substageNext);
@@ -511,6 +539,15 @@ function detectTimeOfDay(): TimeOfDay {
           "прощальная минута",
           "лучший ход",
           "промах",
+          // best-effort, не проверено на живом EN-интерфейсе
+          "day",
+          "vote",
+          "voting",
+          "player speech",
+          "additional speech",
+          "farewell",
+          "best move",
+          "miss",
         ];
         for (const dayStage of dayStages) {
           if (nextStageText.includes(dayStage)) {
@@ -519,7 +556,13 @@ function detectTimeOfDay(): TimeOfDay {
           }
         }
 
-        const nightStages = ["ночь", "знакомство мафии"];
+        const nightStages = [
+          "ночь",
+          "знакомство мафии",
+          // best-effort, не проверено на живом EN-интерфейсе
+          "night",
+          "mafia introduction",
+        ];
         for (const nightStage of nightStages) {
           if (nextStageText.includes(nightStage)) {
             log.debug(SCOPE, "Detected NIGHT via next stage:", nightStage);
@@ -528,11 +571,14 @@ function detectTimeOfDay(): TimeOfDay {
         }
       }
 
-      if (stageChangeText.match(/до смены этапа \d+ сек/)) {
+      if (
+        /до смены этапа \d+ сек/.test(stageChangeText) ||
+        /until stage change.*\d+\s*(?:s|sec|seconds?)/.test(stageChangeText)
+      ) {
         const currentSubstage = document.querySelector(SITE.substageCurrent);
         if (currentSubstage) {
           const currentText = norm(currentSubstage);
-          if (currentText.includes("ночь")) {
+          if (currentText.includes("ночь") || currentText.includes("night")) {
             log.debug(SCOPE, 'Detected NIGHT via "До смены этапа" with timer and night substage');
             return "night";
           }
@@ -544,7 +590,7 @@ function detectTimeOfDay(): TimeOfDay {
     const currentSubstage = document.querySelector(SITE.substageCurrent);
     if (currentSubstage) {
       const currentText = norm(currentSubstage);
-      if (currentText.trim() === "ночь") {
+      if (currentText.trim() === "ночь" || currentText.trim() === "night") {
         const fallbackTime = currentTimeOfDay || "day";
         log.debug(
           SCOPE,
@@ -563,8 +609,10 @@ function detectTimeOfDay(): TimeOfDay {
       const votingText = norm(votingStage);
       const substageText = norm(votingResultsSubstage);
       if (
-        (votingText.includes("голосование") || votingText.includes("итоги подъема")) &&
-        substageText.includes("итоги подъема")
+        (votingText.includes("голосование") ||
+          votingText.includes("итоги подъема") ||
+          votingText.includes("voting")) &&
+        (substageText.includes("итоги подъема") || substageText.includes("results"))
       ) {
         log.debug(SCOPE, "Detected DAY: Голосование с итогами подъема");
         return "day";
@@ -576,7 +624,11 @@ function detectTimeOfDay(): TimeOfDay {
     if (currentStage) {
       const stageText = norm(currentStage);
 
-      if (stageText.includes("раздача карт")) {
+      if (
+        stageText.includes("раздача карт") ||
+        stageText.includes("card deal") ||
+        stageText.includes("dealing")
+      ) {
         log.debug(SCOPE, "Detected NIGHT: Раздача карт");
         return "night";
       }
@@ -589,7 +641,12 @@ function detectTimeOfDay(): TimeOfDay {
         }
       }
 
-      if (stageText.includes("день | речь игрока")) {
+      if (hasMarker(stageText, TEXT.night) && !hasMarker(stageText, TEXT.day)) {
+        log.debug(SCOPE, "Detected NIGHT stage via marker");
+        return "night";
+      }
+
+      if (stageText.includes("день | речь игрока") || hasMarker(stageText, TEXT.day)) {
         log.debug(SCOPE, "Detected DAY stage: День | Речь игрока");
         return "day";
       }
@@ -602,12 +659,13 @@ function detectTimeOfDay(): TimeOfDay {
     allStages.forEach((stage) => {
       const stageText = norm(stage);
       const isSubstage = stage.classList.contains("substage");
-      const isIsolatedNight = isSubstage && stageText.trim() === "ночь";
+      const isIsolatedNight =
+        isSubstage && (stageText.trim() === "ночь" || stageText.trim() === "night");
 
-      if (stageText.includes("ночь") && !stageText.includes("день") && !isIsolatedNight) {
+      if (hasMarker(stageText, TEXT.night) && !hasMarker(stageText, TEXT.day) && !isIsolatedNight) {
         hasAnyNightStage = true;
       }
-      if (stageText.includes("день") || stageText.includes("итоги подъема")) {
+      if (hasMarker(stageText, TEXT.day) || stageText.includes("итоги подъема")) {
         hasAnyDayStage = true;
       }
     });

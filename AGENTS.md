@@ -125,7 +125,7 @@ src/
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |
 | localStorage страницы | fp:*, polemica:update*, polemica:loglevel/buflevel | панели/update-notify/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник |
 
-## 6. Техдолг (актуален на v8.1.26)
+## 6. Техдолг (актуален на v8.1.27)
 
 Отсортировано по (вред × вероятность). Файл:строка проверены на HEAD.
 Перед работой перепроверь — код живой.
@@ -133,8 +133,8 @@ src/
 ### Высокий приоритет
 1. ✅ ЗАКРЫТО в 8.1.25 (opencode + доводка): chrome.alarms-watchdog,
    reconcile при пробуждении SW, persisted-блоки со сбросом на onStartup.
-   Остаток: patch history в SPA-роутере — мёртвый код в isolated world
-   (реально работают polling 500мс + popstate), можно упростить.
+   Мёртвый patch history из isolated world удалён в 8.1.27; роутер использует
+   polling 500мс + popstate.
 2. ✅ ЗАКРЫТО в 8.1.25: единый URL-роутер (content/index.ts), route-sync у
    match-stats/player-notes, AbortController в match-data. Остаток:
    pendingGameData теряется, если Vue рендерит матч дольше 10с (give-up без
@@ -149,10 +149,10 @@ src/
    используется. Нужна схема id-ключей с миграцией. → `player-notes.ts`.
 
 ### Средний приоритет
-5. Автомод OBS: детект день/ночь полностью русскоязычный (на EN-интерфейсе
-   мёртв) + `findDeepestTextWith` читает textContent всего body до ~7 раз/с;
-   characterData не наблюдается (in-place смена текста невидима).
-   → `obs-panel.ts:~465-620`, `dom.ts` (observer config).
+5. ✅ ЗАКРЫТО в 8.1.27: автомод OBS ищет текст только в контейнере стадий и
+   понимает очевидные EN-маркеры (best-effort, не проверено на живом EN).
+   Остаток: characterData не наблюдается общим observer'ом, поэтому in-place
+   смена текста без childList/class/style может обнаружиться с задержкой.
 6. ✅ ЗАКРЫТО в 8.1.26: drag/resize window-слушатели и pointercancel имеют
    симметричный cleanup, записи style коалесцируются через rAF, нулевой или
    отсоединённый бокс не сохраняется и не восстанавливается.
@@ -164,13 +164,11 @@ src/
 9. Логи: две content-вкладки пишут в один ключ (last-writer-wins);
    `polemica:buflevel` управляется localStorage сайта — сайт может включить
    debug и собрать Twitch-чат в экспортируемый файл. → `log.ts:33-60`.
-10. pause-hotkey: ensureMenuOpen перебирает кандидатов КЛИКАМИ (до 7с чужих
-    меню, клик по `a` может увести со страницы); getPauseButton без isVisible;
-    открытые меню не закрываются при неудаче; «Продолжить/Resume» не
-    матчится для снятия паузы. → `pause-hotkey.ts:~100-230`.
-11. XSS (мир страницы): `href="${base}#${roleId}"` в innerHTML истории игр
-    без экранирования (base из DOM сайта, roleId из API).
-    → `player-notes.ts:~1223`.
+10. ✅ ЗАКРЫТО в 8.1.27: F8 кликает только видимую паузу/продолжение,
+    исключает навигационные `<a href>` из кандидатов и закрывает меню,
+    открытые неудачным перебором.
+11. ✅ ЗАКРЫТО в 8.1.27: SVG ролей истории собирается через createElementNS и
+    setAttribute; base/roleId больше не интерполируются в HTML-атрибуты.
 12. match-stats: точка «лучшего хода» по слабым условиям (fallback nights[0],
     сравнение со СТАРТОВЫМ числом мафии); колонки в порядке массива players
     без сортировки по position; 4 разные палитры цветов ролей между фичами
@@ -241,5 +239,7 @@ src/
   worker; единый SPA URL-роутер и route-lifecycle статистики матча.
 - **8.1.26** — статистика игроков вне активных игр, безопасный lifecycle
   FloatingPanel/tooltip/camera-flip.
+- **8.1.27** — устойчивый F8, EN-маркеры и дешёвый детект стадий OBS,
+  безопасный SVG истории и упрощённый SPA-роутер.
 
 Полные отчёты аудитов — в истории коммитов и release notes на GitHub.

@@ -90,6 +90,10 @@ export const TEXT = {
     "dealing",
     "mafia",
     "check",
+    // best-effort, не проверено на живом EN-интерфейсе
+    "mafia turn",
+    "mafia introduction",
+    "checks",
   ],
   day: [
     "день",
@@ -107,6 +111,9 @@ export const TEXT = {
     "speech",
     "additional speech",
     "farewell",
+    // best-effort, не проверено на живом EN-интерфейсе
+    "best move",
+    "miss",
   ],
   vote: ["голос", "vote"],
   // Кнопки приёма игры на странице поиска (auto-start, RU+EN)

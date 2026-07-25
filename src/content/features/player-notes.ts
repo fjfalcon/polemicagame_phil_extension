@@ -1365,7 +1365,20 @@ class PlayerNotesManager {
   private createRoleSvg(roleId: string, size: number): string {
     const base = this.resolveRoleSpriteBaseUrl();
     const href = `${base}#${roleId}`;
-    return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${size}" height="${size}"><use href="${href}" xlink:href="${href}"></use></svg>`;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    svg.setAttributeNS(
+      "http://www.w3.org/2000/xmlns/",
+      "xmlns:xlink",
+      "http://www.w3.org/1999/xlink",
+    );
+    svg.setAttribute("width", String(size));
+    svg.setAttribute("height", String(size));
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", href);
+    use.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", href);
+    svg.appendChild(use);
+    return svg.outerHTML;
   }
 
   // ─────────── Инъекция кнопок к игрокам ───────────
