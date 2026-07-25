@@ -15,7 +15,7 @@ const TEXT = {
 };
 
 const norm = (v: unknown) => (v ?? "").toString().toLowerCase().replace(/\s+/g, " ").trim();
-const PAUSE_ACTIONS = new Set([
+const PAUSE_EXACT = new Set([
   "пауза",
   "пауза игры",
   "поставить на паузу",
@@ -24,6 +24,13 @@ const PAUSE_ACTIONS = new Set([
   "pause",
   "pause game",
   "break",
+]);
+/**
+ * Слова снятия паузы. ОТДЕЛЬНО от паузы и под гейтом (resumeAllowedFor):
+ * «Продолжить» — типовая кнопка любого диалога сайта (реконнект, туториал,
+ * подтверждение) — без гейта F8 кликал бы чужие диалоги (инвариант №2).
+ */
+const RESUME_EXACT = new Set([
   "продолжить",
   "продолжить игру",
   "возобновить",
@@ -102,15 +109,46 @@ class PauseHotkey {
     const text = norm(node?.textContent);
     const ariaLabel = norm(node?.getAttribute?.("aria-label"));
     const title = norm(node?.getAttribute?.("title"));
-    return (
-      PAUSE_ACTIONS.has(text) ||
-      PAUSE_ACTIONS.has(ariaLabel) ||
-      PAUSE_ACTIONS.has(title)
+    const values = [text, ariaLabel, title];
+    if (values.some((v) => PAUSE_EXACT.has(v))) return true;
+    // Проверенный в бою подстрочный матч: реальный пункт может быть
+    // «Пауза (F8)» / с таймером / иконкой с классом pause. Точный набор
+    // литералов нигде не сверен с живой вёрсткой — без этой ступени F8
+    // рисковал умереть целиком. Гард по длине отсекает абзацы.
+    if (text.length <= 32 && values.some((v) => v.includes("пауз") || v.includes("pause") || v.includes("перерыв"))) {
+      return true;
+    }
+    const cls = norm((node as HTMLElement)?.className?.toString?.() || "");
+    if (cls.includes("pause")) return true;
+    if (this.resumeAllowedFor(node) && values.some((v) => RESUME_EXACT.has(v))) return true;
+    return false;
+  }
+
+  /** Resume-слова принимаем только в меню настроек игры или в меню, открытом нами. */
+  private resumeAllowedFor(candidate: Element): boolean {
+    if (candidate.closest('.game-room__settings, [class*="settings"], [class*="pause"]')) {
+      return true;
+    }
+    if (!this.activeOpener) return false;
+    return this.getMenuRoots().some(
+      (root) => isVisible(root) && !this.initialVisibleMenus.has(root) && root.contains(candidate),
     );
   }
 
   private isNavigatingAnchor(node: Element): boolean {
-    return node.closest("a[href]") !== null;
+    // Настоящая навигация, а не href="#"/javascript: — типовой markup пунктов
+    // меню в SPA; жёсткое исключение всех a[href] убивало легитимные пункты.
+    const a = node.closest("a[href]");
+    if (!a) return false;
+    const href = a.getAttribute("href") || "";
+    return href !== "" && href !== "#" && !href.startsWith("javascript:");
+  }
+
+  private containsNavigatingAnchor(node: Element): boolean {
+    return Array.from(node.querySelectorAll("a[href]")).some((a) => {
+      const href = a.getAttribute("href") || "";
+      return href !== "" && href !== "#" && !href.startsWith("javascript:");
+    });
   }
 
   private hasGameContext(): boolean {
@@ -184,7 +222,7 @@ class PauseHotkey {
         seen.has(c) ||
         !isVisible(c) ||
         this.isNavigatingAnchor(c) ||
-        !!c.querySelector("a[href]")
+        this.containsNavigatingAnchor(c)
       ) {
         return;
       }
@@ -221,7 +259,7 @@ class PauseHotkey {
       const found = Array.from(root.querySelectorAll(CLICKABLE_SELECTOR)).find(
         (candidate) =>
           !this.isNavigatingAnchor(candidate) &&
-          !candidate.querySelector("a[href]") &&
+          !this.containsNavigatingAnchor(candidate) &&
           isVisible(candidate) &&
           this.matchesPause(candidate) &&
           !Array.from(candidate.querySelectorAll(CLICKABLE_SELECTOR)).some(
@@ -325,7 +363,10 @@ class PauseHotkey {
     const outer = this.targetedRoot(roots);
     const close = outer ? this.getCloseButton(outer) : null;
     if (close) this.dispatchClick(close);
-    else if (roots.length > 0 || !this.activeMenuObserved) this.dispatchClick(this.activeOpener);
+    // Только если видимое «наше» меню реально есть. Слепой клик по opener'у
+    // при roots=0 ОТКРЫВАЛ меню в момент выключения фичи — и после
+    // disposed=true его уже никто не закрыл бы.
+    else if (roots.length > 0) this.dispatchClick(this.activeOpener);
   }
 
   private async ensureMenuOpen(): Promise<Element | null> {

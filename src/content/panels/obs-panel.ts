@@ -501,7 +501,15 @@ function getStageContainer(): Element | null {
 }
 
 function hasMarker(text: string, markers: readonly string[]): boolean {
-  return markers.some((marker) => text.includes(marker));
+  return markers.some((marker) => {
+    // Короткие английские слова — только по границам слова: «day» не должен
+    // матчиться в «today», «miss» — в «dismiss». Латиница живёт в никах
+    // игроков, которые могут попадать в текст стадии на русском интерфейсе.
+    if (/^[a-z]+$/.test(marker) && marker.length <= 5) {
+      return new RegExp(`(^|[^a-z])${marker}([^a-z]|$)`).test(text);
+    }
+    return text.includes(marker);
+  });
 }
 
 /**
@@ -521,10 +529,19 @@ function detectTimeOfDay(): TimeOfDay {
     // 2. Ищем надпись "До смены этапа"
     const stageContainer = getStageContainer();
     // EN — best-effort, не проверено на живом EN-интерфейсе.
-    const stageChangeText = stageContainer
+    let stageChangeText = stageContainer
       ? findDeepestTextWith(stageContainer, "до смены этапа") ||
         findDeepestTextWith(stageContainer, "until stage change")
       : "";
+    // Страховка: эвристика контейнера («таймер — сосед списка стадий») —
+    // предположение о вёрстке. При промахе возвращаемся к проверенному в бою
+    // поиску от body: это старая цена ОДНОЙ проверки, зато ночь не будет
+    // молча пропущена, если сайт разложил таймер иначе.
+    if (!stageChangeText) {
+      stageChangeText =
+        findDeepestTextWith(document.body, "до смены этапа") ||
+        findDeepestTextWith(document.body, "until stage change");
+    }
 
     if (stageChangeText) {
       const nextStage = document.querySelector(SITE.substageNext);
@@ -670,7 +687,9 @@ function detectTimeOfDay(): TimeOfDay {
       }
     });
 
-    if (hasAnyNightStage) {
+    // При обоих флагах (статичный список всех стадий) — день: это проверенный
+    // в бою тай-брейк из auto-start; приоритет ночи здесь давал ложную ночь.
+    if (hasAnyNightStage && !hasAnyDayStage) {
       log.debug(SCOPE, "Detected NIGHT via any night stage found");
       return "night";
     }
