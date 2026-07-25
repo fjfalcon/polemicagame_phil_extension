@@ -172,30 +172,85 @@ export abstract class FloatingPanel {
     let startY = 0;
     let baseLeft = 0;
     let baseTop = 0;
+    let pointerId: number | null = null;
+    let latestX = 0;
+    let latestY = 0;
+    let frameId: number | null = null;
 
-    const onMove = (e: PointerEvent) => {
-      root.style.left = `${baseLeft + (e.clientX - startX)}px`;
-      root.style.top = `${baseTop + (e.clientY - startY)}px`;
-      root.style.right = "auto";
-      root.style.bottom = "auto";
+    const applyPosition = () => {
+      frameId = null;
+      if (pointerId === null || !root.isConnected) return;
+      const left = `${baseLeft + (latestX - startX)}px`;
+      const top = `${baseTop + (latestY - startY)}px`;
+      if (root.style.left !== left) root.style.left = left;
+      if (root.style.top !== top) root.style.top = top;
     };
-    const onUp = () => {
+    const detach = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      this.persistBox();
+      window.removeEventListener("pointercancel", onCancel);
     };
+    const finish = (e: PointerEvent | null, persist: boolean) => {
+      if (pointerId === null || (e && e.pointerId !== pointerId)) return;
+      const finishedPointerId = pointerId;
+      if (e) {
+        latestX = e.clientX;
+        latestY = e.clientY;
+      }
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+        frameId = null;
+      }
+      applyPosition();
+      pointerId = null;
+      detach();
+      try {
+        if (handle.hasPointerCapture(finishedPointerId)) {
+          handle.releasePointerCapture(finishedPointerId);
+        }
+      } catch {
+        /* UA уже освободил pointer */
+      }
+      if (persist) this.persistBox(root);
+    };
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      latestX = e.clientX;
+      latestY = e.clientY;
+      if (frameId === null) frameId = requestAnimationFrame(applyPosition);
+    };
+    const onUp = (e: PointerEvent) => finish(e, true);
+    const onCancel = (e: PointerEvent) => finish(e, false);
+    const onLostCapture = (e: PointerEvent) => finish(e, false);
     const onDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement).closest("button")) return;
+      finish(null, false);
       const r = root.getBoundingClientRect();
+      pointerId = e.pointerId;
       startX = e.clientX;
       startY = e.clientY;
+      latestX = e.clientX;
+      latestY = e.clientY;
       baseLeft = r.left;
       baseTop = r.top;
+      if (root.style.right !== "auto") root.style.right = "auto";
+      if (root.style.bottom !== "auto") root.style.bottom = "auto";
+      try {
+        handle.setPointerCapture(e.pointerId);
+      } catch {
+        /* pointer уже завершён */
+      }
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
     };
     handle.addEventListener("pointerdown", onDown);
-    this.cleanup.push(() => handle.removeEventListener("pointerdown", onDown));
+    handle.addEventListener("lostpointercapture", onLostCapture);
+    this.cleanup.push(() => {
+      handle.removeEventListener("pointerdown", onDown);
+      handle.removeEventListener("lostpointercapture", onLostCapture);
+      finish(null, false);
+    });
   }
 
   // ───────────────────────── resize ─────────────────────────
@@ -215,27 +270,80 @@ export abstract class FloatingPanel {
     let startY = 0;
     let baseW = 0;
     let baseH = 0;
-    const onMove = (e: PointerEvent) => {
-      root.style.width = `${Math.max(this.opts.minWidth, baseW + (e.clientX - startX))}px`;
-      root.style.height = `${Math.max(this.opts.minHeight, baseH + (e.clientY - startY))}px`;
+    let pointerId: number | null = null;
+    let latestX = 0;
+    let latestY = 0;
+    let frameId: number | null = null;
+    const applySize = () => {
+      frameId = null;
+      if (pointerId === null || !root.isConnected) return;
+      const width = `${Math.max(this.opts.minWidth, baseW + (latestX - startX))}px`;
+      const height = `${Math.max(this.opts.minHeight, baseH + (latestY - startY))}px`;
+      if (root.style.width !== width) root.style.width = width;
+      if (root.style.height !== height) root.style.height = height;
     };
-    const onUp = () => {
+    const detach = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      this.persistBox();
+      window.removeEventListener("pointercancel", onCancel);
     };
+    const finish = (e: PointerEvent | null, persist: boolean) => {
+      if (pointerId === null || (e && e.pointerId !== pointerId)) return;
+      const finishedPointerId = pointerId;
+      if (e) {
+        latestX = e.clientX;
+        latestY = e.clientY;
+      }
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+        frameId = null;
+      }
+      applySize();
+      pointerId = null;
+      detach();
+      try {
+        if (h.hasPointerCapture(finishedPointerId)) h.releasePointerCapture(finishedPointerId);
+      } catch {
+        /* UA уже освободил pointer */
+      }
+      if (persist) this.persistBox(root);
+    };
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      latestX = e.clientX;
+      latestY = e.clientY;
+      if (frameId === null) frameId = requestAnimationFrame(applySize);
+    };
+    const onUp = (e: PointerEvent) => finish(e, true);
+    const onCancel = (e: PointerEvent) => finish(e, false);
+    const onLostCapture = (e: PointerEvent) => finish(e, false);
     const onDown = (e: PointerEvent) => {
       e.preventDefault();
+      finish(null, false);
       const r = root.getBoundingClientRect();
+      pointerId = e.pointerId;
       startX = e.clientX;
       startY = e.clientY;
+      latestX = e.clientX;
+      latestY = e.clientY;
       baseW = r.width;
       baseH = r.height;
+      try {
+        h.setPointerCapture(e.pointerId);
+      } catch {
+        /* pointer уже завершён */
+      }
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
     };
     h.addEventListener("pointerdown", onDown);
-    this.cleanup.push(() => h.removeEventListener("pointerdown", onDown));
+    h.addEventListener("lostpointercapture", onLostCapture);
+    this.cleanup.push(() => {
+      h.removeEventListener("pointerdown", onDown);
+      h.removeEventListener("lostpointercapture", onLostCapture);
+      finish(null, false);
+    });
     return h;
   }
 
@@ -244,8 +352,19 @@ export abstract class FloatingPanel {
     return `fp:${this.opts.storageKey}`;
   }
 
-  private persistBox(): void {
-    const r = this.root.getBoundingClientRect();
+  private persistBox(root: HTMLElement): void {
+    if (!root.isConnected) return;
+    const r = root.getBoundingClientRect();
+    if (
+      !Number.isFinite(r.left) ||
+      !Number.isFinite(r.top) ||
+      !Number.isFinite(r.width) ||
+      !Number.isFinite(r.height) ||
+      r.width <= 0 ||
+      r.height <= 0
+    ) {
+      return;
+    }
     const box: Box = { left: r.left, top: r.top, width: r.width, height: r.height };
     try {
       localStorage.setItem(this.lsKey, JSON.stringify(box));
@@ -261,12 +380,20 @@ export abstract class FloatingPanel {
     } catch {
       box = null;
     }
-    if (box && typeof box.left === "number") {
+    if (
+      box &&
+      Number.isFinite(box.left) &&
+      Number.isFinite(box.top) &&
+      Number.isFinite(box.width) &&
+      Number.isFinite(box.height) &&
+      (box.width as number) > 0 &&
+      (box.height as number) > 0
+    ) {
       Object.assign(this.root.style, {
         left: `${box.left}px`,
         top: `${box.top}px`,
-        width: `${box.width}px`,
-        height: `${box.height}px`,
+        width: `${Math.max(this.opts.minWidth, box.width as number)}px`,
+        height: `${Math.max(this.opts.minHeight, box.height as number)}px`,
         right: "auto",
         bottom: "auto",
       } as CSSStyleDeclaration);

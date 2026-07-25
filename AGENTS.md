@@ -125,7 +125,7 @@ src/
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |
 | localStorage страницы | fp:*, polemica:update*, polemica:loglevel/buflevel | панели/update-notify/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник |
 
-## 6. Техдолг (актуален на v8.1.24)
+## 6. Техдолг (актуален на v8.1.26)
 
 Отсортировано по (вред × вероятность). Файл:строка проверены на HEAD.
 Перед работой перепроверь — код живой.
@@ -139,10 +139,11 @@ src/
    match-stats/player-notes, AbortController в match-data. Остаток:
    pendingGameData теряется, если Vue рендерит матч дольше 10с (give-up без
    ретрая) — узкое окно «нет статистики до F5» на медленной сети.
-3. **Статистика «???» навсегда** для игрока вне активных игр (нет фолбэка
-   через rating/get-list в loadPlayerStats) и молчаливая кнопка для игрока вне
-   топ-1000 (limit=1000 без пагинации). Ядро главной фичи.
-   → `player-notes.ts:~400-420, ~650, ~1095`.
+3. ✅ ЗАКРЫТО в 8.1.26: `loadPlayerStats` ищет ID вне активных игр через общий
+   TTL-кэш `rating/get-list`, который переиспользуют статистика, профиль и
+   история игр; отсутствие в топ-1000 честно показано в тултипе и по клику.
+   Остаток: для игрока вне активной игры MMR не берётся из rating payload
+   (форма поля не подтверждена), поэтому показывается `—`.
 4. **Заметки ключуются ником**: тёзки делят заметку, регистр/смена ника теряет
    её (ключ регистрозависим, кэши lowercase). player.id доступен, но не
    используется. Нужна схема id-ключей с миграцией. → `player-notes.ts`.
@@ -152,16 +153,14 @@ src/
    мёртв) + `findDeepestTextWith` читает textContent всего body до ~7 раз/с;
    characterData не наблюдается (in-place смена текста невидима).
    → `obs-panel.ts:~465-620`, `dom.ts` (observer config).
-6. FloatingPanel: pointermove/pointerup не в cleanup — unmount во время drag
-   оставляет window-слушатели, persistBox пишет нулевой бокс (панель
-   «исчезает» в 0×0 до чистки localStorage); нет pointercancel; drag будит
-   всех подписчиков observer'а покадрово. → `core/FloatingPanel.ts:~180-240`.
-7. Тултипы-сироты (tooltip.ts): re-enter <100мс не гасит таймер и не удаляет
-   предыдущий тултип — копятся в body с pointer-events. settingKey:null ⇒
-   disable никогда. → `tooltip.ts:~300-350`.
-8. camera-flip: вечный rAF-цикл при пересоздании плитки (dataset.flipped на
-   отсоединённом video); при null-ctx canvas добавлен, opacity=0, второй клик
-   даёт второй canvas; teardown при disable отсутствует. → `camera-flip.ts`.
+6. ✅ ЗАКРЫТО в 8.1.26: drag/resize window-слушатели и pointercancel имеют
+   симметричный cleanup, записи style коалесцируются через rAF, нулевой или
+   отсоединённый бокс не сохраняется и не восстанавливается.
+7. ✅ ЗАКРЫТО в 8.1.26: повторный enter гасит таймер, удаляет текущий tooltip
+   и scoped-сироты этой точки до создания нового.
+8. ✅ ЗАКРЫТО в 8.1.26: camera-flip хранит активные canvas/rAF, останавливается
+   на отсоединённом video, откатывает неудачный flip и вызывает `unflipAll()`
+   при disable фичи и выключении настройки поворота.
 9. Логи: две content-вкладки пишут в один ключ (last-writer-wins);
    `polemica:buflevel` управляется localStorage сайта — сайт может включить
    debug и собрать Twitch-чат в экспортируемый файл. → `log.ts:33-60`.
@@ -231,5 +230,9 @@ src/
 - **8.1.24** — автомод OBS отвязан от панели (не запускался без неё!), завис
   connecting, миграции обновления (возврат twitch-панели, чистка
   legacy-пароля из sync), инверсия tracked-роли, idle-watchdog Twitch.
+- **8.1.25** — alarms-watchdog и восстановление OBS после выгрузки service
+  worker; единый SPA URL-роутер и route-lifecycle статистики матча.
+- **8.1.26** — статистика игроков вне активных игр, безопасный lifecycle
+  FloatingPanel/tooltip/camera-flip.
 
 Полные отчёты аудитов — в истории коммитов и release notes на GitHub.

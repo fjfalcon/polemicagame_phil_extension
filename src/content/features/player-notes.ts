@@ -22,7 +22,7 @@ import { browser } from "@core/env";
 import { log } from "@core/log";
 import { onDomChange } from "@core/dom";
 import { onMessage } from "@core/messaging";
-import { toggleFlipForPlayer, isPlayerFlipped } from "../camera-flip";
+import { toggleFlipForPlayer, isPlayerFlipped, unflipAll } from "../camera-flip";
 import { getMatchId } from "../match-data";
 import { escapeHtml } from "@core/escape";
 import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
@@ -46,6 +46,8 @@ interface RoleWinrate {
 }
 
 interface PlayerStatsEntry {
+  ratingUnavailable?: boolean;
+  fromRating?: boolean;
   mmr: number | string;
   totalGames: number | string;
   id: number | string;
@@ -62,6 +64,11 @@ interface PlayerStatsEntry {
     mafia: RoleWinrate;
     godfather: RoleWinrate;
   };
+}
+
+interface RatingPlayer {
+  username?: string;
+  user_id: number | string;
 }
 
 interface LastGameEntry {
@@ -108,6 +115,9 @@ const STATS_TTL_MS = 5 * 60 * 1000;
 let activeGamesPromise: Promise<any[]> | null = null;
 let activeGamesFetchedAt = 0;
 const ACTIVE_GAMES_TTL_MS = 15_000;
+let ratingListCache: RatingPlayer[] | null = null;
+let ratingListFetchedAt = 0;
+let ratingListInFlight: Promise<RatingPlayer[]> | null = null;
 
 function fetchActiveGames(): Promise<any[]> {
   const now = Date.now();
@@ -116,12 +126,72 @@ function fetchActiveGames(): Promise<any[]> {
   }
   activeGamesFetchedAt = now;
   activeGamesPromise = fetch("https://game.polemicagame.com/api/games")
-    .then((r) => r.json() as Promise<any[]>)
+    .then(async (response) => {
+      if (!response.ok) throw new Error(`active games API error: ${response.status}`);
+      const data: unknown = await response.json();
+      if (!Array.isArray(data)) throw new Error("active games API returned invalid data");
+      return data;
+    })
     .catch((e) => {
       activeGamesPromise = null; // ошибку не кэшируем
       throw e;
     });
   return activeGamesPromise;
+}
+
+function fetchRatingList(): Promise<RatingPlayer[]> {
+  if (ratingListCache && Date.now() - ratingListFetchedAt < STATS_TTL_MS) {
+    return Promise.resolve(ratingListCache);
+  }
+  if (ratingListInFlight) return ratingListInFlight;
+
+  const request = fetch("https://polemicagame.com/rating/get-list?limit=1000")
+    .then(async (response) => {
+      if (!response.ok) throw new Error(`rating API error: ${response.status}`);
+      const data: unknown = await response.json();
+      if (!Array.isArray(data)) throw new Error("rating API returned invalid data");
+      ratingListCache = data as RatingPlayer[];
+      ratingListFetchedAt = Date.now();
+      return ratingListCache;
+    })
+    .finally(() => {
+      if (ratingListInFlight === request) ratingListInFlight = null;
+    });
+  ratingListInFlight = request;
+  return request;
+}
+
+async function findRatingPlayer(username: string): Promise<RatingPlayer | undefined> {
+  const key = username.toLowerCase();
+  return (await fetchRatingList()).find(
+    (player) =>
+      player.username?.toLowerCase() === key &&
+      player.user_id !== undefined &&
+      player.user_id !== null,
+  );
+}
+
+function unavailablePlayerStats(): PlayerStatsEntry {
+  return {
+    ratingUnavailable: true,
+    fromRating: true,
+    mmr: "—",
+    totalGames: "—",
+    id: "—",
+    generalStats: {
+      gamesCount: 0,
+      winsCount: 0,
+      firstKilledCount: 0,
+      killpercent: 0,
+      winrate: "—",
+    },
+    roleStats: {
+      civilian: { winrate: "—" },
+      sheriff: { winrate: "—" },
+      mafia: { winrate: "—" },
+      godfather: { winrate: "—" },
+    },
+  };
 }
 
 const THEME_COLORS: Record<string, string> = {
@@ -138,6 +208,7 @@ const THEME_COLORS: Record<string, string> = {
 
 class PlayerNotesManager {
   private settings: Settings;
+  private active = true;
 
   private notes: NotesMap = {};
   /** Пользовательские цвета меток (палитра), хранятся в storage.sync. */
@@ -151,6 +222,8 @@ class PlayerNotesManager {
    * тултипе замораживались с первого наведения на весь игровой вечер.
    */
   private statsFetchedAt = new Map<string, number>();
+  /** Последняя проверка /api/games для записей, найденных только через рейтинг. */
+  private activeGameCheckedAt = new Map<string, number>();
   private gamesFetchedAt = new Map<string, number>();
   /** Ники, по которым запрос уже в полёте (пересборка плитки не дублирует его). */
   private statsInFlight = new Set<string>();
@@ -218,7 +291,9 @@ class PlayerNotesManager {
       onMessage((msg: ExtMessage) => {
         if (!("type" in msg)) return;
         if (msg.type === "updateNotesSettings" && msg.settings) {
+          const cameraWasEnabled = this.settings.camera_rotate_enabled;
           this.settings = { ...this.settings, ...msg.settings };
+          if (cameraWasEnabled && !this.settings.camera_rotate_enabled) unflipAll();
           if (this.settings.statistics_enabled === false) {
             this.removeStatisticsElements();
           } else {
@@ -288,6 +363,7 @@ class PlayerNotesManager {
   }
 
   disable(): void {
+    this.active = false;
     for (const un of this.unsubscribers) {
       try {
         un();
@@ -314,6 +390,7 @@ class PlayerNotesManager {
       this.gameStateHandler = null;
     }
 
+    unflipAll();
     // Удаляем все созданные элементы.
     this.removeStatisticsElements();
     // Открытые модалки заметок/истории: через close(), иначе останется
@@ -337,7 +414,9 @@ class PlayerNotesManager {
   }
 
   update(ctx: FeatureContext): void {
+    const cameraWasEnabled = this.settings.camera_rotate_enabled;
     this.settings = ctx.settings;
+    if (cameraWasEnabled && !this.settings.camera_rotate_enabled) unflipAll();
     if (this.settings.statistics_enabled === false) {
       this.removeStatisticsElements();
       return;
@@ -424,15 +503,25 @@ class PlayerNotesManager {
   // ─────────── Загрузка статистики (с кэшем) ───────────
 
   private async loadPlayerStats(username: string): Promise<void> {
-    if (this.settings.statistics_enabled === false) return;
+    if (!this.active || this.settings.statistics_enabled === false) return;
     const key = username.toLowerCase();
     const fetchedAt = this.statsFetchedAt.get(key) ?? 0;
-    if (this.playerStats.has(key) && Date.now() - fetchedAt < STATS_TTL_MS) return;
+    const cached = this.playerStats.get(key);
+    const now = Date.now();
+    const needsActiveRecheck =
+      cached?.fromRating === true &&
+      now - (this.activeGameCheckedAt.get(key) ?? 0) >= ACTIVE_GAMES_TTL_MS;
+    if (cached && now - fetchedAt < STATS_TTL_MS && !needsActiveRecheck) return;
     if (this.statsInFlight.has(key)) return; // запрос уже в полёте
     this.statsInFlight.add(key);
 
     try {
-      const games: any[] = await fetchActiveGames();
+      let games: any[] = [];
+      try {
+        games = await fetchActiveGames();
+      } catch (e) {
+        log.warn("player-notes", "active games lookup failed, using rating", e);
+      }
 
       let player: any = null;
       for (const game of games) {
@@ -445,12 +534,25 @@ class PlayerNotesManager {
         }
       }
 
-      if (!player) {
-        log.debug("player-notes", `player ${username} not found in active games`);
-        return;
+      let userId: number | string;
+      let mmr: number | string = "—";
+      if (player) {
+        userId = player.id;
+        mmr = player.mmr ?? "—";
+      } else {
+        this.activeGameCheckedAt.set(key, Date.now());
+        if (cached?.fromRating && Date.now() - fetchedAt < STATS_TTL_MS) return;
+        log.debug("player-notes", `player ${username} not found in active games, using rating`);
+        const ratingPlayer = await findRatingPlayer(username);
+        if (!ratingPlayer) {
+          if (!this.active) return;
+          this.playerStats.set(key, unavailablePlayerStats());
+          this.statsFetchedAt.set(key, Date.now());
+          this.updatePlayerTooltips(username);
+          return;
+        }
+        userId = ratingPlayer.user_id;
       }
-
-      const userId = player.id;
 
       const [generalStats, roleStats, killcount]: [any[], any, any[]] = await Promise.all([
         fetch(
@@ -475,9 +577,10 @@ class PlayerNotesManager {
       };
 
       const entry: PlayerStatsEntry = {
-        mmr: player.mmr || "???",
+        fromRating: !player,
+        mmr,
         totalGames: Number(generalData.games_count) || "?",
-        id: player.id,
+        id: userId,
         generalStats: {
           gamesCount: Number(generalData.games_count) || 0,
           winsCount: Number(generalData.wins_count) || 0,
@@ -516,17 +619,15 @@ class PlayerNotesManager {
         },
       };
 
+      if (!this.active) return;
       this.playerStats.set(key, entry);
       this.statsFetchedAt.set(key, Date.now());
+      if (player) this.activeGameCheckedAt.delete(key);
 
       // Обновляем ВСЕ отрисованные тултипы этого игрока: сайт рендерит одного
       // игрока в двух плитках (десктоп/мобайл), а querySelector обновлял
       // только первую — вторая навсегда оставалась с заглушками «???».
-      document
-        .querySelectorAll(`.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`)
-        .forEach((tooltip) => {
-          tooltip.innerHTML = this.generateTooltipContent(username);
-        });
+      this.updatePlayerTooltips(username);
     } catch (e) {
       log.error("player-notes", `loadPlayerStats failed for ${username}`, e);
     } finally {
@@ -592,6 +693,9 @@ class PlayerNotesManager {
     let html = `<div class="tooltip-text" style="margin-bottom: 6px; font-size: 11px;">${escapeHtml(
       noteText,
     )}</div>`;
+    if (stats.ratingUnavailable) {
+      return `${html}<div class="tooltip-text" style="font-size: 10px;">Нет данных рейтинга</div>`;
+    }
     html += `<div class="tooltip-text" style="font-size: 10px;">`;
 
     if (this.settings.show_mmr) {
@@ -650,6 +754,14 @@ class PlayerNotesManager {
       });
   }
 
+  private updatePlayerTooltips(username: string): void {
+    document
+      .querySelectorAll(`.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`)
+      .forEach((tooltip) => {
+        tooltip.innerHTML = this.generateTooltipContent(username);
+      });
+  }
+
   private createTooltip(username: string): HTMLDivElement {
     if (!this.playerStats.has(username.toLowerCase())) {
       void this.loadPlayerStats(username);
@@ -675,21 +787,20 @@ class PlayerNotesManager {
     statsButton.addEventListener("click", async (e) => {
       e.stopPropagation();
       const stats = this.playerStats.get(username.toLowerCase());
-      if (stats && stats.id) {
+      if (stats && !stats.ratingUnavailable && stats.id) {
         window.open(`https://polemicagame.com/profile/${stats.id}`, "_blank");
         return;
       }
       try {
-        const response = await fetch("https://polemicagame.com/rating/get-list?limit=1000");
-        const players: any[] = await response.json();
-        const player = players.find(
-          (p) => p.username?.toLowerCase() === username.toLowerCase(),
-        );
+        const player = await findRatingPlayer(username);
         if (player) {
           window.open(`https://polemicagame.com/profile/${player.user_id}`, "_blank");
+        } else {
+          window.alert("Профиль не найден: нет данных рейтинга в топ-1000.");
         }
       } catch (err) {
         log.error("player-notes", "loading player ID failed", err);
+        window.alert("Не удалось загрузить рейтинг. Попробуйте ещё раз позже.");
       }
     });
 
@@ -706,6 +817,7 @@ class PlayerNotesManager {
     statsButton.appendChild(tooltip);
 
     statsButton.addEventListener("mouseenter", () => {
+      void this.loadPlayerStats(username);
       const svg = statsButton.querySelector<SVGElement>("svg");
       if (svg) svg.style.stroke = themeColor;
       tooltip.style.visibility = "visible";
@@ -756,7 +868,7 @@ class PlayerNotesManager {
       </svg>
     `;
     const sync = () => {
-      btn.style.opacity = isPlayerFlipped(container as HTMLElement) ? "1" : "0.7";
+      this.syncRotateButton(btn, container);
     };
     btn.addEventListener("click", (e) => {
       e.preventDefault();
@@ -769,11 +881,17 @@ class PlayerNotesManager {
     return btn;
   }
 
+  private syncRotateButton(button: HTMLElement, container: Element): void {
+    const opacity = isPlayerFlipped(container as HTMLElement) ? "1" : "0.7";
+    if (button.style.opacity !== opacity) button.style.opacity = opacity;
+  }
+
   /** Добавить/убрать кнопку переворота в зависимости от настройки camera_rotate_enabled. */
   private ensureRotateButton(iconsGroup: Element, container: Element, username: string): void {
     const existing = iconsGroup.querySelector(`.${OWN.rotateButton}`);
     if (this.settings.camera_rotate_enabled) {
       if (!existing) iconsGroup.appendChild(this.createRotateButton(username, container));
+      else this.syncRotateButton(existing as HTMLElement, container);
     } else if (existing) {
       existing.remove();
     }
@@ -1119,19 +1237,11 @@ class PlayerNotesManager {
       const dataPromise = (async (): Promise<LastGameEntry[]> => {
         let userId: number | string | undefined;
         const stats = this.playerStats.get(key);
-        if (stats && stats.id) {
+        if (stats && !stats.ratingUnavailable && stats.id) {
           userId = stats.id;
         } else {
           try {
-            const response = await fetch(
-              "https://polemicagame.com/rating/get-list?limit=1000",
-            );
-            if (!response.ok) {
-              log.warn("player-notes", `rating API error: ${response.status}`);
-              return [];
-            }
-            const players: any[] = await response.json();
-            const player = players.find((p) => p.username?.toLowerCase() === key);
+            const player = await findRatingPlayer(username);
             if (!player) {
               log.warn("player-notes", `player ${username} not found in rating`);
               return [];

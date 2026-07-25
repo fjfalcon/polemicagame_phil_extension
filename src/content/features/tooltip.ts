@@ -159,6 +159,7 @@ let styleEl: HTMLStyleElement | null = null;
 const dotStates = new WeakMap<Element, DotState>();
 const processed = new WeakSet<Element>();
 const activeTooltips = new Set<HTMLDivElement>();
+let tooltipOwnerId = 0;
 
 function getPlayers(): MatchPlayer[] | null {
   return matchData?.players ?? matchData?.data?.players ?? null;
@@ -300,6 +301,7 @@ function enhanceTooltip(element: HTMLElement): void {
   dotStates.set(element, state);
 
   let tooltipTimeout: ReturnType<typeof setTimeout> | undefined;
+  const owner = `penalty-${++tooltipOwnerId}`;
 
   const removeTooltip = () => {
     if (state.tooltip) {
@@ -310,10 +312,21 @@ function enhanceTooltip(element: HTMLElement): void {
   };
 
   const onMouseEnter = () => {
+    clearTimeout(tooltipTimeout);
+    tooltipTimeout = undefined;
+    removeTooltip();
+    document
+      .querySelectorAll<HTMLDivElement>(`.penalty-tooltip[data-tooltip-owner="${owner}"]`)
+      .forEach((orphan) => {
+        activeTooltips.delete(orphan);
+        orphan.remove();
+      });
     const tooltip = createTooltip(
       originalTitle,
       element.classList.contains("best-move-dot"),
     );
+    tooltip.classList.add("penalty-tooltip");
+    tooltip.dataset.tooltipOwner = owner;
     document.body.appendChild(tooltip);
     activeTooltips.add(tooltip);
 
@@ -326,6 +339,7 @@ function enhanceTooltip(element: HTMLElement): void {
 
     tooltip.addEventListener("mouseenter", () => {
       clearTimeout(tooltipTimeout);
+      tooltipTimeout = undefined;
     });
 
     tooltip.addEventListener("mouseleave", () => {
