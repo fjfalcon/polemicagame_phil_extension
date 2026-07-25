@@ -193,6 +193,13 @@ src/
 19. Гонки узких окон: миграция заметок из двух контекстов одновременно;
     RMW-импорт всей карты; role-marker last-write-wins в окне дебаунса 400мс.
 20. nickname-lengths считает кодовые точки, а сайт, вероятно, UTF-16-юниты.
+21. camera-flip: когда draw-цикл сам снимает переворот при ре-рендере плитки
+    (!video.isConnected), кнопка поворота не переsync'ится — может остаться с
+    opacity «1» при снятом перевороте (косметика). → `camera-flip.ts:~97`,
+    `player-notes.ts:~884` (syncRotateButton).
+22. camera-flip: activeFlips — Map с сильной ссылкой на video; в фоновой
+    вкладке rAF заморожен, auto-cleanup не срабатывает до фокуса/unflipAll
+    (транзиентно). → `camera-flip.ts:19`.
 
 ## 7. Как аудитить этот проект
 
