@@ -207,8 +207,8 @@ let idleWatchdog: ReturnType<typeof setInterval> | null = null;
  */
 const IDLE_TIMEOUT_MS = 6 * 60 * 1000;
 
-function sendTwitchStatus(connected: boolean): void {
-  void sendRuntime({ type: "twitch_status", connected, channel: channelName });
+function sendTwitchStatus(connected: boolean, error?: string): void {
+  void sendRuntime({ type: "twitch_status", connected, channel: channelName, error });
 }
 
 function startIdleWatchdog(): void {
@@ -321,6 +321,10 @@ function scheduleReconnect(): void {
 function connectToTwitch(): void {
   if (!channelName) {
     log.debug(SCOPE, "no channel specified");
+    // Молчание здесь заставляло попап ждать 5с и врать «Нет ответа от
+    // страницы игры» — пользователь перезагружал вкладку вместо исправления
+    // имени канала (кириллица/мусор нормализуются в пустую строку).
+    sendTwitchStatus(false, "Некорректное имя канала — укажите имя латиницей");
     return;
   }
 

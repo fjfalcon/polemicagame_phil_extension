@@ -1311,6 +1311,10 @@ function startMatchRoute(matchId: string): void {
 
   routeDomUnsub = onDomChange(() => {
     if (routeReadyInterval !== null || !pendingGameData || activeMatchId !== matchId) return;
+    // URL уже мог смениться, а роутер (поллинг 500мс) ещё не среконсилил роут:
+    // без этого гейта enhance() выходил по несовпадению id, НЕ очищая pending,
+    // и каждый DOM-флеш окна навешивал новый setInterval(applyAutoHeight).
+    if ((location.pathname.split("/").pop() || "") !== matchId) return;
     const now = Date.now();
     if (now - lastPendingRetryAt < 500) return;
     lastPendingRetryAt = now;

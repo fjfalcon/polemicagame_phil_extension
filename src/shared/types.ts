@@ -120,6 +120,8 @@ export interface TwitchStatusMsg {
   type: "twitch_status";
   connected: boolean;
   channel: string;
+  /** Человекочитаемая причина, когда подключение невозможно (пустой канал и т.п.). */
+  error?: string;
 }
 
 /** popup → content: запрос длины ников (замена executeScript). */

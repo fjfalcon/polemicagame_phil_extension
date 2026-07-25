@@ -442,7 +442,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (twitchChannelName) twitchChannelName.value = items.twitch_channel_name;
     set("twitch_floating_panel_enabled", items.twitch_floating_panel_enabled);
     if (items.twitch_chat_enabled) {
-      void sendMessageToContentScript({ type: "twitch_get_status" });
+      // Тихий пробник: попап, открытый с чужой вкладки (YouTube и т.п.),
+      // не должен рисовать «⚠️ Откройте страницу игры» в twitch-статус.
+      void browser.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+        if (tab?.url?.includes("polemicagame.com")) {
+          void sendMessageToContentScript({ type: "twitch_get_status" });
+        }
+      });
     }
   });
 
@@ -596,7 +602,11 @@ document.addEventListener("DOMContentLoaded", () => {
           connect.disabled = false;
         }
         updateTwitchStatus(
-          status.connected ? `Подключено: ${status.channel}` : "Не подключен",
+          status.error
+            ? status.error
+            : status.connected
+              ? `Подключено: ${status.channel}`
+              : "Не подключен",
           status.connected,
         );
         return { received: true };

@@ -112,6 +112,25 @@ async function cleanupStaleContentLogs(): Promise<void> {
       })
       .map(([key]) => key);
     if (stale.length) await browser.storage.local.remove(stale);
+
+    // Потолок на число сессионных ключей ВНУТРИ суток: марафонный день с
+    // десятками перезагрузок не должен приближаться к квоте local (она общая
+    // с заметками). Оставляем 8 самых свежих чужих ключей + свой.
+    const survivors = Object.entries(all)
+      .filter(
+        ([key, value]) =>
+          key.startsWith(CONTENT_LOG_PREFIX) &&
+          key !== STORAGE_KEY &&
+          !stale.includes(key) &&
+          Array.isArray(value),
+      )
+      .map(([key, value]) => ({
+        key,
+        last: Math.max(0, ...(value as Entry[]).map((e) => (typeof e.t === "number" ? e.t : 0))),
+      }))
+      .sort((a, b) => b.last - a.last);
+    const overflow = survivors.slice(8).map((s) => s.key);
+    if (overflow.length) await browser.storage.local.remove(overflow);
   } catch {
     /* недоступно — следующая сессия попробует снова */
   }
@@ -141,6 +160,15 @@ async function primeFromStorage(): Promise<void> {
 async function doFlush(): Promise<void> {
   flushTimer = null;
   if (!dirty) return;
+  // Гейт по persist и ЗДЕСЬ: ранний log.info("booted") успевал запланировать
+  // флеш до того, как асинхронный setPersist(false) долетал из настроек, — и
+  // каждая загрузка страницы оставляла новый ключ content-<id> даже у
+  // пользователей с выключенным логированием. Ключи копились сутками и
+  // выедали квоту storage.local, общую с заметками.
+  if (!persist) {
+    dirty = false;
+    return;
+  }
   if (!primed) {
     priming ??= primeFromStorage();
     await priming;
@@ -192,7 +220,8 @@ export const log = {
       clearTimeout(flushTimer);
       flushTimer = null;
     }
-    dirty = true;
+    // Не форсируем dirty: при persist=false record() ничего не планировал,
+    // и pagehide не должен создавать ключ «в обход» выключенного логирования.
     void doFlush();
   },
   /** Записи текущего контекста (в памяти). */
