@@ -560,9 +560,9 @@ function addBestMoveIndicators(table: HTMLElement, gameData: any): void {
         const votedDay = shotNight === null ? findVotedDay(playerPosition, gameData) : null;
 
         if (shotNight !== null) {
-          addDotToCell(table, playerPosition, "night", shotNight, player.guess, gameData);
+          addDotToCell(table, playerPosition, "night", shotNight, player.guess);
         } else if (votedDay !== null) {
-          addDotToCell(table, playerPosition, "day", votedDay, player.guess, gameData);
+          addDotToCell(table, playerPosition, "day", votedDay, player.guess);
         }
       }
     }
@@ -577,7 +577,6 @@ function addDotToCell(
   phaseType: "night" | "day",
   phaseNumber: number,
   guessData: any,
-  gameData: any,
 ): void {
   const rows = table.querySelectorAll<HTMLElement>(SITE.statsRow);
   rows.forEach((row) => {
@@ -598,61 +597,16 @@ function addDotToCell(
         const dot = document.createElement("div");
         dot.className = "best-move-dot";
 
-        const tooltip = document.createElement("div");
-        tooltip.className = "best-move-tooltip";
+        // Контент — в title: тултип-фича вынесет его в body с position:fixed,
+        // как у штрафов. Прежний sibling-тултип (absolute внутри ячейки)
+        // срезался границей строки и накрывался строками Итог/MMR.
+        const lines = ["Лучший ход"];
+        if (guessData.mafs?.length) lines.push(`Черные: ${guessData.mafs.join(" ")}`);
+        if (guessData.civs?.length) lines.push(`Мирные: ${guessData.civs.join(" ")}`);
+        if (guessData.vice !== undefined) lines.push(`Руль: ${guessData.vice}`);
+        dot.title = lines.join("\n");
 
-        const content = document.createElement("div");
-        content.className = "tooltip-content";
-
-        if (guessData.mafs && guessData.mafs.length > 0) {
-          const mafDiv = document.createElement("div");
-          mafDiv.className = "tooltip-row mafs";
-          mafDiv.innerHTML = `
-            <span class="role-label">Черные</span>
-            <span class="numbers">${guessData.mafs
-              .map((pos: any) => `<span class="number">${escapeHtml(String(pos))}</span>`)
-              .join("")}</span>
-          `;
-          content.appendChild(mafDiv);
-        }
-
-        if (guessData.civs && guessData.civs.length > 0) {
-          const civDiv = document.createElement("div");
-          civDiv.className = "tooltip-row civs";
-          civDiv.innerHTML = `
-            <span class="role-label">Мирные</span>
-            <span class="numbers">${guessData.civs
-              .map((pos: any) => `<span class="number">${escapeHtml(String(pos))}</span>`)
-              .join("")}</span>
-          `;
-          content.appendChild(civDiv);
-        }
-
-        if (guessData.vice !== undefined) {
-          // Роль угаданного берём из ДАННЫХ матча. Раньше она угадывалась по
-          // CSS-классам голосовавших в первой попавшейся ячейке этого игрока —
-          // «Руль» красился как мафия, если мафиозо голосовал ПРОТИВ него.
-          const vicePlayer = (gameData.data?.players || []).find(
-            (p: any) => p.position === guessData.vice,
-          );
-          let roleClass = "civs";
-          if (vicePlayer?.role === 0 || vicePlayer?.role === 1) roleClass = "mafs";
-          else if (vicePlayer?.role === 3) roleClass = "sheriff";
-
-          const viceDiv = document.createElement("div");
-          viceDiv.className = `tooltip-row ${roleClass}`;
-          viceDiv.innerHTML = `
-            <span class="role-label">Руль</span>
-            <span class="numbers"><span class="number">${escapeHtml(
-              String(guessData.vice),
-            )}</span></span>
-          `;
-          content.appendChild(viceDiv);
-        }
-
-        tooltip.appendChild(content);
         playerCell.appendChild(dot);
-        playerCell.appendChild(tooltip);
       }
     }
   });

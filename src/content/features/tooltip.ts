@@ -216,21 +216,32 @@ function createTooltip(content: string, isBestMove: boolean): HTMLDivElement {
   tooltip.className = "enhanced-tooltip";
 
   if (isBestMove) {
-    const match = content.match(/Лучший ход: (.+)/);
-    if (!match) return tooltip;
-
-    const numbers = match[1].split(/,\s*/).map((n) => n.trim());
-
+    // Многострочный формат из match-stats (8.1.30): «Лучший ход» +
+    // строки «Черные: 1 6» / «Мирные: 3» / «Руль: 7». Номера красятся по
+    // РЕАЛЬНОЙ роли игрока из данных матча (единая палитра).
+    const lines = content.split("\n").filter(Boolean);
+    const rows = lines
+      .slice(1)
+      .map((line) => {
+        const m = line.match(/^([^:]+):\s*(.+)$/);
+        if (!m) return "";
+        const label = m[1];
+        const nums = m[2].split(/[\s,]+/).filter(Boolean);
+        const numHtml = nums
+          .map(
+            (num) =>
+              `<span style="color: ${escapeHtml(getRoleColor(num))}; background: rgba(255,255,255,.06); border-radius: 5px; padding: 1px 7px; margin-left: 4px;">${escapeHtml(num)}</span>`,
+          )
+          .join("");
+        return `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:3px 0;">
+          <span style="color: rgba(255,255,255,.75); font-size: 13px;">${escapeHtml(label)}</span>
+          <span>${numHtml}</span>
+        </div>`;
+      })
+      .join("");
     tooltip.innerHTML = `
-      <div class="enhanced-tooltip-title">Лучший ход</div>
-      <div class="enhanced-tooltip-content">
-        ${numbers
-          .map((num, idx) => {
-            const color = getRoleColor(num);
-            return `<span style="color: ${escapeHtml(color)}">${escapeHtml(num)}</span>${idx < numbers.length - 1 ? ", " : ""}`;
-          })
-          .join("")}
-      </div>
+      <div class="enhanced-tooltip-title">${escapeHtml(lines[0] || "Лучший ход")}</div>
+      ${rows || '<div class="enhanced-tooltip-content">—</div>'}
     `;
   } else {
     const lines = content.split("\n");
