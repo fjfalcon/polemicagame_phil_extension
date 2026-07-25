@@ -333,7 +333,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           players,
           "",
           `Выставление №${player.position}`,
-          "Выс:",
+          "Выс",
           "Выставление",
         );
       }
