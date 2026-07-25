@@ -61,12 +61,17 @@ async function reconcileObsConnection(probe = false, ignorePersistedBlock = fals
     return;
   }
 
-  await setObsWatchdog(true);
   if (obs.isConnectedTo(s.obs_host, s.obs_password)) {
+    await setObsWatchdog(true);
     if (!probe || (await obs.verifyConnection())) return;
   }
-  if (obs.isAutoReconnectBlocked()) return;
-  if (!ignorePersistedBlock && (await isAutoReconnectBlocked())) return;
+  // Блок реконнекта (неверный пароль/версия): без соединения будить SW
+  // каждую минуту бессмысленно — гасим watchdog, а не ставим его до проверки.
+  if (obs.isAutoReconnectBlocked() || (!ignorePersistedBlock && (await isAutoReconnectBlocked()))) {
+    await setObsWatchdog(false);
+    return;
+  }
+  await setObsWatchdog(true);
   await obs.connect(s.obs_host, s.obs_password);
 }
 
@@ -86,21 +91,31 @@ async function handleObsCommand(cmd: ObsCommandMsg["command"], data: ObsCommandM
           obs.disconnect();
         }
         return true;
-      case "get_status":
-        return obs.getStatus();
-      case "set_scene":
-        return obs.setCurrentScene(data?.sceneName ?? "");
-      case "get_scenes":
-        return obs.requestSceneList();
       default:
         throw new Error(`Unknown OBS command: ${cmd}`);
     }
   });
 }
 
+async function handleObsQuery(cmd: ObsCommandMsg["command"], data: ObsCommandMsg["data"]) {
+  // Лёгкие операции НЕ сериализуются с reconcile/connect: probe watchdog'а
+  // держит очередь до 10-20с, и get_status попапа / set_scene автомода
+  // стояли бы за ним — «сцена переключилась через 15 секунд после фазы».
+  switch (cmd) {
+    case "get_status":
+      return obs.getStatus();
+    case "set_scene":
+      return obs.setCurrentScene(data?.sceneName ?? "");
+    case "get_scenes":
+      return obs.requestSceneList();
+    default:
+      return handleObsCommand(cmd, data);
+  }
+}
+
 onMessage((msg: ExtMessage, sender) => {
   if ("type" in msg && msg.type === "obs_command") {
-    return handleObsCommand(msg.command, msg.data)
+    return handleObsQuery(msg.command, msg.data)
       .then((data) => ({ success: true, data }))
       .catch((e: Error) => ({ success: false, error: e.message }));
   }
@@ -159,7 +174,18 @@ async function runUpgradeMigrations(): Promise<void> {
 browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === OBS_WATCHDOG_ALARM) restoreObsConnection(true);
 });
-browser.runtime.onStartup.addListener(() => restoreObsConnection());
+browser.runtime.onStartup.addListener(() => {
+  // Старт браузера сбрасывает persisted-блоки: пользователь мог исправить
+  // пароль/версию НА СТОРОНЕ OBS — без сброса расширение никогда не
+  // подключилось бы само (флаги переживают перезапуск). Ручное «Отключиться»
+  // тоже считаем сессионным намерением — прежний контракт onStartup
+  // всегда переподключался.
+  void enqueueObs(async () => {
+    await setManualDisconnect(false);
+    await obs.allowAutoReconnect();
+    await reconcileObsConnection();
+  }).catch((e) => log.error("background", "startup OBS restore failed", e));
+});
 browser.runtime.onInstalled.addListener(() => {
   void runUpgradeMigrations();
   restoreObsConnection();
@@ -191,7 +217,12 @@ onSettingsChanged((patch) => {
         await setManualDisconnect(false);
         await obs.allowAutoReconnect();
       }
-      if ("obs_host" in patch || "obs_password" in patch) await obs.allowAutoReconnect();
+      if ("obs_host" in patch || "obs_password" in patch) {
+        // Правка кредов снимает и ручную паузу: пользователь исправил пароль
+        // и ждёт подключения — held manual-disconnect тут только мешает.
+        await obs.allowAutoReconnect();
+        await setManualDisconnect(false);
+      }
       await reconcileObsConnection(false, true);
     }).catch((e) => log.error("background", "OBS settings update failed", e));
   }

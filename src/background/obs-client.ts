@@ -241,14 +241,14 @@ export class ObsClient {
 
   private handleConnectionLost(): void {
     log.warn("obs", "connection lost (heartbeat timeout)");
-    try {
-      this.socket?.close(4000, "Heartbeat timeout");
-    } catch {
-      this.teardownSocket();
-      void this.saveConnectionState(false);
-      this.notifyAll("obs_disconnected");
-      this.attemptReconnect();
-    }
+    // Немедленный teardown, не дожидаясь onclose: на мёртвом TCP браузер
+    // отдаёт close-событие с задержкой, и всё это окно панель врала бы
+    // «Подключено». (Прежний вариант держал cleanup в catch-ветке, куда
+    // close(4000) никогда не попадает — она была мертва.)
+    this.closeCurrentSocket("Heartbeat timeout");
+    void this.saveConnectionState(false);
+    this.notifyAll("obs_disconnected");
+    this.attemptReconnect();
   }
 
   disconnect(): void {

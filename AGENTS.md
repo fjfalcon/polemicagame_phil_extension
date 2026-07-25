@@ -121,6 +121,7 @@ src/
 | local | roleMarks | role-marker (метки «мой read», ключи g:<id> / l:<состав>) |
 | local | polemica:logs:{content,bg,popup,ext} | log.ts (CAP 600/контекст) |
 | local | obs_connection_state, obs_auto_scene_state | obs-client/obs-panel |
+| local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |
 | localStorage страницы | fp:*, polemica:update*, polemica:loglevel/buflevel | панели/update-notify/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник |
 
@@ -130,17 +131,14 @@ src/
 Перед работой перепроверь — код живой.
 
 ### Высокий приоритет
-1. **OBS не переживает выгрузку service worker (Chrome).** Нет chrome.alarms;
-   heartbeat setInterval(30с) = idle-порогу SW; реконнект-таймер умирает с SW;
-   восстановление только onStartup/onInstalled. Стример теряет OBS посреди
-   эфира, панель врёт «Подключено». → `src/background/obs-client.ts`,
-   `src/background/index.ts`. Решение: chrome.alarms (permission!) +
-   восстановление при пробуждении SW + проверка timestamp в obs_connection_state.
-2. **SPA-навигация не отслеживается вообще** (нет popstate/pushState-хука).
-   Следствия: match-stats не включается при переходе НА матч без F5;
-   `body[data-page-type=match]` и глобальный CSS матча остаются после ухода
-   (скрывают #stop-иконку роли уже в игровой комнате!). → `src/content/index.ts`
-   (нужен роутер), `match-stats.ts:1207+`, `player-notes.ts` (addMatchPageStyles).
+1. ✅ ЗАКРЫТО в 8.1.25 (opencode + доводка): chrome.alarms-watchdog,
+   reconcile при пробуждении SW, persisted-блоки со сбросом на onStartup.
+   Остаток: patch history в SPA-роутере — мёртвый код в isolated world
+   (реально работают polling 500мс + popstate), можно упростить.
+2. ✅ ЗАКРЫТО в 8.1.25: единый URL-роутер (content/index.ts), route-sync у
+   match-stats/player-notes, AbortController в match-data. Остаток:
+   pendingGameData теряется, если Vue рендерит матч дольше 10с (give-up без
+   ретрая) — узкое окно «нет статистики до F5» на медленной сети.
 3. **Статистика «???» навсегда** для игрока вне активных игр (нет фолбэка
    через rating/get-list в loadPlayerStats) и молчаливая кнопка для игрока вне
    топ-1000 (limit=1000 без пагинации). Ядро главной фичи.
