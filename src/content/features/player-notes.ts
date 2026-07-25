@@ -429,10 +429,16 @@ class PlayerNotesManager {
 
   // ─────────── Заметки (storage.local, см. @core/notes-store) ───────────
 
+  /** true = чтение заметок упало; любые записи заблокированы (иначе пустая
+   *  карта в памяти при следующем save стёрла бы все заметки на диске). */
+  private notesReadOnly = false;
+
   private async loadNotes(): Promise<void> {
-    const { notes, customTags } = await loadNotesFromStore();
+    const { notes, customTags, loadFailed } = await loadNotesFromStore();
     this.notes = notes;
     this.customTags = customTags;
+    this.notesReadOnly = loadFailed === true;
+    if (this.notesReadOnly) log.warn("player-notes", "notes load failed — saves blocked");
     log.debug("player-notes", "notes loaded", Object.keys(this.notes).length);
   }
 
@@ -442,6 +448,10 @@ class PlayerNotesManager {
 
   /** Возвращает false, если запись не удалась — интерфейс обязан это показать. */
   private async saveNotes(): Promise<boolean> {
+    // Никакого авто-ресинка здесь: вызывающий уже мутировал this.notes, и
+    // перезагрузка с диска затёрла бы только что введённую заметку, вернув
+    // при этом true. Честный отказ — модалка покажет «Не сохранено!».
+    if (this.notesReadOnly) return false;
     return await saveNotesToStore(this.notes);
   }
 
@@ -511,13 +521,23 @@ class PlayerNotesManager {
     }
     if (!best) return;
 
+    // Откат по снапшоту, а НЕ ресинк через loadNotes(): при двойном сбое
+    // storage loadNotes возвращает ПУСТУЮ карту — присвоив её, следующее
+    // успешное сохранение записало бы пустоту поверх всех заметок.
+    const snapshot = new Map<string, NoteRecord | string | undefined>();
+    snapshot.set(key, this.notes[key]);
+    for (const nk of nickKeys) snapshot.set(nk, this.notes[nk]);
+
     this.notes[key] = { ...best, nick: username };
     for (const nk of nickKeys) delete this.notes[nk];
     if (await this.saveNotes()) {
       log.debug("player-notes", "note migrated to id key", username, key);
     } else {
-      // Запись не удалась — не оставляем память рассинхронённой с диском.
-      await this.loadNotes();
+      for (const [k, v] of snapshot) {
+        if (v === undefined) delete this.notes[k];
+        else this.notes[k] = v;
+      }
+      return;
     }
     this.refreshNoteIndicators();
     this.refreshPlayerTags();

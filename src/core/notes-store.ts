@@ -160,7 +160,12 @@ async function migrateFromSync(
 }
 
 /** Прочитать заметки и палитру меток (с разовым переносом из sync). */
-export async function loadNotes(): Promise<{ notes: NotesMap; customTags: string[] }> {
+export async function loadNotes(): Promise<{
+  notes: NotesMap;
+  customTags: string[];
+  /** true = чтение упало и notes ПУСТАЯ НЕ ПОТОМУ, что заметок нет. Писать поверх НЕЛЬЗЯ. */
+  loadFailed?: boolean;
+}> {
   try {
     const local = (await browser.storage.local.get({
       [NOTES_KEY]: {},
@@ -175,7 +180,9 @@ export async function loadNotes(): Promise<{ notes: NotesMap; customTags: string
     return { notes, customTags };
   } catch (e) {
     log.error("notes", "load failed", e);
-    return { notes: {}, customTags: [] };
+    // loadFailed — обязательный гейт для писателей: запись «пустой» карты
+    // поверх непрочитанного диска = потеря всех заметок.
+    return { notes: {}, customTags: [], loadFailed: true };
   }
 }
 

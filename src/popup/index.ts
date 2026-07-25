@@ -184,7 +184,11 @@ document.addEventListener("DOMContentLoaded", () => {
   if (exportBtn) {
     exportBtn.addEventListener("click", async () => {
       try {
-        const { notes } = await loadNotes();
+        const { notes, loadFailed } = await loadNotes();
+        if (loadFailed) {
+          showPopupToast("Не удалось прочитать заметки — попробуйте позже", "error");
+          return;
+        }
         const count = Object.keys(notes).length;
         if (count === 0) {
           showPopupToast("Заметок пока нет — нечего выгружать", "error");
@@ -230,7 +234,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // mergeNotes понимает и старый строковый формат заметок — прежний импорт
         // молча выбрасывал такие записи и всё равно рисовал зелёный тост.
-        const { notes } = await loadNotes();
+        const { notes, loadFailed } = await loadNotes();
+        if (loadFailed) {
+          // Мерж в непрочитанную (пустую) карту с последующей записью стёр бы
+          // все существующие заметки, заменив их содержимым файла.
+          showPopupToast("Не удалось прочитать текущие заметки — импорт отменён", "error");
+          return;
+        }
         const { merged, added, replaced } = mergeNotes(notes, incoming);
         if (!added && !replaced) {
           showPopupToast("Все заметки из файла уже есть");
