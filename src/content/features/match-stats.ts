@@ -90,6 +90,12 @@ function enhance(gameData: any): void {
   // таблицы, пережившее переход на другой матч, раньше давало дубликаты строк
   // и вставку данных ЧУЖОГО матча в свежеоткрытую таблицу.
   const matchIdAtStart = location.pathname.split("/").pop() || "";
+  // Данные должны принадлежать ЭТОЙ странице: кэш getLastGameData при
+  // перевключении тумблера после SPA-перехода приносил матч A на страницу B.
+  if (gameData?.id && String(gameData.id) !== matchIdAtStart) {
+    log.debug(SCOPE, "cached data is for another match, skip", gameData.id, matchIdAtStart);
+    return;
+  }
   removeEnhancements();
 
   const header = document.querySelector<HTMLElement>(SITE.statsHeader);
@@ -492,7 +498,9 @@ function findVotedDay(playerPosition: number, gameData: any): number | null {
 
   const dayVotes: Record<number, number> = {};
   votes.forEach((vote: any) => {
-    if (vote.candidate === playerPosition && vote.num === 1) {
+    // !num: основной тур — это num=0 (см. processGamePhases); здесь оставалась
+    // старая семантика num===1, т.е. день искался по переголосовке.
+    if (vote.candidate === playerPosition && !vote.num) {
       dayVotes[vote.day] = (dayVotes[vote.day] || 0) + 1;
     }
   });
@@ -1244,9 +1252,11 @@ export const matchStatsFeature: Feature = {
 
   update(ctx: FeatureContext): void {
     settings = ctx.settings;
-    // Если статистика выключена настройкой — снимаем добавленные элементы.
+    // Если статистика выключена настройкой — снимаем добавленные элементы
+    // и возвращаем заголовок сайта (раньше он оставался нашим).
     if (!statsEnabled()) {
       removeEnhancements();
+      restoreHeader();
     }
   },
 

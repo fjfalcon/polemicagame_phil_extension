@@ -56,6 +56,8 @@ let roleHideKey = "KeyD";
 let onRoleMenuClick: ((e: MouseEvent) => void) | null = null;
 let onUserClick: ((e: Event) => void) | null = null;
 let webcamDisabled = false;
+/** 10 кликов не выключили камеру — до следующего лобби не пытаемся. */
+let webcamGaveUp = false;
 let webcamClickInterval: ReturnType<typeof setInterval> | null = null;
 
 // Скрытие/показ роли
@@ -127,10 +129,14 @@ function clickAcceptButtons() {
   // Кнопки внутри стартового окна не трогаем — у clickStartGameButton свой
   // лимит попыток и бэкофф, и обходить их отсюда нельзя (окно настроек камеры —
   // то же самое окно).
+  // Кнопка должна лежать в контексте приёма игры (.p-play*/profile-accept):
+  // точная «Подтвердить» — типовая подпись ЛЮБОГО диалога сайта, и без гейта
+  // по контейнеру расширение подтверждало чужие диалоги на любой странице.
   const readyButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter(
     (btn) =>
       (TEXT.acceptGameButton as readonly string[]).includes(norm(btn)) &&
-      !btn.closest(SITE.welcomeModal),
+      !btn.closest(SITE.welcomeModal) &&
+      !!btn.closest('[class*="p-play"], [class*="profile-accept"], [class*="accept"]'),
   );
 
   let gameAcceptDivs: HTMLElement[] = [];
@@ -173,6 +179,12 @@ function clickAcceptButtons() {
   }
 
   gameAcceptDivs = Array.from(new Set(gameAcceptDivs));
+  // Оставляем только самые глубокие совпадения: textContent наследуется, и в
+  // список попадали родитель И дитя — оба получали клик (дедуп 8.1.22 закрыл
+  // это только для findAcceptTextElements, а div-ветку — нет).
+  gameAcceptDivs = gameAcceptDivs.filter(
+    (el) => !gameAcceptDivs.some((other) => other !== el && el.contains(other)),
+  );
 
   // Клик по обычным кнопкам
   readyButtons.forEach((button) => {
@@ -509,6 +521,13 @@ function scheduleNightRoleAutoShow(delayMs: number) {
   log.debug(SCOPE, "night-show scheduled in", delayMs);
   pendingNightRoleShowTimer = setTimeout(() => {
     pendingNightRoleShowTimer = null;
+
+    // Игрок только что сам скрыл/показал роль (D-D «глянул и спрятал») —
+    // не переигрываем его решение принудительным показом.
+    if (Date.now() - lastManualRoleActionAt < 2000) {
+      log.debug(SCOPE, "night-show skipped: recent manual action");
+      return;
+    }
     log.debug(SCOPE, "night-show fire");
 
     // 1) Убираем CSS-скрытие
@@ -523,6 +542,28 @@ function scheduleNightRoleAutoShow(delayMs: number) {
     if (nativeHidden) dispatchNativeRoleToggle();
 
     trackedRolesVisible = true;
+
+    // Верификация показа: синтетический D мог съесть dBlocker подмены роли,
+    // или элементы ещё не смонтированы. Раньше счётчик попыток нигде не
+    // инкрементировался (только обнулялся) — ретрай был мёртв со времён legacy.
+    setTimeout(() => {
+      const el = getPrimaryOwnRoleElement();
+      const stillHidden = el ? getRoleUseHref(el).includes("#stop") : false;
+      if (
+        stillHidden &&
+        cfg.rolePhaseSwitch &&
+        lastDetectedRolePhase === "night" &&
+        Date.now() - lastManualRoleActionAt > 2000
+      ) {
+        nightAutoShowAttempts++;
+        if (nightAutoShowAttempts < 5) {
+          log.debug(SCOPE, "night-show retry", nightAutoShowAttempts);
+          scheduleNightRoleAutoShow(1000);
+        }
+      } else {
+        nightAutoShowAttempts = 0;
+      }
+    }, 500);
   }, delayMs);
 }
 
@@ -747,15 +788,17 @@ function clickStartGameButton() {
 function findWebcamButton(): HTMLElement | null {
   const candidates = Array.from(document.querySelectorAll<HTMLElement>(SITE.webcamButton));
   if (candidates.length === 0) return null;
-  if (candidates.length === 1) return candidates[0];
   const looksLikeCamera = (el: HTMLElement): boolean => {
     const use = el.querySelector("use");
     const href = (use?.getAttribute("href") || use?.getAttribute("xlink:href") || "").toLowerCase();
     const label = `${el.getAttribute("title") || ""} ${el.getAttribute("aria-label") || ""}`.toLowerCase();
     return /video|camera|cam\b|веб|камер/.test(`${href} ${label}`);
   };
+  // Эвристика применяется ВСЕГДА: у кнопки камеры и шестерёнки настроек один
+  // CSS-класс, и единственный кандидат раньше возвращался без проверки — если
+  // в DOM была только шестерёнка, расширение жало её до 10 раз подряд.
   const match = candidates.find(looksLikeCamera);
-  if (!match) log.debug(SCOPE, "several candidate buttons, none looks like a camera — skip");
+  if (!match) log.debug(SCOPE, "no candidate looks like a camera — skip");
   return match ?? null;
 }
 
@@ -768,12 +811,22 @@ function isInLobby(): boolean {
 }
 
 function disableWebcams() {
-  if (!isInLobby()) return;
-  if (webcamDisabled) return;
+  if (!isInLobby()) {
+    // Вышли из лобби — сброс флагов: раньше webcamDisabled жил до disable(),
+    // и в следующей игре той же вкладки камера не отключалась.
+    webcamDisabled = false;
+    webcamGaveUp = false;
+    return;
+  }
+  if (webcamDisabled || webcamGaveUp) return;
   if (cfg.disableWebcam) {
     log.debug(SCOPE, "webcam disabling forbidden by setting");
     return;
   }
+  // Интервал уже работает — не перезапускаем: каждый повторный вызов (тик 1с
+  // + каждый батч мутаций) обнулял clickCount, превращая лимит 10 кликов
+  // в бесконечные 5 кликов/с.
+  if (webcamClickInterval) return;
 
   const webcamButton = findWebcamButton();
   if (!webcamButton) return;
@@ -788,11 +841,13 @@ function disableWebcams() {
     let clickCount = 0;
     const maxClicks = 10;
 
-    if (webcamClickInterval) clearInterval(webcamClickInterval);
     webcamClickInterval = setInterval(() => {
       if (clickCount >= maxClicks) {
         if (webcamClickInterval) clearInterval(webcamClickInterval);
         webcamClickInterval = null;
+        // Не помогло за 10 кликов — сдаёмся до следующего лобби, а не
+        // начинаем заново с нулевым счётчиком.
+        webcamGaveUp = true;
         return;
       }
       const currentButton = findWebcamButton();
@@ -817,14 +872,23 @@ function disableWebcams() {
 
 // ─────────────────────────── хоткей D/В и меню «показать/скрыть роли» ───────────────────────────
 
-function handleRoleKey() {
+function handleRoleKey(e?: KeyboardEvent) {
   if (Date.now() < suppressRoleKeyHandlingUntil) return;
 
   lastManualRoleActionAt = Date.now();
 
   // Если роли скрыты CSS — убираем CSS, показываем роли
   if (isRolesHiddenByCSS()) {
+    // Гасим событие для сайта: иначе его собственный toggle срабатывал
+    // ОДНОВРЕМЕННО с нашим снятием CSS — роль оставалась скрытой нативно,
+    // а trackedRolesVisible становился true. Со второго нажатия — полная
+    // инверсия учёта (роль видна, расширение уверено, что скрыта), и все
+    // авто-решения дальше принимались по перевёрнутому состоянию.
+    e?.stopPropagation();
     showAllRolesCSS();
+    // Под CSS роль могла быть скрыта и нативно — досылаем D сайту сами.
+    const primary = getPrimaryOwnRoleElement();
+    if (getRoleUseHref(primary).includes("#stop")) dispatchNativeRoleToggle();
     trackedRolesVisible = true;
     return;
   }
@@ -948,6 +1012,7 @@ function applyConfig(ctx: FeatureContext) {
     }
   }
 
+  const prevPhaseSwitch = cfg.rolePhaseSwitch;
   cfg = {
     autoAccept: s.auto_accept_enabled === true,
     skipStartScreen: s.skip_start_screen_enabled !== false,
@@ -956,6 +1021,14 @@ function applyConfig(ctx: FeatureContext) {
     // Фазовое переключение работает только при включённом авто-скрытии
     rolePhaseSwitch: s.auto_hide_roles_enabled === true && s.role_phase_auto_switch_enabled === true,
   };
+
+  // Выключили фазовое переключение — гасим уже взведённый ночной таймер:
+  // раньше он переживал выключение (проверка настройки жила в пути, который
+  // сам этой настройкой гейтится) и через ≤3с показывал роль вопреки тумблеру.
+  if (prevPhaseSwitch && !cfg.rolePhaseSwitch && pendingNightRoleShowTimer) {
+    clearTimeout(pendingNightRoleShowTimer);
+    pendingNightRoleShowTimer = null;
+  }
 
   // Автопринятие: тумблер
   if (cfg.autoAccept) enableAutoAccept();

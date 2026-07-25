@@ -199,6 +199,8 @@ class ObsPanel extends FloatingPanel {
 let panel: ObsPanel | null = null;
 
 let autoModeEnabled = false;
+/** Показ плавающей панели (obs_floating_panel_enabled). Автомод от неё не зависит. */
+let panelEnabled = false;
 let dayScene = "";
 let nightScene = "";
 
@@ -798,6 +800,7 @@ function syncPanelVisibilityWithGameState(): void {
 }
 
 function doShow(): void {
+  if (!panelEnabled) return;
   if (!hasActiveGameInterface()) return;
 
   if (!panel) {
@@ -920,9 +923,15 @@ function applyAutoSettings(ctx: FeatureContext): void {
 
 export const obsPanelFeature: Feature = {
   id: "obs-panel",
-  settingKey: "obs_floating_panel_enabled",
+  // null: раньше здесь стоял "obs_floating_panel_enabled" (дефолт false) —
+  // и ВЕСЬ автомод день/ночь, живущий внутри этой фичи, не запускался без
+  // включённой плавающей панели. Попап при этом давал настроить сцены,
+  // которые никогда не переключались. Теперь фича активна всегда, а панель
+  // и мониторинг гейтятся каждый своей настройкой.
+  settingKey: null,
 
   async enable(ctx) {
+    panelEnabled = ctx.settings.obs_floating_panel_enabled === true;
     applyAutoSettings(ctx);
 
     // Приём событий OBS из background.
@@ -937,8 +946,8 @@ export const obsPanelFeature: Feature = {
       return undefined;
     });
 
-    // Мониторинг появления/исчезновения игрового UI.
-    startGameUiMonitoring();
+    // Мониторинг появления/исчезновения игрового UI (нужен только панели).
+    if (panelEnabled) startGameUiMonitoring();
 
     // Показываем панель если уже на странице игры.
     if (hasActiveGameInterface()) doShow();
@@ -957,6 +966,17 @@ export const obsPanelFeature: Feature = {
   },
 
   update(ctx) {
+    const nextPanelEnabled = ctx.settings.obs_floating_panel_enabled === true;
+    if (nextPanelEnabled !== panelEnabled) {
+      panelEnabled = nextPanelEnabled;
+      if (panelEnabled) {
+        startGameUiMonitoring();
+        syncPanelVisibilityWithGameState();
+      } else {
+        stopGameUiMonitoring();
+        doHide();
+      }
+    }
     applyAutoSettings(ctx);
   },
 

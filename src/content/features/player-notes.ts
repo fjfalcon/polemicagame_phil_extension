@@ -99,6 +99,30 @@ const VERSION = NOTES_VERSION;
 /** TTL кэшей статистики: за игровой вечер MMR меняется каждой игрой. */
 const STATS_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * Один общий запрос списка активных игр на всех игроков. Раньше in-flight
+ * дедуп ключевался ником: вход в игру с 10 игроками давал 10 ПАРАЛЛЕЛЬНЫХ
+ * fetch полного /api/games ещё до первого наведения мыши.
+ */
+let activeGamesPromise: Promise<any[]> | null = null;
+let activeGamesFetchedAt = 0;
+const ACTIVE_GAMES_TTL_MS = 15_000;
+
+function fetchActiveGames(): Promise<any[]> {
+  const now = Date.now();
+  if (activeGamesPromise && now - activeGamesFetchedAt < ACTIVE_GAMES_TTL_MS) {
+    return activeGamesPromise;
+  }
+  activeGamesFetchedAt = now;
+  activeGamesPromise = fetch("https://game.polemicagame.com/api/games")
+    .then((r) => r.json() as Promise<any[]>)
+    .catch((e) => {
+      activeGamesPromise = null; // ошибку не кэшируем
+      throw e;
+    });
+  return activeGamesPromise;
+}
+
 const THEME_COLORS: Record<string, string> = {
   default: "rgb(66, 103, 178)",
   pink: "#ec4899",
@@ -239,10 +263,12 @@ class PlayerNotesManager {
       try {
         if (!this.settings.disable_webcam_clicks) return;
         const target = e.target as HTMLElement | null;
+        // Класс .button.preset-1.small.desktop-version исключён из списка:
+        // он общий у кнопки камеры И шестерёнки настроек — guard глушил
+        // клики по настройкам (в т.ч. синтетические клики F8-паузы).
+        // Камеру покрывают video-селекторы.
         const isWebcamArea =
-          target?.closest?.(
-            ".player__video-wrapper, .player__video, .button.preset-1.small.desktop-version, .video-control",
-          ) ?? null;
+          target?.closest?.(".player__video-wrapper, .player__video, .video-control") ?? null;
         if (isWebcamArea) {
           e.stopImmediatePropagation();
           e.stopPropagation();
@@ -399,8 +425,7 @@ class PlayerNotesManager {
     this.statsInFlight.add(key);
 
     try {
-      const response = await fetch("https://game.polemicagame.com/api/games");
-      const games: any[] = await response.json();
+      const games: any[] = await fetchActiveGames();
 
       let player: any = null;
       for (const game of games) {

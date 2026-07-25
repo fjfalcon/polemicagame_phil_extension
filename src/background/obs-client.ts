@@ -59,7 +59,15 @@ export class ObsClient {
       } catch {
         /* уже закрыт */
       }
-      this.socket = null;
+      // Полный teardown, а не только замена ссылки: без сброса isConnected
+      // новый сокет доходил до Identified, но ветка готовности гейтится
+      // !isConnected — промис connect() никогда не резолвился, connecting
+      // застревал в true, и ВСЕ дальнейшие подключения возвращали false
+      // до перезапуска браузера.
+      this.teardownSocket();
+      // Запросы старого сокета уже никогда не получат ответ.
+      for (const [, p] of this.pending) p.reject(new Error("Superseded by new connection"));
+      this.pending.clear();
     }
     try {
       return await new Promise<boolean>((resolve, reject) => {
@@ -122,8 +130,10 @@ export class ObsClient {
               ),
             );
           }
-          // 4009 — пароль не подойдёт и со второй попытки, не долбим.
-          if (event.code !== 1000 && event.code !== 4009) this.attemptReconnect();
+          // 4008/4009 — проблема аутентификации, 4010/4011 — несовместимость:
+          // с теми же кредами/версией повтор бессмыслен, не долбим OBS.
+          const noRetry = [1000, 4008, 4009, 4010, 4011];
+          if (!noRetry.includes(event.code)) this.attemptReconnect();
         };
         socket.onerror = (err) => {
           log.error("obs", "socket error", err);

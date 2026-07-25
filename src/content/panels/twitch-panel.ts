@@ -195,6 +195,46 @@ let unsubDom: (() => void) | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 /** Признак намеренного отключения — чтобы не переподключаться после disconnect(). */
 let intentionalClose = false;
+/** Последний входящий трафик — детект молчаливо умершего сокета. */
+let lastActivityAt = 0;
+let idleWatchdog: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Twitch пингует каждые ~5 минут. Тишина дольше 6 минут при OPEN-сокете
+ * означает мёртвое соединение (Wi-Fi моргнул без TCP RST): onclose может не
+ * прийти десятки минут, чат молча замирал на всю трансляцию. Watchdog
+ * закрывает такой сокет — дальше штатный onclose → реконнект.
+ */
+const IDLE_TIMEOUT_MS = 6 * 60 * 1000;
+
+function startIdleWatchdog(): void {
+  if (idleWatchdog) return;
+  idleWatchdog = setInterval(() => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - lastActivityAt > IDLE_TIMEOUT_MS) {
+      log.warn(SCOPE, "IRC idle timeout, forcing reconnect");
+      socket.close();
+    }
+  }, 60_000);
+}
+
+function stopIdleWatchdog(): void {
+  if (idleWatchdog) {
+    clearInterval(idleWatchdog);
+    idleWatchdog = null;
+  }
+}
+
+/**
+ * Пользователи вставляют URL канала или имя с #/пробелами — Twitch на такой
+ * JOIN молча не отвечает, а панель писала «Подключились к чату».
+ */
+function normalizeChannel(raw: string): string {
+  let name = raw.trim().toLowerCase();
+  const m = name.match(/(?:twitch\.tv\/)([a-z0-9_]+)/);
+  if (m) name = m[1];
+  return name.replace(/^#+/, "").replace(/[^a-z0-9_]/g, "");
+}
 /** Последнее известное состояние игрового интерфейса (для дебаунса смены). */
 let gameUiVisible = false;
 /**
@@ -288,6 +328,10 @@ function connectToTwitch(): void {
   // Вместо флага снимаем со старого сокета обработчики: его close нас не касается.
   clearReconnect();
   if (socket) {
+    // Включая onopen: без этого open-задача старого CONNECTING-сокета,
+    // уже стоявшая в очереди, выполнялась после замены — ставила
+    // isConnected=true для мёртвого сокета и ложное «Подключились».
+    socket.onopen = null;
     socket.onclose = null;
     socket.onerror = null;
     socket.onmessage = null;
@@ -310,10 +354,13 @@ function connectToTwitch(): void {
       ws.send(`JOIN #${channelName.toLowerCase()}`);
       isConnected = true;
       reconnectAttempts = 0;
+      lastActivityAt = Date.now();
+      startIdleWatchdog();
       panel?.addSystemMessage("Подключились к чату");
     };
 
     ws.onmessage = (event) => {
+      lastActivityAt = Date.now();
       handleTwitchData(String(event.data));
     };
 
@@ -342,7 +389,14 @@ function connectToTwitch(): void {
 function disconnect(): void {
   intentionalClose = true;
   clearReconnect();
+  stopIdleWatchdog();
   if (socket) {
+    // Полная отвязка: висящие onopen/onerror старого сокета после
+    // намеренного отключения давали ложные статусы.
+    socket.onopen = null;
+    socket.onclose = null;
+    socket.onerror = null;
+    socket.onmessage = null;
     socket.close();
     socket = null;
   }
@@ -402,7 +456,7 @@ function handleControlMessage(msg: TwitchControlMsg): void {
       }
       break;
     case "twitch_connect":
-      if (msg.channel) channelName = msg.channel;
+      if (msg.channel) channelName = normalizeChannel(msg.channel);
       reconnectAttempts = 0; // явное действие пользователя — свежий лимит попыток
       connectToTwitch();
       break;
@@ -430,7 +484,7 @@ export const twitchPanelFeature: TwitchFeature = {
   settingKey: "twitch_chat_enabled",
 
   enable(ctx: FeatureContext) {
-    channelName = ctx.settings.twitch_channel_name || "";
+    channelName = normalizeChannel(ctx.settings.twitch_channel_name || "");
     panelWanted = ctx.settings.twitch_floating_panel_enabled !== false;
 
     unsubMessage = onMessage((msg) => {
@@ -441,12 +495,15 @@ export const twitchPanelFeature: TwitchFeature = {
     unsubDom = onDomChange(() => syncVisibilityWithGameState());
 
     // Первичная синхронизация: показать панель и подключиться, если уже в игре.
+    // (Раньше здесь был второй безусловный connectToTwitch() — он убивал
+    // только что созданный showPanel'ом CONNECTING-сокет и открывал новый:
+    // две auth-попытки на каждый вход в игру.)
     syncVisibilityWithGameState();
-    if (channelName && gameUiVisible) connectToTwitch();
+    if (channelName && gameUiVisible && !isConnected) connectToTwitch();
   },
 
   update(ctx: FeatureContext) {
-    const next = ctx.settings.twitch_channel_name || "";
+    const next = normalizeChannel(ctx.settings.twitch_channel_name || "");
     if (next !== channelName) {
       channelName = next;
       reconnectAttempts = 0; // сменили канал — свежий лимит попыток

@@ -65,8 +65,46 @@ async function restoreObsConnection(): Promise<void> {
   }
 }
 
+/**
+ * Разовые миграции при обновлении расширения.
+ *  1. Попапы ≤8.1.22 писали twitch_floating_panel_enabled=false в sync при
+ *     КАЖДОМ сохранении настроек (настройка тогда никем не читалась). В 8.1.23
+ *     тумблер ожил — и панель чата молча пропала бы у всех её пользователей.
+ *     Один раз возвращаем true; дальше значением управляет пользователь.
+ *  2. Legacy-попап хранил пароль OBS в storage.sync ОТКРЫТЫМ ТЕКСТОМ; фикс
+ *     LOCAL_KEYS закрыл только новые записи — старый пароль синкается в облако
+ *     у всех пользователей той эпохи до сих пор. Удаляем вместе с прочими
+ *     ключами-сиротами удалённых фич. (playerNotes/notes/tagCustomColors в
+ *     sync НЕ трогаем — это мост миграции заметок для вторых устройств.)
+ */
+async function runUpgradeMigrations(): Promise<void> {
+  try {
+    const { pn_twitch_panel_restored_v1: done } = (await browser.storage.local.get(
+      "pn_twitch_panel_restored_v1",
+    )) as { pn_twitch_panel_restored_v1?: boolean };
+    if (!done) {
+      await browser.storage.sync.set({ twitch_floating_panel_enabled: true });
+      await browser.storage.local.set({ pn_twitch_panel_restored_v1: true });
+    }
+    await browser.storage.sync.remove([
+      "obs_password",
+      "version",
+      "remember_player_volume_enabled",
+      "spotify_playlist_url",
+      "player_type",
+      "modulesDisabled",
+    ]);
+    await browser.storage.local.remove(["savedAvatarUrl", "playerVolumes"]);
+  } catch (e) {
+    log.error("background", "migrations failed", e);
+  }
+}
+
 browser.runtime.onStartup.addListener(() => void restoreObsConnection());
-browser.runtime.onInstalled.addListener(() => void restoreObsConnection());
+browser.runtime.onInstalled.addListener(() => {
+  void runUpgradeMigrations();
+  void restoreObsConnection();
+});
 
 // Диагностика: перехват ошибок + гейт персиста логов по настройке.
 installErrorCapture("bg");

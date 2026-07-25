@@ -341,6 +341,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if ("obs_day_scene" in patch) knownDayScene = patch.obs_day_scene || "";
     if ("obs_night_scene" in patch) knownNightScene = patch.obs_night_scene || "";
+    // Хоткеи живут в замыканиях, а не в input.value — без этого чужое
+    // изменение хоткея откатывалось следующим же кликом по любому тумблеру.
+    if (typeof patch.pause_hotkey_code === "string") {
+      pauseHotkeyCode = patch.pause_hotkey_code;
+      renderPauseKey();
+    }
+    if (typeof patch.hotkey_role_fake === "string") roleFakeCode = patch.hotkey_role_fake;
+    if (typeof patch.hotkey_role_reset === "string") roleResetCode = patch.hotkey_role_reset;
+    if (typeof patch.hotkey_role_hide === "string") roleHideCode = patch.hotkey_role_hide;
+    if (patch.hotkey_role_fake || patch.hotkey_role_reset || patch.hotkey_role_hide) {
+      roleKeyRenders.forEach((r) => r());
+    }
   };
 
   // Точечные писатели из content (закрытие панели крестиком) и другие
@@ -493,11 +505,14 @@ document.addEventListener("DOMContentLoaded", () => {
       if (settings[key] !== lastKnown[key]) (patch as Record<string, unknown>)[key] = settings[key];
     }
     if (Object.keys(patch).length === 0) return;
-    lastKnown = { ...lastKnown, ...patch };
+    // lastKnown обновляем ТОЛЬКО после успешной записи: оптимистичное
+    // обновление при reject (квота sync) навсегда прятало настройку от диффа.
+    const prevKnown = lastKnown;
 
     // setSettings сам разложит obs_password в storage.local.
     void setSettings(patch)
       .then(() => {
+        lastKnown = { ...prevKnown, ...patch };
         // Живое обновление фич в content (FeatureManager также реагирует на storage).
         // Пароль OBS в вкладки не рассылаем — content он не нужен, а любой
         // будущий дамп настроек в лог превратил бы это в утечку.
