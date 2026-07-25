@@ -9,7 +9,7 @@ import { installErrorCapture } from "@core/errors";
 import { onMessage } from "@core/messaging";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
 import { ObsClient } from "./obs-client";
-import { handleGameSearch } from "./auto-accept";
+import { handleGameSearch, handleStopSearch } from "./auto-accept";
 import type { ExtMessage, ObsCommandMsg } from "@shared/types";
 
 const obs = new ObsClient();
@@ -17,6 +17,7 @@ const obs = new ObsClient();
 async function handleObsCommand(cmd: ObsCommandMsg["command"], data: ObsCommandMsg["data"]) {
   switch (cmd) {
     case "connect":
+      obs.resetReconnectAttempts();
       return obs.connect(data?.url ?? "", data?.password ?? "");
     case "disconnect":
       obs.disconnect();
@@ -40,6 +41,10 @@ onMessage((msg: ExtMessage, sender) => {
   }
   if ("action" in msg && msg.action === "startSearch") {
     void handleGameSearch(sender.tab?.id);
+    return Promise.resolve({ ok: true });
+  }
+  if ("action" in msg && msg.action === "stopSearch") {
+    void handleStopSearch(sender.tab?.id);
     return Promise.resolve({ ok: true });
   }
   return undefined;
@@ -68,6 +73,13 @@ installErrorCapture("bg");
 void getSetting("debug_logging_enabled").then((on) => log.setPersist(on));
 onSettingsChanged((patch) => {
   if ("debug_logging_enabled" in patch) log.setPersist(patch.debug_logging_enabled === true);
+  // Живая реакция на тумблер OBS: раньше выключение obs_enabled (в т.ч. с
+  // другого устройства через sync) не рвало соединение — background смотрел
+  // на настройку только при onStartup/onInstalled.
+  if ("obs_enabled" in patch) {
+    if (patch.obs_enabled === false) obs.disconnect();
+    else void restoreObsConnection();
+  }
 });
 
 log.info("background", "ready");

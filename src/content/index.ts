@@ -45,10 +45,9 @@ void getSetting("debug_logging_enabled").then((on) => log.setPersist(on));
 onSettingsChanged((patch) => {
   if ("debug_logging_enabled" in patch) log.setPersist(patch.debug_logging_enabled === true);
 });
-// Успеть сбросить буфер перед закрытием/перезагрузкой вкладки.
-window.addEventListener("pagehide", () => log.flushNow());
+// (pagehide-флеш логов теперь внутри core/log — общий для content и popup.)
 
-void manager.start();
+void manager.start().catch((e) => log.error("content", "manager start failed", e));
 void parseMatchOnPage();
 setupNicknameLengthsResponder();
 setupDiagnostics();

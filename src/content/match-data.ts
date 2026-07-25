@@ -4,6 +4,18 @@
  */
 import { log } from "@core/log";
 
+/**
+ * Последние распарсенные данные. Событие gameDataParsed не буферизуется:
+ * если fetch завершался раньше, чем match-stats/tooltip успевали повесить
+ * слушатель (их enable ждёт чтения настроек), страница молча оставалась без
+ * статистики. Опоздавшие подписчики забирают данные отсюда.
+ */
+let lastGameData: unknown = null;
+
+export function getLastGameData(): unknown {
+  return lastGameData;
+}
+
 export async function parseMatchOnPage(): Promise<void> {
   if (!location.pathname.includes("/match/")) return;
   const matchId = location.pathname.split("/").pop();
@@ -20,15 +32,13 @@ export async function parseMatchOnPage(): Promise<void> {
       return;
     }
     const gameData = JSON.parse(m[1]);
-    document.dispatchEvent(
-      new CustomEvent("gameDataParsed", {
-        detail: {
-          ...gameData,
-          players: gameData.players || [],
-          history: gameData.history || gameData.events || [],
-        },
-      }),
-    );
+    const detail = {
+      ...gameData,
+      players: gameData.players || [],
+      history: gameData.history || gameData.events || [],
+    };
+    lastGameData = detail;
+    document.dispatchEvent(new CustomEvent("gameDataParsed", { detail }));
     log.info("match-data", "parsed match", matchId);
   } catch (e) {
     log.error("match-data", "parse failed", e);

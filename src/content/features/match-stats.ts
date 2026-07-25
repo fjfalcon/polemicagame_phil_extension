@@ -11,6 +11,7 @@
 import { SITE } from "@core/selectors";
 import { escapeHtml } from "@core/escape";
 import { log } from "@core/log";
+import { getLastGameData } from "../match-data";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
 
@@ -20,6 +21,8 @@ const SCOPE = "match-stats";
 
 let settings: Settings | null = null;
 let gameDataListener: ((event: Event) => void) | null = null;
+/** Исходная разметка заголовка сайта — восстанавливается при disable(). */
+let originalHeaderHtml: string | null = null;
 const intervals = new Set<ReturnType<typeof setInterval>>();
 const timeouts = new Set<ReturnType<typeof setTimeout>>();
 const injectedStyles: HTMLStyleElement[] = [];
@@ -83,13 +86,23 @@ function statsEnabled(): boolean {
 // ───────────────────────── построение таблицы ─────────────────────────
 
 function enhance(gameData: any): void {
+  // Идемпотентность + защита от SPA-гонки: повторное событие или ожидание
+  // таблицы, пережившее переход на другой матч, раньше давало дубликаты строк
+  // и вставку данных ЧУЖОГО матча в свежеоткрытую таблицу.
+  const matchIdAtStart = location.pathname.split("/").pop() || "";
+  removeEnhancements();
+
   const header = document.querySelector<HTMLElement>(SITE.statsHeader);
   if (header) {
     const gameId = gameData.id || "";
-    const isMafiaWin = gameData.winnerCode !== 0;
+    if (originalHeaderHtml === null) originalHeaderHtml = header.innerHTML;
 
-    const winnerColor = isMafiaWin ? "#ef4444" : "#22c55e";
-    const winnerText = isMafiaWin ? "Победа мафии" : "Победа мирных";
+    // winnerCode: 0 = мирные. Отсутствие поля раньше уверенно рисовало
+    // «Победа мафии» — теперь нейтральный заголовок.
+    const hasWinner = typeof gameData.winnerCode === "number";
+    const isMafiaWin = hasWinner && gameData.winnerCode !== 0;
+    const winnerColor = !hasWinner ? "#94a3b8" : isMafiaWin ? "#ef4444" : "#22c55e";
+    const winnerText = !hasWinner ? "" : isMafiaWin ? "Победа мафии" : "Победа мирных";
 
     header.style.cssText = `
       background: rgba(30, 41, 59, 0.5);
@@ -119,6 +132,11 @@ function enhance(gameData: any): void {
   // Ждём появления таблицы.
   const checkTable = trackInterval(
     setInterval(() => {
+      // SPA-переход на другой матч — данные этого больше не актуальны.
+      if ((location.pathname.split("/").pop() || "") !== matchIdAtStart) {
+        clearTrackedInterval(checkTable);
+        return;
+      }
       const table = document.querySelector<HTMLElement>(SITE.statsTable);
       if (table) {
         clearTrackedInterval(checkTable);
@@ -139,8 +157,19 @@ function enhance(gameData: any): void {
 
 function removeEnhancements(): void {
   document
-    .querySelectorAll(".row[data-phase], .best-move-dot, .best-move-tooltip")
+    .querySelectorAll(".row[data-phase], .best-move-dot, .best-move-tooltip, .penalty-dots")
     .forEach((element) => element.remove());
+}
+
+/** Вернуть заголовок сайта как был (мы его переписываем через innerHTML). */
+function restoreHeader(): void {
+  if (originalHeaderHtml === null) return;
+  const header = document.querySelector<HTMLElement>(SITE.statsHeader);
+  if (header) {
+    header.innerHTML = originalHeaderHtml;
+    header.removeAttribute("style");
+  }
+  originalHeaderHtml = null;
 }
 
 function voterStyleFor(role: number): string {
@@ -213,24 +242,28 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
       cell.setAttribute("data-player", String(player.position));
 
       const votes = phase.day.filter((a: any) => a.to === player.position);
-      const firstVotes = votes.filter((v: any) => !v.num || v.num === 1);
-      const secondVotes = votes.filter((v: any) => v.num === 2);
+      const firstVotes = votes.filter((v: any) => !v.num);
+      const secondVotes = votes.filter((v: any) => v.num === 1);
+      const thirdVotes = votes.filter((v: any) => v.num === 2);
 
       let html = "";
       if (firstVotes.length > 0) {
-        html += renderVotesBlock(
-          firstVotes,
-          players,
-          "",
-          `Голосование за выставление №${player.position}`,
-        );
+        html += renderVotesBlock(firstVotes, players, "", `Голосование за №${player.position}`);
       }
       if (secondVotes.length > 0) {
         html += renderVotesBlock(
           secondVotes,
           players,
           "margin-top: 4px;",
-          `Переголосование за №${player.position}`,
+          `Переголосовка за №${player.position}`,
+        );
+      }
+      if (thirdVotes.length > 0) {
+        html += renderVotesBlock(
+          thirdVotes,
+          players,
+          "margin-top: 4px;",
+          `Голосование за подъём (№${player.position})`,
         );
       }
 
@@ -319,9 +352,9 @@ function addBestMoveIndicators(table: HTMLElement, gameData: any): void {
         const votedDay = shotNight === null ? findVotedDay(playerPosition, gameData) : null;
 
         if (shotNight !== null) {
-          addDotToCell(table, playerPosition, "night", shotNight, player.guess);
+          addDotToCell(table, playerPosition, "night", shotNight, player.guess, gameData);
         } else if (votedDay !== null) {
-          addDotToCell(table, playerPosition, "day", votedDay, player.guess);
+          addDotToCell(table, playerPosition, "day", votedDay, player.guess, gameData);
         }
       }
     }
@@ -336,6 +369,7 @@ function addDotToCell(
   phaseType: "night" | "day",
   phaseNumber: number,
   guessData: any,
+  gameData: any,
 ): void {
   const rows = table.querySelectorAll<HTMLElement>(SITE.statsRow);
   rows.forEach((row) => {
@@ -387,19 +421,15 @@ function addDotToCell(
         }
 
         if (guessData.vice !== undefined) {
-          const vicePlayer = document.querySelector(
-            `.cell[data-player="${guessData.vice}"]`,
+          // Роль угаданного берём из ДАННЫХ матча. Раньше она угадывалась по
+          // CSS-классам голосовавших в первой попавшейся ячейке этого игрока —
+          // «Руль» красился как мафия, если мафиозо голосовал ПРОТИВ него.
+          const vicePlayer = (gameData.data?.players || []).find(
+            (p: any) => p.position === guessData.vice,
           );
-          let roleClass = "";
-          if (vicePlayer) {
-            if (vicePlayer.querySelector(".mafia-vote")) {
-              roleClass = "mafs";
-            } else if (vicePlayer.querySelector(".sheriff-vote")) {
-              roleClass = "sheriff";
-            } else {
-              roleClass = "civs";
-            }
-          }
+          let roleClass = "civs";
+          if (vicePlayer?.role === 0 || vicePlayer?.role === 1) roleClass = "mafs";
+          else if (vicePlayer?.role === 3) roleClass = "sheriff";
 
           const viceDiv = document.createElement("div");
           viceDiv.className = `tooltip-row ${roleClass}`;
@@ -478,7 +508,8 @@ function findVotedDay(playerPosition: number, gameData: any): number | null {
 }
 
 function addBestMoveStyles(): void {
-  appendStyle(`
+  appendStyle(
+    `
     .best-move-dot {
       width: 8px;
       height: 8px;
@@ -561,7 +592,9 @@ function addBestMoveStyles(): void {
     .vice .number { background: rgba(147, 51, 234, 0.2); color: #9333ea; }
     .best-move-dot:hover + .best-move-tooltip { display: block; }
     .cell { position: relative !important; }
-  `);
+  `,
+    "pn-best-move-styles",
+  );
 }
 
 // ───────────────────────── фазы / иконки ─────────────────────────
@@ -617,44 +650,19 @@ function processGamePhases(gameDetails: any): Array<{ day: any[]; night: any[] }
     () => ({ day: [], night: [] }),
   );
 
-  // Голосования num === 1.
+  // Туры голосования. В данных сайта (сверено с реальным JSON матча):
+  // num=0 — ОСНОВНОЕ голосование, num=1 — переголосовка, num=2 — «поднять всех».
+  // Раньше обрабатывались только num===1 и num===2: основной тур вообще не
+  // попадал в таблицу, переголосовка рисовалась как основной, а третий тур —
+  // как переголосовка. (isLeading убран — его никто не рендерил.)
   votes.forEach((vote: any) => {
-    if (vote.day && vote.day > 0 && vote.num === 1) {
-      const dayVotes = votes.filter((v: any) => v.day === vote.day && v.num === 1);
-      const voteCount: Record<number, number> = {};
-      dayVotes.forEach((v: any) => {
-        voteCount[v.candidate] = (voteCount[v.candidate] || 0) + 1;
-      });
-      const maxVotes = Math.max(...Object.values(voteCount));
-
-      phases[vote.day - 1].day.push({
-        type: "vote",
-        from: vote.voter,
-        to: vote.candidate,
-        isLeading: voteCount[vote.candidate] === maxVotes,
-        num: 1,
-      });
-    }
-  });
-
-  // Голосования num === 2.
-  votes.forEach((vote: any) => {
-    if (vote.day && vote.day > 0 && vote.num === 2) {
-      const dayVotes = votes.filter((v: any) => v.day === vote.day && v.num === 2);
-      const voteCount: Record<number, number> = {};
-      dayVotes.forEach((v: any) => {
-        voteCount[v.candidate] = (voteCount[v.candidate] || 0) + 1;
-      });
-      const maxVotes = Math.max(...Object.values(voteCount));
-
-      phases[vote.day - 1].day.push({
-        type: "vote",
-        from: vote.voter,
-        to: vote.candidate,
-        isLeading: voteCount[vote.candidate] === maxVotes,
-        num: 2,
-      });
-    }
+    if (!vote.day || vote.day <= 0 || vote.day > maxDay) return;
+    phases[vote.day - 1].day.push({
+      type: "vote",
+      from: vote.voter,
+      to: vote.candidate,
+      num: vote.num || 0,
+    });
   });
 
   // Выстрелы (убийства мафии).
@@ -691,7 +699,14 @@ function addPenaltyIndicators(table: HTMLElement, gameData: any): void {
     if (player.penalties?.length > 0) {
       player.penalties.forEach((penalty: any) => {
         const playerPosition = penalty.player;
-        const day = penalty.stage.day;
+        const stage = penalty.stage || {};
+        // Ночной штраф раньше терялся молча: искалась строка «undefined ☀️».
+        const phaseLabel = stage.day
+          ? `${stage.day} ☀️`
+          : stage.night
+            ? `${stage.night} 🌙`
+            : null;
+        if (!phaseLabel) return;
         const type = penalty.type;
 
         const initiatorName = gameData.data.players.find(
@@ -731,8 +746,8 @@ function addPenaltyIndicators(table: HTMLElement, gameData: any): void {
           .sort(([a], [b]) => parseInt(a, 10) - parseInt(b, 10))
           .map(([voter, vote]) => `${voter}:${vote ? 1 : 0}`)
           .join(",");
-        const penaltyKey = `${day}|${type}|${penalty.initiator}|${playerPosition}|${votePairs}`;
-        addPenaltyDot(table, playerPosition, day, color, tooltipText, penaltyKey);
+        const penaltyKey = `${phaseLabel}|${type}|${penalty.initiator}|${playerPosition}|${votePairs}`;
+        addPenaltyDot(table, playerPosition, phaseLabel, color, tooltipText, penaltyKey);
       });
     }
   });
@@ -741,7 +756,7 @@ function addPenaltyIndicators(table: HTMLElement, gameData: any): void {
 function addPenaltyDot(
   table: HTMLElement,
   playerPosition: number,
-  day: number,
+  phaseLabel: string,
   color: string,
   tooltipText: string,
   penaltyKey: string,
@@ -752,7 +767,7 @@ function addPenaltyDot(
     const phaseCell = row.querySelector(SITE.statsCellTitle);
     const phaseText = phaseCell?.textContent || "";
 
-    if (phaseText.includes(`${day} ☀️`)) {
+    if (phaseText.includes(phaseLabel)) {
       const playerCell = row.querySelector<HTMLElement>(
         `.cell[data-player="${playerPosition}"]`,
       );
@@ -1133,10 +1148,13 @@ function injectBaseStyles(): void {
       gap: 4px;
     }
     .cell.player img { width: 26px; height: 26px; }
-  `);
+  `,
+    "pn-stats-base-styles",
+  );
 
   // Пояснения к иконкам действий на hover (выстрел/проверки/голосования).
-  appendStyle(`
+  appendStyle(
+    `
     .cell .action[data-tip] { cursor: help; position: relative; }
     .cell .action[data-tip]:hover::after {
       content: attr(data-tip);
@@ -1171,7 +1189,9 @@ function injectBaseStyles(): void {
       z-index: 1000;
       pointer-events: none;
     }
-  `);
+  `,
+    "pn-stats-action-tips",
+  );
 }
 
 // ───────────────────────── жизненный цикл фичи ─────────────────────────
@@ -1207,12 +1227,19 @@ export const matchStatsFeature: Feature = {
       window.addEventListener("load", loadListener);
     }
 
+    // Повторный enable без disable не должен плодить слушателей.
+    if (gameDataListener) document.removeEventListener("gameDataParsed", gameDataListener);
     gameDataListener = (event: Event) => {
       if (!statsEnabled()) return;
       log.debug(SCOPE, "Received game data, enhancing page");
       enhance((event as CustomEvent).detail);
     };
     document.addEventListener("gameDataParsed", gameDataListener);
+
+    // Догон: событие могло уйти раньше подписки (fetch из HTTP-кеша
+    // завершается быстрее чтения настроек из storage).
+    const cached = getLastGameData();
+    if (cached && statsEnabled()) enhance(cached);
   },
 
   update(ctx: FeatureContext): void {
@@ -1242,8 +1269,9 @@ export const matchStatsFeature: Feature = {
     // Удалить инжектированные стили.
     for (const style of injectedStyles) style.remove();
     injectedStyles.length = 0;
-    // Удалить построенные элементы.
+    // Удалить построенные элементы и вернуть заголовок сайта.
     removeEnhancements();
+    restoreHeader();
     settings = null;
   },
 };

@@ -20,6 +20,7 @@
  * Панель видна только при активном игровом интерфейсе — состояние
  * отслеживается через общий onDomChange (как в оригинале — MutationObserver).
  */
+import { browser } from "@core/env";
 import { FloatingPanel } from "@core/FloatingPanel";
 import { onDomChange } from "@core/dom";
 import { escapeHtml } from "@core/escape";
@@ -196,6 +197,12 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let intentionalClose = false;
 /** Последнее известное состояние игрового интерфейса (для дебаунса смены). */
 let gameUiVisible = false;
+/**
+ * Хочет ли пользователь видеть панель (twitch_floating_panel_enabled).
+ * Раньше настройка писалась попапом, но НИКЕМ не читалась — тумблер был
+ * декоративным, а скрытие панели не переживало перезагрузку вкладки.
+ */
+let panelWanted = true;
 
 function ensurePanel(): TwitchChatPanel {
   if (!panel) panel = new TwitchChatPanel();
@@ -227,10 +234,17 @@ function syncVisibilityWithGameState(): void {
     hidePanel();
     return;
   }
-  // Игровой UI есть — показываем (фича включена, раз enable() уже отработал).
-  if (!panel || !panel.isShown) {
+  // Игровой UI есть — показываем, если пользователь панель не скрывал.
+  if (panelWanted && (!panel || !panel.isShown)) {
     showPanel();
   }
+}
+
+/** Запомнить выбор пользователя «показывать/скрывать панель» между сессиями. */
+function persistPanelWanted(value: boolean): void {
+  if (panelWanted === value) return;
+  panelWanted = value;
+  void browser.storage.sync.set({ twitch_floating_panel_enabled: value });
 }
 
 // ── IRC ──
@@ -371,14 +385,21 @@ function handleControlMessage(msg: TwitchControlMsg): void {
   log.debug(SCOPE, "control message", msg.type);
   switch (msg.type) {
     case "twitch_panel_show":
+      persistPanelWanted(true);
       showPanel();
       break;
     case "twitch_panel_hide":
+      persistPanelWanted(false);
       hidePanel();
       break;
     case "twitch_panel_toggle":
-      if (panel?.isShown) hidePanel();
-      else showPanel();
+      if (panel?.isShown) {
+        persistPanelWanted(false);
+        hidePanel();
+      } else {
+        persistPanelWanted(true);
+        showPanel();
+      }
       break;
     case "twitch_connect":
       if (msg.channel) channelName = msg.channel;
@@ -410,6 +431,7 @@ export const twitchPanelFeature: TwitchFeature = {
 
   enable(ctx: FeatureContext) {
     channelName = ctx.settings.twitch_channel_name || "";
+    panelWanted = ctx.settings.twitch_floating_panel_enabled !== false;
 
     unsubMessage = onMessage((msg) => {
       if (isTwitchControlMsg(msg)) handleControlMessage(msg);
@@ -431,6 +453,13 @@ export const twitchPanelFeature: TwitchFeature = {
       // Переподключение к новому каналу (или отключение, если канал убрали).
       if (channelName && gameUiVisible) connectToTwitch();
       else disconnect();
+    }
+    // Тумблер видимости панели из попапа (или другой вкладки).
+    const wanted = ctx.settings.twitch_floating_panel_enabled !== false;
+    if (wanted !== panelWanted) {
+      panelWanted = wanted;
+      if (wanted) syncVisibilityWithGameState();
+      else hidePanel();
     }
   },
 
@@ -459,8 +488,6 @@ export const twitchPanelFeature: TwitchFeature = {
     hidePanel();
     disconnect();
     // Выключаем тумблер — FeatureManager затем вызовет disable().
-    void import("@core/env").then(({ browser }) =>
-      browser.storage.sync.set({ twitch_chat_enabled: false }),
-    );
+    void browser.storage.sync.set({ twitch_chat_enabled: false });
   },
 };

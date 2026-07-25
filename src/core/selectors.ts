@@ -52,13 +52,10 @@ export const SITE = {
   // Меню «показать/скрыть роли» (auto-start)
   roleMenuClickable: 'button, [role="button"], li, a, span, div',
   // Профиль / поиск игры
-  profileImg: ".p-play__profile-img",
-  profileAvatar: ".avatarlvl__avatar",
-  profileAvatarIcons: ".avatarlvl__icons",
+  // (profileImg/profileAvatar/profileAvatarIcons удалены вместе с мёртвой фичей аватара)
   profileAccept: ".p-play__profile-accept",
   profileSearchButton: ".p-play__profile-button",
   profileSearchClose: ".p-play__profile-game-search-close",
-  profileSearchPlayers: ".p-play__profile-game-search-players",
   // Кнопки / меню
   settingsButton: "div.button.preset-1.small.desktop-version",
   // OBS-панель: детекция активного игрового интерфейса и стадий

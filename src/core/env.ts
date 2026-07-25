@@ -8,6 +8,3 @@
 import browser from "webextension-polyfill";
 
 export { browser };
-
-export const isFirefox: boolean =
-  typeof navigator !== "undefined" && /firefox/i.test(navigator.userAgent);

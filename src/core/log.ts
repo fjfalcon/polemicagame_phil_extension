@@ -86,6 +86,13 @@ function fmtArgs(args: unknown[]): string {
 let primed = false;
 let priming: Promise<void> | null = null;
 
+// Флеш при уходе со страницы — для ЛЮБОГО контекста с документом (content,
+// popup, фон Firefox). Раньше pagehide-флеш был только в content: popup
+// систематически терял хвост логов при закрытии.
+if (typeof document !== "undefined" && typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => log.flushNow());
+}
+
 async function primeFromStorage(): Promise<void> {
   try {
     const res = (await browser.storage.local.get(STORAGE_KEY)) as Record<string, unknown>;
@@ -168,8 +175,13 @@ export const log = {
       for (const [k, v] of Object.entries(all)) {
         if (k.startsWith(LOG_PREFIX) && Array.isArray(v)) merged.push(...(v as Entry[]));
       }
-      // Плюс несброшенные записи текущего контекста.
-      merged.push(...buffer.filter((e) => !merged.includes(e)));
+      // Плюс несброшенные записи текущего контекста. Дедуп по содержимому:
+      // сравнение по ссылке (includes) не отсеивало десериализованные копии,
+      // и свои уже слитые записи попадали в экспорт дважды.
+      const seen = new Set(merged.map((e) => `${e.t}|${e.c}|${e.s}|${e.m}`));
+      for (const e of buffer) {
+        if (!seen.has(`${e.t}|${e.c}|${e.s}|${e.m}`)) merged.push(e);
+      }
       return merged.sort((a, b) => a.t - b.t);
     } catch {
       return buffer.slice();

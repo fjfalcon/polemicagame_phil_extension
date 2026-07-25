@@ -5,31 +5,6 @@
  */
 import { log } from "./log";
 
-/** Дождаться появления элемента по селектору (или null по таймауту). */
-export function waitForSelector<T extends Element = Element>(
-  selector: string,
-  { timeout = 8000, root = document as ParentNode } = {},
-): Promise<T | null> {
-  const existing = root.querySelector<T>(selector);
-  if (existing) return Promise.resolve(existing);
-
-  return new Promise((resolve) => {
-    const obs = new MutationObserver(() => {
-      const el = root.querySelector<T>(selector);
-      if (el) {
-        obs.disconnect();
-        clearTimeout(timer);
-        resolve(el);
-      }
-    });
-    obs.observe(document.documentElement, { childList: true, subtree: true });
-    const timer = setTimeout(() => {
-      obs.disconnect();
-      resolve(null);
-    }, timeout);
-  });
-}
-
 /** Надёжный клик: нативный .click() + синтетическое событие как запасной путь. */
 export function safeClick(el: Element): boolean {
   try {

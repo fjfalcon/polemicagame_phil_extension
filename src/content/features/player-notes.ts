@@ -96,6 +96,9 @@ const TAG_PRESETS: Array<{ css: string; name: string }> = [
 ];
 const VERSION = NOTES_VERSION;
 
+/** TTL кэшей статистики: за игровой вечер MMR меняется каждой игрой. */
+const STATS_TTL_MS = 5 * 60 * 1000;
+
 const THEME_COLORS: Record<string, string> = {
   default: "rgb(66, 103, 178)",
   pink: "#ec4899",
@@ -118,6 +121,14 @@ class PlayerNotesManager {
   private playerStats = new Map<string, PlayerStatsEntry>();
   /** Кэш последних игр по нику (lowercase). */
   private lastGamesCache = new Map<string, LastGameEntry[]>();
+  /**
+   * Время загрузки кэша по нику. Раньше кэши жили до F5: MMR и винрейт в
+   * тултипе замораживались с первого наведения на весь игровой вечер.
+   */
+  private statsFetchedAt = new Map<string, number>();
+  private gamesFetchedAt = new Map<string, number>();
+  /** Ники, по которым запрос уже в полёте (пересборка плитки не дублирует его). */
+  private statsInFlight = new Set<string>();
   /** Ники с временно скрытым видео (в пределах сессии). */
   private hiddenVideos = new Set<string>();
   /** Закрытие открытой модалки заметки — нужно, чтобы disable() снял её слушатели. */
@@ -143,7 +154,6 @@ class PlayerNotesManager {
     await this.loadNotes();
 
     this.addMatchPageStyles();
-    void this.loadSavedAvatar();
 
     // Один общий наблюдатель за DOM вместо нескольких MutationObserver.
     this.unsubscribers.push(
@@ -153,10 +163,6 @@ class PlayerNotesManager {
           return;
         }
         this.processExistingElements();
-        // Обработка динамически добавленного 3D-аватара в профиле.
-        if (document.querySelector(SITE.profileAvatar)) {
-          void this.loadSavedAvatar();
-        }
       }),
     );
 
@@ -178,18 +184,12 @@ class PlayerNotesManager {
       }, 2000),
     );
 
-    // Приём сообщений из попапа: updateNotesSettings / updateAvatar.
+    // Приём сообщений из попапа: updateNotesSettings.
+    // (updateAvatar удалён вместе со всей цепочкой аватара: UI загрузки в
+    // popup.html никогда не существовало, фича была мёртвой с момента порта.)
     this.unsubscribers.push(
       onMessage((msg: ExtMessage) => {
         if (!("type" in msg)) return;
-        if (msg.type === "updateAvatar") {
-          const url = msg.avatarUrl;
-          if (url) {
-            const avatarImg = document.querySelector<HTMLImageElement>(SITE.profileImg);
-            if (avatarImg) avatarImg.src = url;
-          }
-          return;
-        }
         if (msg.type === "updateNotesSettings" && msg.settings) {
           this.settings = { ...this.settings, ...msg.settings };
           if (this.settings.statistics_enabled === false) {
@@ -393,7 +393,10 @@ class PlayerNotesManager {
   private async loadPlayerStats(username: string): Promise<void> {
     if (this.settings.statistics_enabled === false) return;
     const key = username.toLowerCase();
-    if (this.playerStats.has(key)) return; // кэш — не дёргаем API повторно
+    const fetchedAt = this.statsFetchedAt.get(key) ?? 0;
+    if (this.playerStats.has(key) && Date.now() - fetchedAt < STATS_TTL_MS) return;
+    if (this.statsInFlight.has(key)) return; // запрос уже в полёте
+    this.statsInFlight.add(key);
 
     try {
       const response = await fetch("https://game.polemicagame.com/api/games");
@@ -482,16 +485,20 @@ class PlayerNotesManager {
       };
 
       this.playerStats.set(key, entry);
+      this.statsFetchedAt.set(key, Date.now());
 
-      // Обновляем уже отрисованный тултип, если есть.
-      const existingTooltip = document.querySelector(
-        `.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`,
-      );
-      if (existingTooltip) {
-        existingTooltip.innerHTML = this.generateTooltipContent(username);
-      }
+      // Обновляем ВСЕ отрисованные тултипы этого игрока: сайт рендерит одного
+      // игрока в двух плитках (десктоп/мобайл), а querySelector обновлял
+      // только первую — вторая навсегда оставалась с заглушками «???».
+      document
+        .querySelectorAll(`.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`)
+        .forEach((tooltip) => {
+          tooltip.innerHTML = this.generateTooltipContent(username);
+        });
     } catch (e) {
       log.error("player-notes", `loadPlayerStats failed for ${username}`, e);
+    } finally {
+      this.statsInFlight.delete(key);
     }
   }
 
@@ -604,9 +611,10 @@ class PlayerNotesManager {
       .forEach((tooltip) => {
         const button = tooltip.closest<HTMLElement>(`.${OWN.statsButton}`);
         const username = button?.dataset.username;
-        if (username && this.playerStats.has(username.toLowerCase())) {
-          tooltip.innerHTML = this.generateTooltipContent(username);
-        }
+        // Без проверки кэша: generateTooltipContent корректно рисует заглушки,
+        // а гейт по playerStats.has оставлял в тултипе УДАЛЁННУЮ в другой
+        // вкладке заметку, пока статистика не загрузилась.
+        if (username) tooltip.innerHTML = this.generateTooltipContent(username);
       });
   }
 
@@ -979,10 +987,12 @@ class PlayerNotesManager {
         else this.notes[username] = previous;
         return false;
       }
-      const tooltip = document.querySelector(
-        `.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`,
-      );
-      if (tooltip) tooltip.innerHTML = this.generateTooltipContent(username);
+      // Обе плитки игрока (десктоп/мобайл), не только первая.
+      document
+        .querySelectorAll(`.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`)
+        .forEach((tooltip) => {
+          tooltip.innerHTML = this.generateTooltipContent(username);
+        });
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
       return true;
@@ -1066,7 +1076,8 @@ class PlayerNotesManager {
   private async getLastGames(username: string): Promise<LastGameEntry[]> {
     const key = username.toLowerCase();
     const cached = this.lastGamesCache.get(key);
-    if (cached) return cached;
+    const fetchedAt = this.gamesFetchedAt.get(key) ?? 0;
+    if (cached && Date.now() - fetchedAt < STATS_TTL_MS) return cached;
 
     try {
       const timeoutPromise = new Promise<LastGameEntry[]>((_, reject) =>
@@ -1129,7 +1140,10 @@ class PlayerNotesManager {
 
       const result = await Promise.race([dataPromise, timeoutPromise]);
       // Кэшируем только непустой результат (как и оригинал не повторял запрос).
-      if (result.length > 0) this.lastGamesCache.set(key, result);
+      if (result.length > 0) {
+        this.lastGamesCache.set(key, result);
+        this.gamesFetchedAt.set(key, Date.now());
+      }
       return result;
     } catch (e) {
       log.error("player-notes", "getLastGames failed", e);
@@ -1351,51 +1365,13 @@ class PlayerNotesManager {
     }
   }
 
-  private async loadSavedAvatar(): Promise<void> {
-    try {
-      const data = (await browser.storage.local.get("savedAvatarUrl")) as {
-        savedAvatarUrl?: string;
-      };
-      if (!data.savedAvatarUrl) return;
-      const url = data.savedAvatarUrl;
-
-      const gameAvatar = document.querySelector<HTMLImageElement>(SITE.profileImg);
-      if (gameAvatar && gameAvatar.src !== url) gameAvatar.src = url;
-
-      const profileAvatar = document.querySelector<HTMLElement>(SITE.profileAvatar);
-      if (profileAvatar) {
-        // Если наш аватар уже вставлен — выходим. Иначе получается цикл:
-        // подписчик onDomChange вызывает эту функцию, она пересобирает
-        // содержимое (childList), наблюдатель ловит мутацию и зовёт снова.
-        if (profileAvatar.dataset.pnAvatar === url) return;
-        profileAvatar.dataset.pnAvatar = url;
-        profileAvatar.innerHTML = "";
-        const containerEl = document.createElement("div");
-        containerEl.style.cssText = `
-          width: 100%;
-          height: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          overflow: hidden;
-        `;
-        const img = document.createElement("img");
-        img.src = url;
-        img.style.cssText = "width: auto; height: 100%; max-width: none;";
-        containerEl.appendChild(img);
-        profileAvatar.appendChild(containerEl);
-
-        document.querySelector(SITE.profileAvatarIcons)?.remove();
-      }
-    } catch (e) {
-      log.error("player-notes", "loadSavedAvatar failed", e);
-    }
-  }
+  // (loadSavedAvatar удалён — см. комментарий у onMessage в enable().)
 }
 
 // ───────────────────────── CSS-константы ─────────────────────────
 
 const BUTTON_CIRCLE_CSS = `
+  position: relative; /* якорь тултипа: без него absolute-тултип цеплялся к случайному предку */
   border: none;
   border-radius: 50%;
   cursor: pointer;

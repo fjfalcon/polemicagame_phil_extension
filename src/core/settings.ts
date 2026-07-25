@@ -44,7 +44,9 @@ export const DEFAULT_SETTINGS: Settings = {
   obs_night_scene: "",
   twitch_chat_enabled: false,
   twitch_channel_name: "",
-  twitch_floating_panel_enabled: false,
+  // true: настройка теперь реально гейтит показ панели (раньше не читалась
+  // никем); true сохраняет прежнее поведение «панель появляется сама».
+  twitch_floating_panel_enabled: true,
 };
 
 /** Ключи, хранящиеся локально (не синхронизируются в облако). */

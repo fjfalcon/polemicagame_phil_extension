@@ -20,14 +20,14 @@ interface Binding {
  * F1..F12, Escape и стрелки — не могут, поэтому такой хоткей (например пауза на F8)
  * должен работать и когда курсор стоит в чате.
  */
-function producesText(code: string): boolean {
+export function producesText(code: string): boolean {
   return /^(Key|Digit|Numpad|Minus|Equal|Bracket|Backslash|Semicolon|Quote|Comma|Period|Slash|Backquote|Space|Intl)/.test(
     code,
   );
 }
 
 /** Пользователь печатает — в поле ввода, в textarea или в contenteditable. */
-function isTypingContext(e: KeyboardEvent): boolean {
+export function isTypingContext(e: KeyboardEvent): boolean {
   const candidates: Array<EventTarget | null> = [e.target, document.activeElement];
   for (const c of candidates) {
     if (!(c instanceof HTMLElement)) continue;

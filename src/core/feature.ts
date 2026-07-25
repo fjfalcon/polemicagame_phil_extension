@@ -83,6 +83,14 @@ export class FeatureManager {
         } catch (e) {
           this.active.delete(f.id);
           log.error("feature", "enable failed", f.id, e);
+          // Откат: enable мог успеть навесить часть слушателей/таймеров до
+          // падения — без disable() они жили бы вечно, а следующий проход
+          // включил бы фичу ВТОРЫМ экземпляром поверх осиротевшего.
+          try {
+            f.disable();
+          } catch {
+            /* фича не обязана переживать disable после неполного enable */
+          }
         }
       } else if (!shouldEnable && isActive) {
         try {

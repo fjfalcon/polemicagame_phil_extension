@@ -3,7 +3,7 @@
  * Пока подмена активна — прячет чужие роли и блокирует клавишу D/В.
  * Порт role-faker.js на единый keyboard-роутер и общий DOM-наблюдатель.
  */
-import { keyboard } from "@core/keyboard";
+import { keyboard, isTypingContext, producesText } from "@core/keyboard";
 import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
 import { SITE } from "@core/selectors";
@@ -54,10 +54,13 @@ class RoleFaker {
   private attachDBlocker() {
     if (this.dBlocker) return;
     this.dBlocker = (e: KeyboardEvent) => {
-      if (this.isFaked && e.code === this.hideKeyCode) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
+      if (!this.isFaked || e.code !== this.hideKeyCode) return;
+      // Та же политика, что у общего роутера: пока пользователь печатает
+      // (KeyD = «в» в русской раскладке) или жмёт Cmd/Ctrl+D — не глотаем.
+      if (isTypingContext(e) && producesText(e.code)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      e.stopPropagation();
     };
     window.addEventListener("keydown", this.dBlocker, true);
   }

@@ -93,14 +93,8 @@ export interface UpdateNotesSettingsMsg {
   type: "updateNotesSettings";
   settings?: Partial<Settings>;
 }
-export interface UpdateRoleFakerMsg {
-  type: "updateRoleFaker";
-  enabled: boolean;
-}
-export interface UpdateAvatarMsg {
-  type: "updateAvatar";
-  avatarUrl: string | null;
-}
+// UpdateRoleFakerMsg и UpdateAvatarMsg удалены в 8.1.23:
+// первый никто не слушал, у второго не существовало UI-отправителя.
 
 /** popup → content: управление Twitch-панелью. */
 export interface TwitchControlMsg {
@@ -121,8 +115,6 @@ export interface GetNicknameLengthsMsg {
 /** content → background: автопринятие игры. */
 export interface StartSearchMsg {
   action: "startSearch";
-  players?: string;
-  gameFound?: boolean;
 }
 export interface StopSearchMsg {
   action: "stopSearch";
@@ -132,8 +124,6 @@ export type ExtMessage =
   | ObsCommandMsg
   | ObsEventMsg
   | UpdateNotesSettingsMsg
-  | UpdateRoleFakerMsg
-  | UpdateAvatarMsg
   | TwitchControlMsg
   | GetNicknameLengthsMsg
   | StartSearchMsg

@@ -16,11 +16,8 @@ export const searchFeature: Feature = {
     onClick = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
       if (t.matches?.(SITE.profileSearchButton)) {
-        let players = "0";
-        const el = document.querySelector(SITE.profileSearchPlayers);
-        const m = el?.textContent?.match(/\d+/g);
-        if (m) players = m[0];
-        void sendRuntime({ action: "startSearch", players, gameFound: true });
+        // players/gameFound из старого протокола никто не читал — не собираем.
+        void sendRuntime({ action: "startSearch" });
       } else if (t.matches?.(SITE.profileSearchClose)) {
         void sendRuntime({ action: "stopSearch" });
       }

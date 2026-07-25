@@ -17,6 +17,14 @@ interface ConnSettings {
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 
+/** base64(SHA-256(text)) — примитив challenge-response аутентификации v5. */
+async function sha256b64(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  let bin = "";
+  for (const b of new Uint8Array(digest)) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
 export class ObsClient {
   private socket: WebSocket | null = null;
   private sessionId: string | null = null;
@@ -39,6 +47,20 @@ export class ObsClient {
     if (this.connecting) return false;
     this.connecting = true;
     this.settings = { url, password };
+    // Старый сокет отвязываем ДО замены: его onclose иначе вызывал teardownSocket
+    // и убивал учёт нового соединения (а сам сокет оставался открытым навсегда).
+    if (this.socket) {
+      this.socket.onopen = null;
+      this.socket.onmessage = null;
+      this.socket.onclose = null;
+      this.socket.onerror = null;
+      try {
+        this.socket.close(1000, "Superseded");
+      } catch {
+        /* уже закрыт */
+      }
+      this.socket = null;
+    }
     try {
       return await new Promise<boolean>((resolve, reject) => {
         const socket = new WebSocket(url);
@@ -51,12 +73,23 @@ export class ObsClient {
           }
         }, this.connectionTimeout);
 
-        socket.onopen = () => {
-          this.identify(password);
-        };
+        // Identify уходит ТОЛЬКО после Hello (op:0) — раньше он слался в onopen
+        // с сырым паролем, без challenge-response. OBS с включённой
+        // аутентификацией закрывал соединение кодом 4009, и парольное
+        // подключение не работало никогда (унаследовано от legacy).
         socket.onmessage = (event) => {
           this.lastHeartbeat = Date.now();
-          const msg = JSON.parse(event.data);
+          let msg: any;
+          try {
+            msg = JSON.parse(String(event.data));
+          } catch {
+            log.warn("obs", "malformed frame ignored");
+            return;
+          }
+          if (msg.op === 0) {
+            void this.identify(password, msg.d?.authentication);
+            return;
+          }
           // Identified (op:2) => соединение готово
           if (msg.op === 2 && !this.isConnected) {
             clearTimeout(timeout);
@@ -73,10 +106,24 @@ export class ObsClient {
         };
         socket.onclose = (event) => {
           log.info("obs", "disconnected", event.code, event.reason);
+          const wasConnected = this.isConnected;
           this.teardownSocket();
           void this.saveConnectionState(false);
           this.notifyAll("obs_disconnected");
-          if (event.code !== 1000) this.attemptReconnect();
+          // До Identified закрытие — это ОТКАЗ подключения: реджектим сразу,
+          // а не висим 10 секунд с connecting=true (4009 = неверный пароль).
+          if (!wasConnected) {
+            clearTimeout(timeout);
+            reject(
+              new Error(
+                event.code === 4009
+                  ? "Неверный пароль OBS"
+                  : `OBS закрыл соединение (код ${event.code})`,
+              ),
+            );
+          }
+          // 4009 — пароль не подойдёт и со второй попытки, не долбим.
+          if (event.code !== 1000 && event.code !== 4009) this.attemptReconnect();
         };
         socket.onerror = (err) => {
           log.error("obs", "socket error", err);
@@ -90,6 +137,11 @@ export class ObsClient {
     } finally {
       this.connecting = false;
     }
+  }
+
+  /** Явное действие пользователя — свежий лимит реконнектов. */
+  resetReconnectAttempts(): void {
+    this.reconnectAttempts = 0;
   }
 
   private makeSessionId(): string {
@@ -167,15 +219,37 @@ export class ObsClient {
     void this.saveConnectionState(false);
   }
 
-  private identify(password: string): void {
-    this.send({
-      op: 1,
-      d: {
-        rpcVersion: 1,
-        authentication: password || undefined,
-        eventSubscriptions: 1023,
-      },
-    });
+  /**
+   * Identify (op:1) по спеке obs-websocket v5.
+   * При включённой в OBS аутентификации Hello приносит {salt, challenge}, и в
+   * ответе должен уйти base64(SHA256( base64(SHA256(password+salt)) + challenge )).
+   */
+  private async identify(
+    password: string,
+    auth?: { challenge: string; salt: string },
+  ): Promise<void> {
+    let authentication: string | undefined;
+    if (auth?.challenge && auth?.salt) {
+      if (!password) {
+        log.warn("obs", "OBS требует пароль, а он не задан");
+        // Отправляем Identify без auth — OBS ответит 4008, onclose покажет ошибку.
+      } else {
+        const secret = await sha256b64(password + auth.salt);
+        authentication = await sha256b64(secret + auth.challenge);
+      }
+    }
+    try {
+      this.send({
+        op: 1,
+        d: {
+          rpcVersion: 1,
+          authentication,
+          eventSubscriptions: 1023,
+        },
+      });
+    } catch (e) {
+      log.error("obs", "identify failed", e);
+    }
   }
 
   private send(message: unknown): void {

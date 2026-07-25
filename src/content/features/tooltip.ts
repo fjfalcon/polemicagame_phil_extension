@@ -11,6 +11,7 @@ import { log } from "@core/log";
 import { onDomChange } from "@core/dom";
 import { SITE } from "@core/selectors";
 import { escapeHtml } from "@core/escape";
+import { getLastGameData } from "../match-data";
 import type { Feature } from "@core/feature";
 
 interface MatchPlayer {
@@ -378,6 +379,9 @@ export const tooltipFeature: Feature = {
       matchData = detail;
     };
     document.addEventListener("gameDataParsed", onGameData);
+    // Догон: событие могло уйти до подписки — забираем из кэша match-data.
+    const cached = getLastGameData();
+    if (cached) matchData = cached as MatchData;
 
     // Обработать уже присутствующие точки
     scanRoot(document);

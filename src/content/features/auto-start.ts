@@ -45,6 +45,7 @@ let cfg = {
 // Автопринятие (страница поиска)
 let acceptInterval: ReturnType<typeof setInterval> | null = null;
 let unsubAcceptDom: (() => void) | null = null;
+let acceptScanTimer: ReturnType<typeof setTimeout> | null = null;
 let videoButtonClicked = false;
 
 // Игровая страница
@@ -216,7 +217,6 @@ function enableAutoAccept() {
   // быстрее, чем раз в секунду. Без дросселя она вызывала скан+клики на каждый
   // батч мутаций (до 60 раз/с) и обходила интервал-ограничитель: клик порождал
   // перерисовку, перерисовка — новый клик.
-  let acceptScanTimer: ReturnType<typeof setTimeout> | null = null;
   unsubAcceptDom = onDomChange((muts) => {
     if (acceptScanTimer !== null) return;
     if (!muts.some((m) => m.addedNodes.length)) return;
@@ -234,6 +234,12 @@ function disableAutoAccept() {
   }
   unsubAcceptDom?.();
   unsubAcceptDom = null;
+  // Хвост дросселя: без этого через ≤250 мс после выключения прилетал
+  // ещё один скан с кликами.
+  if (acceptScanTimer !== null) {
+    clearTimeout(acceptScanTimer);
+    acceptScanTimer = null;
+  }
 }
 
 // ─────────────────────────── скрытие/показ роли ───────────────────────────
@@ -568,14 +574,10 @@ function detectRolePhase(): "day" | "night" {
     if (nxtDay && !nxtNight) return "day";
   }
 
-  // 4) OBS panel
-  const obs = (window as any).obsFloatingPanel;
-  if (obs && typeof obs.detectTimeOfDay === "function") {
-    const panelPhase = obs.detectTimeOfDay();
-    if (panelPhase === "night" || panelPhase === "day") return panelPhase;
-  }
+  // (Ветка window.obsFloatingPanel удалена — этот объект нигде не определялся,
+  // наследие legacy page-script; в изолированном мире её не существовало.)
 
-  // 5) Любые .stage/.substage — последний fallback
+  // 4) Любые .stage/.substage — последний fallback
   const allTexts = getTexts(SITE.stage);
   const allDay = allTexts.some(isDayText);
   const allNight = allTexts.some(isNightText);

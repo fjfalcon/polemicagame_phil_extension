@@ -22,7 +22,17 @@ function injectedAutoAccept(): void {
   const DEADLINE = now + 10_000;
   w.__pnAutoAcceptUntil = DEADLINE;
 
-  const TEXTS = ["начать игру", "готов", "подтвердить", "принять игру", "join", "ready"];
+  // Тот же список, что TEXT.acceptGameButton в контенте (+ join для лобби-кнопок).
+  const TEXTS = [
+    "начать игру",
+    "готов",
+    "подтвердить",
+    "принять игру",
+    "ready",
+    "confirm",
+    "start playing",
+    "join",
+  ];
   const SELECTORS = [
     "button.button-comp.outline",
     "button.button.preset-1",
@@ -58,9 +68,10 @@ function injectedAutoAccept(): void {
 
   if (!clickAccept()) {
     // Один канал повторов вместо интервала 100 мс + необузданного observer'а:
-    // проверка раз в 300 мс до дедлайна.
+    // проверка раз в 300 мс до дедлайна. Дедлайн читаем из window, а не из
+    // замыкания — stopSearch обнуляет его снаружи и цикл гаснет досрочно.
     const interval = setInterval(() => {
-      if (Date.now() > DEADLINE || clickAccept()) {
+      if (Date.now() > (w.__pnAutoAcceptUntil ?? 0) || clickAccept()) {
         clearInterval(interval);
         w.__pnAutoAcceptUntil = 0;
       }
@@ -68,6 +79,11 @@ function injectedAutoAccept(): void {
   } else {
     w.__pnAutoAcceptUntil = 0;
   }
+}
+
+/** Выполняется в контексте страницы: досрочно гасит цикл автопринятия. */
+function injectedStopAutoAccept(): void {
+  (window as unknown as { __pnAutoAcceptUntil?: number }).__pnAutoAcceptUntil = 0;
 }
 
 export async function handleGameSearch(tabId: number | undefined): Promise<void> {
@@ -79,5 +95,21 @@ export async function handleGameSearch(tabId: number | undefined): Promise<void>
     });
   } catch (e) {
     log.error("auto-accept", "injection failed", e);
+  }
+}
+
+/**
+ * Отмена поиска: раньше stopSearch слался контентом, но не имел обработчика —
+ * инжект продолжал 10 секунд жать кнопки после того, как пользователь передумал.
+ */
+export async function handleStopSearch(tabId: number | undefined): Promise<void> {
+  if (tabId == null) return;
+  try {
+    await browser.scripting.executeScript({
+      target: { tabId },
+      func: injectedStopAutoAccept,
+    });
+  } catch (e) {
+    log.error("auto-accept", "stop injection failed", e);
   }
 }

@@ -12,7 +12,7 @@
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
-import { getSettings, setSettings } from "@core/settings";
+import { getSettings, setSettings, onSettingsChanged } from "@core/settings";
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
 import { escapeHtml } from "@core/escape";
 import { loadNotes, saveNotes, mergeNotes } from "@core/notes-store";
@@ -141,25 +141,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Escape") closeNicklenModal();
   });
 
-  // ───────────────────────── Кнопка активации (reload вкладки) ─────────────────────────
-  // Раньше: chrome.scripting.executeScript(content-notes.js/role-faker.js).
-  // Теперь: единый content.js грузится автоматически, FeatureManager реагирует на
-  // настройки. Достаточно перезагрузить вкладку для пере-инициализации фич.
-  const activateBtn = $<HTMLButtonElement>("activate_script");
-  if (activateBtn)
-    activateBtn.addEventListener("click", async () => {
-      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (tab?.url && tab.url.includes("polemicagame.com")) {
-        if (tab.id != null) await browser.tabs.reload(tab.id);
-        const button = $<HTMLButtonElement>("activate_script");
-        if (button) {
-          button.textContent = "Скрипт активирован";
-          button.style.backgroundColor = "#4CAF50";
-        }
-      } else {
-        alert("Скрипт работает только на polemicagame.com");
-      }
-    });
+  // (Блок «Кнопка активации» удалён: элемента activate_script в popup.html
+  // не существовало — обработчик был мёртвым кодом.)
 
   // ───────────────────────── Кнопка «Символы в никах» ─────────────────────────
   // Раньше: executeScript(func) собирал ники прямо со страницы.
@@ -328,7 +311,48 @@ document.addEventListener("DOMContentLoaded", () => {
   setupRoleKey("hotkey_role_hide", () => roleHideCode, (c) => (roleHideCode = c));
 
   // ───────────────────────── Загрузка настроек в контролы ─────────────────────────
+  /**
+   * Последнее известное состояние storage. Раньше popup был «слепым писателем»:
+   * не подписывался на изменения и при любом клике писал ВЕСЬ объект из своего
+   * (устаревшего) DOM — закрытая крестиком панель воскресала от любого тумблера,
+   * а изменения с другого устройства откатывались. Теперь пишем только дифф.
+   */
+  let lastKnown: Settings | null = null;
+
+  const reflectPatch = (patch: Partial<Settings>) => {
+    for (const [key, value] of Object.entries(patch)) {
+      const el = $<HTMLInputElement>(key);
+      if (!el) continue;
+      if (el.type === "checkbox") el.checked = value === true;
+      else if (typeof value === "string") el.value = value;
+    }
+    // Зависимые блоки видимости.
+    if ("obs_enabled" in patch) {
+      const s = $("obs_settings");
+      if (s) s.style.display = patch.obs_enabled ? "block" : "none";
+    }
+    if ("obs_auto_mode_enabled" in patch) {
+      const s = $("obs_auto_settings");
+      if (s) s.style.display = patch.obs_auto_mode_enabled ? "block" : "none";
+    }
+    if ("twitch_chat_enabled" in patch) {
+      const s = $("twitch_settings");
+      if (s) s.style.display = patch.twitch_chat_enabled ? "block" : "none";
+    }
+    if ("obs_day_scene" in patch) knownDayScene = patch.obs_day_scene || "";
+    if ("obs_night_scene" in patch) knownNightScene = patch.obs_night_scene || "";
+  };
+
+  // Точечные писатели из content (закрытие панели крестиком) и другие
+  // устройства теперь видны попапу сразу.
+  onSettingsChanged((patch) => {
+    if (!lastKnown) return;
+    lastKnown = { ...lastKnown, ...patch };
+    reflectPatch(patch);
+  });
+
   void getSettings().then((items) => {
+    lastKnown = items;
     pauseHotkeyCode = items.pause_hotkey_code || "F8";
     renderPauseKey();
     roleFakeCode = items.hotkey_role_fake || "KeyF";
@@ -460,12 +484,33 @@ document.addEventListener("DOMContentLoaded", () => {
       twitch_floating_panel_enabled: cb("twitch_floating_panel_enabled", false),
     };
 
+    // Пишем ТОЛЬКО изменившиеся ключи. До завершения загрузки не пишем вовсе —
+    // раньше клик до загрузки уезжал в storage снимком HTML-дефолтов
+    // (включая пустой пароль OBS).
+    if (!lastKnown) return;
+    const patch: Partial<Settings> = {};
+    for (const key of Object.keys(settings) as Array<keyof Settings>) {
+      if (settings[key] !== lastKnown[key]) (patch as Record<string, unknown>)[key] = settings[key];
+    }
+    if (Object.keys(patch).length === 0) return;
+    lastKnown = { ...lastKnown, ...patch };
+
     // setSettings сам разложит obs_password в storage.local.
-    void setSettings(settings).then(() => {
-      // Живое обновление уже активных фич в content (FeatureManager также реагирует на storage).
-      void broadcastToGameTabs({ type: "updateRoleFaker", enabled: settings.enable_role_faker });
-      void broadcastToGameTabs({ type: "updateNotesSettings", settings });
-    });
+    void setSettings(patch)
+      .then(() => {
+        // Живое обновление фич в content (FeatureManager также реагирует на storage).
+        // Пароль OBS в вкладки не рассылаем — content он не нужен, а любой
+        // будущий дамп настроек в лог превратил бы это в утечку.
+        const { obs_password: _pw, ...safe } = patch;
+        if (Object.keys(safe).length) {
+          void broadcastToGameTabs({ type: "updateNotesSettings", settings: safe });
+        }
+        // (updateRoleFaker удалён — это сообщение никто никогда не слушал.)
+      })
+      .catch((e) => {
+        log.error(SCOPE, "saveSettings failed", e);
+        showPopupToast("Не удалось сохранить настройки", "error");
+      });
   };
 
   // ───────────────────────── Подписка контролов на change ─────────────────────────
@@ -667,24 +712,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ───────────────────────── Аватар ─────────────────────────
-  const uploadAvatar = $<HTMLButtonElement>("upload_avatar");
-  const avatarUpload = $<HTMLInputElement>("avatar_upload");
-  if (uploadAvatar && avatarUpload) {
-    uploadAvatar.addEventListener("click", () => avatarUpload.click());
-    avatarUpload.addEventListener("change", () => {
-      const file = avatarUpload.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const avatarUrl = String(event.target?.result ?? "");
-        void browser.storage.local.set({ savedAvatarUrl: avatarUrl }).then(() => {
-          void sendToActiveTab({ type: "updateAvatar", avatarUrl });
-          setTimeout(() => window.close(), 1000);
-        });
-      };
-      reader.readAsDataURL(file);
-    });
-  }
+  // (Блок загрузки аватара удалён: кнопок upload_avatar/avatar_upload в
+  // popup.html не существовало — вся цепочка была мёртвой с момента порта.)
 
   // ───────────────────────── OBS ─────────────────────────
   function setupOBSHandlers() {

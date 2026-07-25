@@ -46,6 +46,10 @@ let closeMenu: (() => void) | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let scanTimer: ReturnType<typeof setTimeout> | null = null;
 let lastPath = "";
+let onStorageChanged:
+  | ((changes: Record<string, { newValue?: unknown }>, area: string) => void)
+  | null = null;
+let onPageHide: (() => void) | null = null;
 
 function usernameOf(player: Element): string | null {
   const name = player.querySelector(SITE.playerName)?.textContent?.trim();
@@ -202,11 +206,15 @@ function refreshGameKey(): string | null {
 function scan(): void {
   const key = refreshGameKey();
   if (key && key !== gameKey) {
+    const hadResolvedKey = gameKey !== null;
     gameKey = key;
     if (storeAll[key]) {
       marks = { ...storeAll[key] };
-    } else if (Object.keys(marks).length) {
+    } else if (!hadResolvedKey && Object.keys(marks).length) {
       // Метки сделаны до того, как gameKey определился — привяжем их к игре.
+      // Только при ПЕРВОМ резолве: при смене игры (key был и поменялся) эта
+      // ветка копировала реды прошлой партии в новую — совпадающие ники
+      // получали чужой «мой read».
       storeAll[key] = { ...marks };
       scheduleSave();
     } else {
@@ -220,9 +228,13 @@ export const roleMarkerFeature: Feature = {
   id: "role-marker",
   settingKey: "role_marker_enabled",
   async enable() {
-    const res = (await browser.storage.local.get({ [STORAGE_KEY]: {} })) as {
-      [STORAGE_KEY]: Record<string, Marks>;
-    };
+    let res: { [STORAGE_KEY]: Record<string, Marks> };
+    try {
+      res = (await browser.storage.local.get({ [STORAGE_KEY]: {} })) as typeof res;
+    } catch (e) {
+      log.error("role-marker", "load failed", e);
+      res = { [STORAGE_KEY]: {} };
+    }
     storeAll = res[STORAGE_KEY] || {};
     gameKey = null;
     marks = {};
@@ -235,6 +247,34 @@ export const roleMarkerFeature: Feature = {
         scan();
       }, 250);
     });
+    // Синхронизация между вкладками: раньше снапшот жил до перезагрузки, и
+    // вторая вкладка при записи затирала метки, сделанные в первой.
+    onStorageChanged = (changes, area) => {
+      if (area !== "local" || !changes[STORAGE_KEY]) return;
+      const next = changes[STORAGE_KEY].newValue as Record<string, Marks> | undefined;
+      if (!next) return;
+      storeAll = next;
+      if (gameKey && storeAll[gameKey]) {
+        marks = { ...storeAll[gameKey] };
+        document
+          .querySelectorAll<HTMLElement>(SITE.player)
+          .forEach((p) => {
+            const marker = p.querySelector<HTMLElement>(`.${MARKER_CLASS}`);
+            const name = usernameOf(p);
+            if (marker && name) paintMarker(marker, marks[name] || "none");
+          });
+      }
+    };
+    browser.storage.onChanged.addListener(onStorageChanged);
+    // Дебаунс 400 мс терял метку при F5/закрытии вкладки — доталкиваем.
+    onPageHide = () => {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        void browser.storage.local.set({ [STORAGE_KEY]: storeAll });
+      }
+    };
+    window.addEventListener("pagehide", onPageHide);
     log.info("role-marker", "enabled", Object.keys(storeAll).length, "games stored");
   },
   disable() {
@@ -242,9 +282,19 @@ export const roleMarkerFeature: Feature = {
     offDom = null;
     closeMenu?.();
     document.querySelectorAll(`.${MARKER_CLASS}, .${MENU_CLASS}`).forEach((el) => el.remove());
+    if (onStorageChanged) {
+      browser.storage.onChanged.removeListener(onStorageChanged);
+      onStorageChanged = null;
+    }
+    if (onPageHide) {
+      window.removeEventListener("pagehide", onPageHide);
+      onPageHide = null;
+    }
     if (saveTimer) {
+      // Не теряем несохранённое: дебаунс отменяем, но пишем сразу.
       clearTimeout(saveTimer);
       saveTimer = null;
+      void browser.storage.local.set({ [STORAGE_KEY]: storeAll });
     }
     if (scanTimer) {
       clearTimeout(scanTimer);

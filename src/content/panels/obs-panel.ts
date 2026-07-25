@@ -239,7 +239,10 @@ async function obsCommand(
 async function switchScene(sceneName: string): Promise<void> {
   const response = await obsCommand("set_scene", { sceneName });
   if (response && response.success) {
-    panel?.setCurrentScene(currentScene);
+    // Именно sceneName: раньше сюда передавалась модульная currentScene,
+    // т.е. подсвечивалась ПРОШЛАЯ сцена, а не только что установленная.
+    currentScene = sceneName;
+    panel?.setCurrentScene(sceneName);
   } else {
     log.error(SCOPE, "Failed to switch scene", response?.error);
     throw new Error(response?.error || "Unknown error");
@@ -369,17 +372,9 @@ function getRoleVisibilityTargets(): HTMLElement[] {
 }
 
 function applyRoleVisibility(isRoleVisible: boolean): boolean {
-  const directHandler = isRoleVisible
-    ? (window as any).showOwnRole
-    : (window as any).hideOwnRole;
-  if (typeof directHandler === "function") {
-    const handled = directHandler();
-    if (handled) {
-      lastAppliedRoleVisibility = isRoleVisible ? "visible" : "hidden";
-      log.debug(SCOPE, "Role visibility applied via window handler", lastAppliedRoleVisibility);
-      return true;
-    }
-  }
+  // Ветка window.showOwnRole/hideOwnRole удалена: эти функции нигде не
+  // определялись (наследие legacy page-script), в изолированном мире
+  // content-скрипта их не существует — ветка была мертва всегда.
 
   const targets = getRoleVisibilityTargets();
   if (targets.length === 0) {
@@ -398,12 +393,16 @@ function applyRoleVisibility(isRoleVisible: boolean): boolean {
 
     const originalState = roleVisibilityState.get(element)!;
     if (isRoleVisible) {
-      element.style.visibility = originalState.visibility;
-      element.style.opacity = originalState.opacity;
+      // Восстановление через setProperty(...,"important"): auto-start при
+      // включённом авто-скрытии держит СВОЙ <style> c !important, и обычный
+      // inline-показ ему проигрывал — роль ночью не показывалась никогда.
+      // Inline !important сильнее любого stylesheet !important.
+      setImportant(element, "visibility", originalState.visibility || "visible");
+      setImportant(element, "opacity", originalState.opacity || "1");
       element.style.pointerEvents = originalState.pointerEvents;
     } else {
-      element.style.visibility = "hidden";
-      element.style.opacity = "0";
+      setImportant(element, "visibility", "hidden");
+      setImportant(element, "opacity", "0");
       element.style.pointerEvents = "none";
     }
   });
@@ -411,6 +410,11 @@ function applyRoleVisibility(isRoleVisible: boolean): boolean {
   lastAppliedRoleVisibility = isRoleVisible ? "visible" : "hidden";
   log.debug(SCOPE, "Role visibility applied", lastAppliedRoleVisibility);
   return true;
+}
+
+function setImportant(el: HTMLElement, prop: string, value: string): void {
+  if (value) el.style.setProperty(prop, value, "important");
+  else el.style.removeProperty(prop);
 }
 
 function scheduleRoleVisibility(timeOfDay: TimeOfDay, attempt = 0): void {
@@ -704,9 +708,10 @@ async function autoSwitchScene(timeOfDay: TimeOfDay): Promise<void> {
   }
 
   log.debug(SCOPE, "Auto-switching to", timeOfDay, "scene:", targetScene, "(prev:", currentScene, ")");
-  // Обновляем currentScene сразу для корректного логирования.
-  currentScene = targetScene;
-
+  // currentScene обновляет switchScene ПОСЛЕ подтверждения. Оптимистичная
+  // запись до запроса блокировала все повторы гвардом currentScene===target:
+  // упавшее переключение (сцена удалена, дисконнект) молча замораживало
+  // автомод до следующей смены фазы.
   try {
     await switchScene(targetScene);
     log.debug(SCOPE, "Switched to scene:", targetScene);
@@ -865,6 +870,12 @@ function handleOBSEvent(eventType: string, data: any): void {
       panel?.setCurrentScene(currentScene);
       break;
 
+    case "obs_connected":
+      // Раньше case отсутствовал: если GetSceneList после коннекта падал,
+      // панель навсегда показывала «Не подключено» при живом соединении.
+      panel?.setConnectionStatus("Подключено", "connected");
+      break;
+
     case "obs_disconnected":
       void clearPersistedAutoState(true);
       scenes = [];
@@ -920,21 +931,9 @@ export const obsPanelFeature: Feature = {
       const m = msg as any;
       if (m.type === "obs_event") {
         handleOBSEvent(m.eventType, m.data);
-        return { success: true };
       }
-      if (m.type === "floating_panel_toggle") {
-        if (isVisible) doHide();
-        else doShow();
-        return { success: true };
-      }
-      if (m.type === "floating_panel_show") {
-        doShow();
-        return { success: true };
-      }
-      if (m.type === "floating_panel_hide") {
-        doHide();
-        return { success: true };
-      }
+      // floating_panel_show/hide/toggle удалены: этих сообщений никто никогда
+      // не отправлял (и их не было в ExtMessage) — слушатели-призраки.
       return undefined;
     });
 
