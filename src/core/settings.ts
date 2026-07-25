@@ -18,6 +18,7 @@ export const DEFAULT_SETTINGS: Settings = {
   show_roles: true,
   statistics_enabled: true,
   match_page_stats_enabled: true,
+  match_stats_view: "hints",
   stats_button_theme: "default",
   auto_accept_enabled: true,
   skip_start_screen_enabled: true,

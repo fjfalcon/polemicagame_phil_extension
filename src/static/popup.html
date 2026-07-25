@@ -193,6 +193,7 @@
     <div class="tabs">
         <button class="tab active" data-tab="game">Игра</button>
         <button class="tab" data-tab="stats">Стата</button>
+        <button class="tab" data-tab="match">Матч</button>
         <button class="tab" data-tab="roles">Роли</button>
         <button class="tab" data-tab="stream">Стрим</button>
         <button class="tab" data-tab="misc">Ещё</button>
@@ -232,9 +233,6 @@
             <div class="row"><span>Статистика игроков</span>
                 <label class="switch"><input type="checkbox" id="statistics_enabled" checked><span class="slider"></span></label>
             </div>
-            <div class="row"><span>Послеигровая статистика</span>
-                <label class="switch"><input type="checkbox" id="match_page_stats_enabled" checked><span class="slider"></span></label>
-            </div>
             <div class="row"><span>Тема кнопок</span>
                 <select id="stats_button_theme" class="sel">
                     <option value="default">Стандарт</option>
@@ -267,6 +265,23 @@
             <div class="row"><span>Символы в никах</span>
                 <button id="show_nickname_lengths" class="btn btn-primary">Показать</button>
             </div>
+        </div>
+
+        <!-- ── Страница статистики матча ── -->
+        <div class="panel" data-panel="match">
+            <div class="row"><span>Послеигровая статистика</span>
+                <label class="switch"><input type="checkbox" id="match_page_stats_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Вид разбора</span>
+                <select id="match_stats_view" class="sel">
+                    <option value="hints">С подсказками</option>
+                    <option value="legend">Только сводка</option>
+                    <option value="classic">Как в старой версии</option>
+                </select>
+            </div>
+            <p style="font-size:10px;color:var(--muted);margin:6px 2px 0;line-height:1.5">С подсказками — фазы раскрыты, подписи туров, сводка по клику.<br>
+            Только сводка — компакт: сводка раскрыта, фазы по клику.<br>
+            Старая версия — без сводки и подписей.</p>
         </div>
 
         <!-- ── Роли ── -->

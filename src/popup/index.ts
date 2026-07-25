@@ -401,6 +401,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const sbt = $<HTMLSelectElement>("stats_button_theme");
     if (sbt) sbt.value = items.stats_button_theme || "default";
+    const msv = $<HTMLSelectElement>("match_stats_view");
+    if (msv) msv.value = items.match_stats_view || "hints";
 
     set("auto_hide_roles_enabled", items.auto_hide_roles_enabled);
     const rpase = $<HTMLInputElement>("role_phase_auto_switch_enabled");
@@ -498,6 +500,7 @@ document.addEventListener("DOMContentLoaded", () => {
       hotkey_role_hide: roleHideCode,
       statistics_enabled: cb("statistics_enabled", true),
       match_page_stats_enabled: cb("match_page_stats_enabled", true),
+      match_stats_view: $<HTMLSelectElement>("match_stats_view")?.value || "hints",
       stats_button_theme: ($<HTMLSelectElement>("stats_button_theme")?.value || "default"),
       auto_hide_roles_enabled: autoHideRolesEnabled,
       role_phase_auto_switch_enabled:
@@ -562,6 +565,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "statistics_enabled",
     "match_page_stats_enabled",
     "stats_button_theme",
+    "match_stats_view",
     "auto_hide_roles_enabled",
     "role_phase_auto_switch_enabled",
     "disable_webcam_clicks",

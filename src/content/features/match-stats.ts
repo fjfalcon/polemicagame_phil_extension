@@ -93,6 +93,11 @@ function setStyleProp(el: HTMLElement, prop: "height" | "maxHeight", value: stri
   if (el.style[prop] !== value) el.style[prop] = value;
 }
 
+/** Вид разбора: hints (подсказки) | legend (только сводка) | classic (старый вид). */
+function viewMode(): string {
+  return settings?.match_stats_view || "hints";
+}
+
 function statsEnabled(): boolean {
   return !(
     settings?.statistics_enabled === false || settings?.match_page_stats_enabled === false
@@ -327,13 +332,14 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
       const thirdVotes = votes.filter((v: any) => v.num === 2);
 
       let html = "";
+      const labeled = viewMode() !== "classic";
       if (firstVotes.length > 0) {
         html += renderVotesBlock(
           firstVotes,
           players,
           "",
           `Выставление №${player.position}`,
-          "Выс",
+          labeled ? "Выс" : "",
           "Выставление",
         );
       }
@@ -343,7 +349,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           players,
           "margin-top: 4px;",
           `Голосование за №${player.position}`,
-          "Гол",
+          labeled ? "Гол" : "",
           "Голосование",
         );
       }
@@ -353,7 +359,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           players,
           "margin-top: 4px;",
           `Голосование за подъём (№${player.position})`,
-          "подъём",
+          labeled ? "подъём" : "",
           "Голосование за подъём всех",
         );
       }
@@ -398,6 +404,10 @@ function buildPhaseTimeline(
   phases: Array<{ day: any[]; night: any[] }>,
   gameDetails: any,
 ): void {
+  // classic — старый вид: без сводки, детали видны, подписи туров выключены.
+  if (viewMode() === "classic") return;
+  const compact = viewMode() === "legend";
+
   const detailRowsByPhase = new Map<number, HTMLElement[]>();
   table.querySelectorAll<HTMLElement>(".row[data-phase]").forEach((row) => {
     const m = row.getAttribute("data-phase")?.match(/^(?:day|night)-(\d+)$/);
@@ -405,8 +415,8 @@ function buildPhaseTimeline(
     const n = parseInt(m[1], 10);
     if (!detailRowsByPhase.has(n)) detailRowsByPhase.set(n, []);
     detailRowsByPhase.get(n)!.push(row);
-    // По умолчанию РАСКРЫТО (решение владельца): таймлайн — оглавление,
-    // клик по строке дня сворачивает/разворачивает детали фазы.
+    // hints: детали раскрыты, сводка по клику. legend: наоборот — компакт.
+    if (compact) row.style.display = "none";
     row.classList.add("pn-phase-detail");
   });
   if (detailRowsByPhase.size === 0) return;
@@ -423,10 +433,10 @@ function buildPhaseTimeline(
   // раскрыты, разворачивать сводку сверху — по клику на заголовок.
   const tlHeader = document.createElement("div");
   tlHeader.className = "pn-tl-header";
-  tlHeader.innerHTML = `<span class="pn-tl-toggle">▸</span> Сводка по дням`;
+  tlHeader.innerHTML = `<span class="pn-tl-toggle">${compact ? "▾" : "▸"}</span> Сводка по дням`;
   const tlBody = document.createElement("div");
   tlBody.className = "pn-tl-body";
-  tlBody.style.display = "none";
+  if (!compact) tlBody.style.display = "none";
   tlHeader.addEventListener("click", () => {
     const show = tlBody.style.display === "none";
     tlBody.style.display = show ? "" : "none";
@@ -481,7 +491,7 @@ function buildPhaseTimeline(
     const line = document.createElement("div");
     line.className = "pn-tl-line";
     line.innerHTML =
-      `<span class="pn-tl-toggle">▾</span>` +
+      `<span class="pn-tl-toggle">${compact ? "▸" : "▾"}</span>` +
       `<span class="pn-tl-phase">${n} ☀️</span><span class="pn-tl-group">${dayHtml}</span>` +
       (nightHtml ? `<span class="pn-tl-phase">🌙</span><span class="pn-tl-group">${nightHtml}</span>` : "") +
       penaltyHtml;
@@ -1525,7 +1535,13 @@ export const matchStatsFeature: Feature = {
   },
 
   update(ctx: FeatureContext): void {
+    const prevView = settings?.match_stats_view;
     settings = ctx.settings;
+    // Смена вида разбора — мгновенная перерисовка без F5.
+    if (statsEnabled() && prevView !== ctx.settings.match_stats_view && activeMatchId) {
+      const cached = getLastGameData();
+      if (cached) enhance(cached);
+    }
     // Если статистика выключена настройкой — снимаем добавленные элементы
     // и возвращаем заголовок сайта (раньше он оставался нашим).
     if (!statsEnabled()) {

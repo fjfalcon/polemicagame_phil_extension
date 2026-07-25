@@ -12,6 +12,8 @@ export interface Settings {
   show_roles: boolean;
   statistics_enabled: boolean;
   match_page_stats_enabled: boolean;
+  /** Вид страницы разбора матча: hints | legend | classic. */
+  match_stats_view: string;
   stats_button_theme: StatsTheme;
   // Игровой процесс
   auto_accept_enabled: boolean;
