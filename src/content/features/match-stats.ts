@@ -422,11 +422,14 @@ function buildPhaseTimeline(
     const counts = new Map<number, number>();
     for (const v of finalVotes) counts.set(v.to, (counts.get(v.to) || 0) + 1);
     const tourName = finalNum === 0 ? "" : finalNum === 1 ? " (перег.)" : " (подъём)";
+    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    // Ничья по максимуму голосов: верхний чип НЕ «уехавший» (реальный день 1
+    // референс-матча — шесть кандидатов по голосу, никто не покинул стол).
+    const isTie = sorted.length >= 2 && sorted[0][1] === sorted[1][1];
     const dayHtml = counts.size
-      ? [...counts.entries()]
-          .sort((a, b) => b[1] - a[1])
-          .map(([pos, cnt]) => chip(pos, `<i>·${cnt}</i>`))
-          .join("") + escapeHtml(tourName)
+      ? sorted.map(([pos, cnt]) => chip(pos, `<i>·${cnt}</i>`)).join("") +
+        escapeHtml(tourName) +
+        (isTie ? '<span class="pn-tl-none"> · ничья</span>' : "")
       : '<span class="pn-tl-none">без голосования</span>';
 
     const nightHtml = phase.night
@@ -436,10 +439,20 @@ function buildPhaseTimeline(
       )
       .join("");
 
-    // Штрафы этого дня — видны даже при свёрнутых деталях.
+    // Штрафы этой фазы (день ИЛИ ночь) — видны даже при свёрнутых деталях.
+    // Дедуп — страховка по образцу penaltyKey у точек (в референс-JSON
+    // penalty лежит один раз, в массиве инициатора; дублей там НЕТ, но
+    // точки исторически защищаются от них — держим паритет).
+    const seenPens = new Set<string>();
     const penaltyHtml = players
       .flatMap((p: any) => p.penalties || [])
-      .filter((pen: any) => pen?.stage?.day === n)
+      .filter((pen: any) => {
+        if (pen?.stage?.day !== n && pen?.stage?.night !== n) return false;
+        const key = `${pen.type}|${pen.initiator}|${pen.player}|${pen.stage?.day ?? ""}|${pen.stage?.night ?? ""}`;
+        if (seenPens.has(key)) return false;
+        seenPens.add(key);
+        return true;
+      })
       .map((pen: any) => `<span class="pn-tl-pen">⚠${escapeHtml(String(pen.player))}</span>`)
       .join("");
 
@@ -1069,6 +1082,11 @@ function applyAutoHeight(): void {
     const mmrRow = tableRows[tableRows.length - 1];
     const totalRow = tableRows[tableRows.length - 2];
 
+    // Гонка «Итог/MMR ещё не отрендерены сайтом»: последними строками могут
+    // оказаться НАШИ скрытые строки фаз — setStyleAttr переписал бы весь
+    // style, включая display:none, и выдернул их из тоггла таймлайна.
+    if (mmrRow?.hasAttribute("data-phase") || totalRow?.hasAttribute("data-phase")) return;
+
     if (mmrRow && totalRow) {
       setStyleAttr(mmrRow, "background: #1a1c29 !important; border-bottom: 2px solid #2c3347 !important;");
       setStyleAttr(totalRow, "background: #1a1c29 !important; border-top: 2px solid #2c3347 !important;");
@@ -1184,7 +1202,7 @@ function injectBaseStyles(): void {
       border: 1px solid rgba(255, 255, 255, 0.2) !important;
     }
     [style*="overflow: scroll hidden"] { overflow: hidden !important; }
-    [data-v-33ae8458] { height: auto !important; }
+    .game-stats-table[data-v-33ae8458], .game-stats-table [data-v-33ae8458], .game-stats-header[data-v-33ae8458] { height: auto !important; }
     .__vuescroll { height: auto !important; }
     .__panel, .__view { height: auto !important; }
     .game-stats-table {
@@ -1328,8 +1346,8 @@ function injectBaseStyles(): void {
     }
     .action:hover { background: rgba(40, 40, 50, 0.7) !important; }
     .action.kill { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
-    .action.check { background: rgba(234, 179, 8, 0.2); color: #eab308; }
-    .action.don_check { background: rgba(147, 51, 234, 0.2); color: #9333ea; }
+    .action.check { background: rgba(250, 204, 21, 0.14); color: #facc15; }
+    .action.don_check { background: rgba(192, 132, 252, 0.16); color: #c084fc; }
     .action.vote { background: rgba(30, 30, 40, 0.5) !important; color: #ffffff; }
     .action.vote.leading .voter { background: rgba(59, 130, 246, 0.2); }
     .action.kill img {
@@ -1339,10 +1357,13 @@ function injectBaseStyles(): void {
       margin-right: 2px;
       filter: brightness(1.2);
     }
-    .voter { color: #ef4444 !important; }
-    .voter.don-vote { color: #9333ea !important; }
-    .voter.mafia-vote { color: white !important; }
-    .voter.sheriff-vote { color: #eab308 !important; }
+    /* Единая палитра (8.1.30): эти !important-правила перебивают инлайн из
+       voterStyleFor — значения обязаны совпадать с ROLE_COLORS, иначе чипы
+       таймлайна и детальных строк красятся по-разному. */
+    .voter { color: #f87171 !important; }
+    .voter.don-vote { color: #c084fc !important; }
+    .voter.mafia-vote { color: #d1d5db !important; }
+    .voter.sheriff-vote { color: #facc15 !important; }
     .action span.voter {
       display: inline-block;
       margin: 0;

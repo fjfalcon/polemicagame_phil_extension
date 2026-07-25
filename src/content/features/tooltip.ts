@@ -12,6 +12,7 @@ import { onDomChange } from "@core/dom";
 import { SITE } from "@core/selectors";
 import { escapeHtml } from "@core/escape";
 import { getLastGameData } from "../match-data";
+import { ROLE_COLORS } from "./match-stats";
 import type { Feature } from "@core/feature";
 
 interface MatchPlayer {
@@ -191,21 +192,9 @@ function getRoleColor(number: string): string {
     return "white";
   }
   log.debug("tooltip", `Player ${number} role:`, player.role);
-  // Единая палитра ролей (8.1.30): до этого здесь дон был красным (цвет
-  // мирных в match-stats), мафия — синей, мирный — белым. Один игрок имел
-  // три разных цвета в трёх местах страницы.
-  switch (player.role) {
-    case 3:
-      return "#facc15"; // Шериф — жёлтый
-    case 2:
-      return "#f87171"; // Мирный — красный
-    case 1:
-      return "#d1d5db"; // Мафия — светло-серый
-    case 0:
-      return "#c084fc"; // Дон — фиолетовый
-    default:
-      return "#ffffff";
-  }
+  // Единая палитра ролей (8.1.30) — импорт канона, а не копия литералов:
+  // дубликаты значений уже расходились четыре раза за историю проекта.
+  return ROLE_COLORS[player.role ?? -1] ?? "#ffffff";
 }
 
 function showNotification(message: string): void {
