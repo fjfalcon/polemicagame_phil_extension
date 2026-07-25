@@ -92,6 +92,16 @@ export function mergeNotes(
   incoming: NotesMap,
 ): { merged: NotesMap; added: number; replaced: number } {
   const merged: NotesMap = { ...base };
+  // Ник → существующий id-ключ: старый бэкап с ник-ключами не должен
+  // создавать ДУБЛЬ рядом с уже мигрированной u:-записью того же игрока
+  // (дубль был бы невидим при чтении id-first и «воскресал» бы после
+  // удаления). Сливаем в id-ключ по обычному правилу timestamp.
+  const idKeyByNick = new Map<string, string>();
+  for (const [k, v] of Object.entries(base)) {
+    if (isIdKey(k) && v && typeof v !== "string" && v.nick) {
+      idKeyByNick.set(v.nick.toLowerCase(), k);
+    }
+  }
   let added = 0;
   let replaced = 0;
   for (const [key, note] of Object.entries(incoming)) {
@@ -104,12 +114,16 @@ export function mergeNotes(
       log.warn("notes", "dropped unsafe tag on import", key);
       safe = { ...safe, tag: undefined };
     }
-    const existing = merged[key];
+    const targetKey = !isIdKey(key) ? (idKeyByNick.get(key.toLowerCase()) ?? key) : key;
+    const existing = merged[targetKey];
     if (existing === undefined) {
-      merged[key] = safe;
+      merged[targetKey] = safe;
       added++;
     } else if (noteTimestamp(safe) > noteTimestamp(existing)) {
-      merged[key] = safe;
+      // Слив в id-ключ сохраняет nick-поле существующей записи.
+      const nick =
+        typeof existing !== "string" && existing.nick ? { nick: existing.nick } : {};
+      merged[targetKey] = typeof safe === "string" ? safe : { ...safe, ...nick };
       replaced++;
     }
   }

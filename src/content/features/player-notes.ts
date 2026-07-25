@@ -32,6 +32,7 @@ import {
   saveCustomTags as saveCustomTagsToStore,
   isSafeNoteKey,
   idKey,
+  isIdKey,
   NOTES_KEY,
   TAGS_KEY,
   NOTES_VERSION,
@@ -320,6 +321,9 @@ class PlayerNotesManager {
       }
       if (!changes[NOTES_KEY]) return;
       this.notes = (changes[NOTES_KEY].newValue as NotesMap) || {};
+      // Пришла валидная карта из другого контекста — безопасная точка
+      // восстановления после сбоя чтения: блок записей можно снять.
+      this.notesReadOnly = false;
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
       this.updateAllTooltips();
@@ -443,6 +447,9 @@ class PlayerNotesManager {
   }
 
   private async saveCustomTags(): Promise<void> {
+    // Та же дыра «пишем непрочитанное», что у заметок: при упавшем loadNotes
+    // палитра в памяти пуста, и запись стёрла бы пользовательские цвета.
+    if (this.notesReadOnly) return;
     await saveCustomTagsToStore(this.customTags);
   }
 
@@ -458,7 +465,14 @@ class PlayerNotesManager {
   /** userId игрока, если статистика его уже резолвила (иначе undefined). */
   private noteUserId(username: string): number | string | undefined {
     const id = this.playerStats.get(username.toLowerCase())?.id;
-    return id === undefined || id === null || id === "" || id === "???" ? undefined : id;
+    // БЕЛЫЙ список вместо чёрного: принимаем только положительное целое.
+    // Чёрный список («???», "") пропустил бы плейсхолдеры заглушек — так
+    // "—" из unavailablePlayerStats чуть не отправил заметки ВСЕХ
+    // недоступных игроков в один общий ключ u:— (чужая заметка в тултипе
+    // соседа + взаимная перезапись). Блокер ревью 8.1.29.
+    if (typeof id === "number") return Number.isInteger(id) && id > 0 ? id : undefined;
+    if (typeof id === "string" && /^\d+$/.test(id) && id !== "0") return id;
+    return undefined;
   }
 
   /**
@@ -494,9 +508,7 @@ class PlayerNotesManager {
   /** Все легаси-ключи-ники этого игрока (точный + отличающиеся регистром). */
   private nickKeysFor(username: string): string[] {
     const lower = username.toLowerCase();
-    return Object.keys(this.notes).filter(
-      (k) => !k.startsWith("u:") && k.toLowerCase() === lower,
-    );
+    return Object.keys(this.notes).filter((k) => !isIdKey(k) && k.toLowerCase() === lower);
   }
 
   /**
@@ -505,42 +517,66 @@ class PlayerNotesManager {
    * ник сохраняется внутри записи для экспорта и отображения.
    */
   private async migrateNoteToId(username: string, userId: number | string): Promise<void> {
-    const nickKeys = this.nickKeysFor(username);
-    if (nickKeys.length === 0) return;
+    if (this.nickKeysFor(username).length === 0) return;
     const key = idKey(userId);
 
-    let best: NoteRecord | undefined =
-      typeof this.notes[key] === "object" ? (this.notes[key] as NoteRecord) : undefined;
+    // Миграция — АВТОМАТИЧЕСКИЙ писатель всей карты (срабатывает без действий
+    // пользователя). Работаем со СВЕЖЕЙ картой с диска, а не со снапшотом
+    // памяти: иначе вкладка со старой памятью затирала бы заметку, только что
+    // сохранённую в другой вкладке (окно RMW сжимается с «минут» до мс).
+    const { notes: fresh, loadFailed } = await loadNotesFromStore();
+    if (loadFailed || !this.active) return;
+
+    const lower = username.toLowerCase();
+    const freshNickKeys = Object.keys(fresh).filter(
+      (k) => !isIdKey(k) && k.toLowerCase() === lower,
+    );
+    if (freshNickKeys.length === 0) return;
+
     const ts = (n: NoteRecord | string | undefined) =>
       n && typeof n !== "string" && typeof n.timestamp === "number" ? n.timestamp : 0;
-    for (const nk of nickKeys) {
-      const note = this.notes[nk];
-      const record: NoteRecord =
-        typeof note === "string" ? { text: note, timestamp: 0 } : (note as NoteRecord);
-      if (!best || ts(record) > ts(best)) best = record;
+    const toRecord = (n: NoteRecord | string): NoteRecord =>
+      typeof n === "string" ? { text: n, timestamp: 0 } : n;
+
+    let best: NoteRecord | undefined =
+      fresh[key] !== undefined && typeof fresh[key] === "object"
+        ? (fresh[key] as NoteRecord)
+        : undefined;
+    const losers: NoteRecord[] = [];
+    for (const nk of freshNickKeys) {
+      const record = toRecord(fresh[nk]);
+      if (!best) {
+        best = record;
+      } else if (ts(record) > ts(best)) {
+        losers.push(best);
+        best = record;
+      } else {
+        losers.push(record);
+      }
     }
     if (!best) return;
 
-    // Откат по снапшоту, а НЕ ресинк через loadNotes(): при двойном сбое
-    // storage loadNotes возвращает ПУСТУЮ карту — присвоив её, следующее
-    // успешное сохранение записало бы пустоту поверх всех заметок.
-    const snapshot = new Map<string, NoteRecord | string | undefined>();
-    snapshot.set(key, this.notes[key]);
-    for (const nk of nickKeys) snapshot.set(nk, this.notes[nk]);
-
-    this.notes[key] = { ...best, nick: username };
-    for (const nk of nickKeys) delete this.notes[nk];
-    if (await this.saveNotes()) {
-      log.debug("player-notes", "note migrated to id key", username, key);
-    } else {
-      for (const [k, v] of snapshot) {
-        if (v === undefined) delete this.notes[k];
-        else this.notes[k] = v;
+    // Ничья по времени (обе легаси, ts=0) с РАЗНЫМ текстом — не уничтожаем
+    // проигравший текст молча, а дописываем его в запись.
+    const winner: NoteRecord = { ...best };
+    for (const loser of losers) {
+      if (ts(loser) === ts(winner) && loser.text && loser.text !== winner.text) {
+        winner.text = winner.text ? `${winner.text}\n[слито: ${loser.text}]` : loser.text;
+        if (!winner.tag && loser.tag) winner.tag = loser.tag;
       }
-      return;
     }
-    this.refreshNoteIndicators();
-    this.refreshPlayerTags();
+
+    fresh[key] = { ...winner, nick: username };
+    for (const nk of freshNickKeys) delete fresh[nk];
+
+    if (await saveNotesToStore(fresh)) {
+      this.notes = fresh;
+      log.debug("player-notes", "note migrated to id key", username, key);
+      this.refreshNoteIndicators();
+      this.refreshPlayerTags();
+      this.updatePlayerTooltips(username);
+    }
+    // При неудаче записи память не трогаем вовсе — this.notes как была.
   }
 
   /** Подсветить плитку игрока меткой (цвет или градиент) через overlay-рамку. */
@@ -715,7 +751,11 @@ class PlayerNotesManager {
       // userId резолвлен — самое время лениво перевезти заметку с ник-ключа
       // на вечный id-ключ (смена ника больше не теряет заметку).
       const resolvedId = this.noteUserId(username);
-      if (resolvedId !== undefined) void this.migrateNoteToId(username, resolvedId);
+      if (resolvedId !== undefined) {
+        this.migrateNoteToId(username, resolvedId).catch((e) =>
+          log.error("player-notes", "note migration failed", e),
+        );
+      }
 
       // Обновляем ВСЕ отрисованные тултипы этого игрока: сайт рендерит одного
       // игрока в двух плитках (десктоп/мобайл), а querySelector обновлял
@@ -1214,6 +1254,11 @@ class PlayerNotesManager {
     this.closeOpenModal?.();
     this.closeOpenModal = close;
 
+    // Что пользователь РЕАЛЬНО видел при открытии: если за время набора текста
+    // статистика резолвила id и под u:-ключом появилась/жила запись, которую
+    // он не видел, — не даём слепо перезаписать или удалить её.
+    const openedKey = this.noteKeyFor(username);
+
     /** true — заметка записана; false — запись не удалась, окно закрывать нельзя. */
     const save = async (): Promise<boolean> => {
       if (!isSafeNoteKey(username)) {
@@ -1231,17 +1276,23 @@ class PlayerNotesManager {
       const staleNickKeys = id !== undefined ? this.nickKeysFor(username) : [];
       for (const nk of staleNickKeys) touched.set(nk, this.notes[nk]);
 
+      const unseen = key !== openedKey ? this.notes[key] : undefined;
       if (value || selectedTag) {
+        // Метка невидённой записи сохраняется, если пользователь свою не ставил.
+        const unseenTag = unseen && typeof unseen !== "string" ? unseen.tag : undefined;
         this.notes[key] = {
           text: value,
           timestamp: Date.now(),
           version: VERSION,
-          tag: selectedTag || undefined,
+          tag: selectedTag || unseenTag || undefined,
           ...(id !== undefined ? { nick: username } : {}),
         };
-      } else {
+      } else if (unseen === undefined) {
         delete this.notes[key];
       }
+      // else: пустое сохранение удаляет только то, что пользователь ВИДЕЛ
+      // (ник-ключи ниже); невидённая u:-запись переживает.
+
       // Запись по id-ключу поглощает легаси-ники этого игрока.
       for (const nk of staleNickKeys) delete this.notes[nk];
 
