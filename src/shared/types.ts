@@ -67,6 +67,13 @@ export interface ObsSceneData {
   currentScene: string | null;
 }
 
+/** Последнее подтверждённое background-состояние OBS. */
+export interface ObsConnectionState extends ObsSceneData {
+  connected: boolean;
+  sessionId: string | null;
+  timestamp: number;
+}
+
 // ───────────────────────── Протокол сообщений ─────────────────────────
 // Сохраняем поля `type`/`action`/`command` ради совместимости логики.
 

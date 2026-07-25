@@ -23,6 +23,7 @@ import { log } from "@core/log";
 import { onDomChange } from "@core/dom";
 import { onMessage } from "@core/messaging";
 import { toggleFlipForPlayer, isPlayerFlipped } from "../camera-flip";
+import { getMatchId } from "../match-data";
 import { escapeHtml } from "@core/escape";
 import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
 import {
@@ -167,6 +168,7 @@ class PlayerNotesManager {
   private visibilityHandler: (() => void) | null = null;
   private gameStateHandler: (() => void) | null = null;
   private matchStyleEl: HTMLStyleElement | null = null;
+  private matchPageActive = false;
 
   constructor(ctx: FeatureContext) {
     this.settings = ctx.settings;
@@ -177,11 +179,12 @@ class PlayerNotesManager {
   async enable(): Promise<void> {
     await this.loadNotes();
 
-    this.addMatchPageStyles();
+    this.syncMatchPageRoute(getMatchId() !== null);
 
     // Один общий наблюдатель за DOM вместо нескольких MutationObserver.
     this.unsubscribers.push(
       onDomChange(() => {
+        if (this.matchPageActive) this.applyMatchPageMarker();
         if (this.settings.statistics_enabled === false) {
           this.removeStatisticsElements();
           return;
@@ -322,6 +325,10 @@ class PlayerNotesManager {
     if (this.matchStyleEl) {
       this.matchStyleEl.remove();
       this.matchStyleEl = null;
+    }
+    this.matchPageActive = false;
+    if (document.body.getAttribute("data-page-type") === "match") {
+      document.body.removeAttribute("data-page-type");
     }
 
     this.playerStats.clear();
@@ -1384,9 +1391,25 @@ class PlayerNotesManager {
     `;
     document.head.appendChild(style);
     this.matchStyleEl = style;
+  }
 
-    if (window.location.pathname.includes("/match/")) {
+  private applyMatchPageMarker(): void {
+    if (document.body.getAttribute("data-page-type") !== "match") {
       document.body.setAttribute("data-page-type", "match");
+    }
+  }
+
+  syncMatchPageRoute(isMatch: boolean): void {
+    this.matchPageActive = isMatch;
+    if (isMatch) {
+      this.addMatchPageStyles();
+      this.applyMatchPageMarker();
+      return;
+    }
+    this.matchStyleEl?.remove();
+    this.matchStyleEl = null;
+    if (document.body.getAttribute("data-page-type") === "match") {
+      document.body.removeAttribute("data-page-type");
     }
   }
 
@@ -1453,6 +1476,11 @@ function cssAttr(value: string): string {
 // ───────────────────────── Экспорт фичи ─────────────────────────
 
 let manager: PlayerNotesManager | null = null;
+
+/** Вызывается единым URL-роутером content/index.ts. */
+export function syncPlayerNotesRoute(isMatch: boolean): void {
+  manager?.syncMatchPageRoute(isMatch);
+}
 
 export const playerNotesFeature: Feature = {
   id: "player-notes",

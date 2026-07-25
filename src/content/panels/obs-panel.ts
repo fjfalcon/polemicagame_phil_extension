@@ -25,9 +25,10 @@ import { log } from "@core/log";
 import { onMessage, sendRuntime } from "@core/messaging";
 import { SITE } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
-import type { ObsScene } from "@shared/types";
+import type { ObsConnectionState, ObsScene } from "@shared/types";
 
 const SCOPE = "obs-panel";
+const OBS_STATE_MAX_AGE_MS = 2 * 60_000;
 
 type TimeOfDay = "day" | "night";
 type ConnStatus = "default" | "connected" | "error";
@@ -278,10 +279,13 @@ async function requestOBSStatus(): Promise<void> {
 
 // ─────────────────────────── persist состояния авто-сцены ───────────────────────────
 
-async function getStoredConnectionState(): Promise<any> {
+async function getStoredConnectionState(): Promise<ObsConnectionState | null> {
   try {
     const res = await browser.storage.local.get(["obs_connection_state"]);
-    return (res as any).obs_connection_state || null;
+    const state = (res as { obs_connection_state?: ObsConnectionState }).obs_connection_state;
+    if (!state || !Number.isFinite(state.timestamp)) return null;
+    if (Date.now() - state.timestamp > OBS_STATE_MAX_AGE_MS) return null;
+    return state;
   } catch (e) {
     log.error(SCOPE, "Failed to load OBS connection state", e);
     return null;

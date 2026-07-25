@@ -8,7 +8,7 @@
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { broadcastToGameTabs, sendRuntime } from "@core/messaging";
-import type { ObsScene, ObsSceneData } from "@shared/types";
+import type { ObsConnectionState, ObsScene, ObsSceneData } from "@shared/types";
 
 interface ConnSettings {
   url: string;
@@ -16,6 +16,7 @@ interface ConnSettings {
 }
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
+export const OBS_RETRY_BLOCKED_KEY = "obs_retry_blocked";
 
 /** base64(SHA-256(text)) — примитив challenge-response аутентификации v5. */
 async function sha256b64(text: string): Promise<string> {
@@ -42,44 +43,42 @@ export class ObsClient {
   private readonly heartbeatInterval = 30_000;
   private readonly connectionTimeout = 10_000;
   private connecting = false;
+  private connectionTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectionReject: ((error: Error) => void) | null = null;
+  private retryBlocked = false;
 
   async connect(url: string, password = ""): Promise<boolean> {
-    if (this.connecting) return false;
-    this.connecting = true;
-    this.settings = { url, password };
-    // Старый сокет отвязываем ДО замены: его onclose иначе вызывал teardownSocket
-    // и убивал учёт нового соединения (а сам сокет оставался открытым навсегда).
-    if (this.socket) {
-      this.socket.onopen = null;
-      this.socket.onmessage = null;
-      this.socket.onclose = null;
-      this.socket.onerror = null;
-      try {
-        this.socket.close(1000, "Superseded");
-      } catch {
-        /* уже закрыт */
+    if (this.connecting) {
+      if (this.settings?.url === url && this.settings.password === password) return false;
+      this.closeCurrentSocket("Superseded by new connection");
+      while (this.connecting) {
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
       }
-      // Полный teardown, а не только замена ссылки: без сброса isConnected
-      // новый сокет доходил до Identified, но ветка готовности гейтится
-      // !isConnected — промис connect() никогда не резолвился, connecting
-      // застревал в true, и ВСЕ дальнейшие подключения возвращали false
-      // до перезапуска браузера.
-      this.teardownSocket();
-      // Запросы старого сокета уже никогда не получат ответ.
-      for (const [, p] of this.pending) p.reject(new Error("Superseded by new connection"));
-      this.pending.clear();
+    }
+    this.connecting = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.settings = { url, password };
+    // Старый сокет отвязываем ДО замены: его onclose иначе убивал учёт нового.
+    if (this.socket) {
+      this.closeCurrentSocket("Superseded by new connection");
     }
     try {
       return await new Promise<boolean>((resolve, reject) => {
+        this.connectionReject = reject;
         const socket = new WebSocket(url);
         this.socket = socket;
 
         const timeout = setTimeout(() => {
           if (!this.isConnected) {
+            this.clearConnectionAttempt();
             socket.close();
             reject(new Error("Connection timeout"));
           }
         }, this.connectionTimeout);
+        this.connectionTimer = timeout;
 
         // Identify уходит ТОЛЬКО после Hello (op:0) — раньше он слался в onopen
         // с сырым паролем, без challenge-response. OBS с включённой
@@ -95,15 +94,16 @@ export class ObsClient {
             return;
           }
           if (msg.op === 0) {
-            void this.identify(password, msg.d?.authentication);
+            void this.identify(socket, password, msg.d?.authentication);
             return;
           }
           // Identified (op:2) => соединение готово
           if (msg.op === 2 && !this.isConnected) {
-            clearTimeout(timeout);
+            this.clearConnectionAttempt();
             this.isConnected = true;
             this.sessionId = this.makeSessionId();
             this.reconnectAttempts = 0;
+            void this.setRetryBlocked(false);
             this.lastHeartbeat = Date.now();
             this.startHeartbeat();
             void this.saveConnectionState(true);
@@ -116,12 +116,14 @@ export class ObsClient {
           log.info("obs", "disconnected", event.code, event.reason);
           const wasConnected = this.isConnected;
           this.teardownSocket();
+          const retryBlocked = [4008, 4009, 4010, 4011].includes(event.code);
+          if (retryBlocked) void this.setRetryBlocked(true);
           void this.saveConnectionState(false);
           this.notifyAll("obs_disconnected");
           // До Identified закрытие — это ОТКАЗ подключения: реджектим сразу,
           // а не висим 10 секунд с connecting=true (4009 = неверный пароль).
           if (!wasConnected) {
-            clearTimeout(timeout);
+            this.clearConnectionAttempt();
             reject(
               new Error(
                 event.code === 4009
@@ -138,13 +140,14 @@ export class ObsClient {
         socket.onerror = (err) => {
           log.error("obs", "socket error", err);
           if (!this.isConnected) {
-            clearTimeout(timeout);
+            this.clearConnectionAttempt();
             this.stopHeartbeat();
             reject(new Error("WebSocket error"));
           }
         };
       });
     } finally {
+      this.clearConnectionAttempt();
       this.connecting = false;
     }
   }
@@ -152,6 +155,10 @@ export class ObsClient {
   /** Явное действие пользователя — свежий лимит реконнектов. */
   resetReconnectAttempts(): void {
     this.reconnectAttempts = 0;
+  }
+
+  async allowAutoReconnect(): Promise<void> {
+    await this.setRetryBlocked(false);
   }
 
   private makeSessionId(): string {
@@ -165,6 +172,35 @@ export class ObsClient {
     this.sessionId = null;
     this.socket = null;
     this.stopHeartbeat();
+  }
+
+  private clearConnectionAttempt(): void {
+    if (this.connectionTimer) {
+      clearTimeout(this.connectionTimer);
+      this.connectionTimer = null;
+    }
+    this.connectionReject = null;
+  }
+
+  private closeCurrentSocket(reason: string): void {
+    const socket = this.socket;
+    if (socket) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      try {
+        socket.close(1000, reason);
+      } catch {
+        /* уже закрыт */
+      }
+    }
+    const reject = this.connectionReject;
+    this.clearConnectionAttempt();
+    this.teardownSocket();
+    reject?.(new Error(reason));
+    for (const [, pending] of this.pending) pending.reject(new Error(reason));
+    this.pending.clear();
   }
 
   private attemptReconnect(): void {
@@ -191,7 +227,7 @@ export class ObsClient {
       if (Date.now() - this.lastHeartbeat > this.heartbeatInterval * 2) {
         this.handleConnectionLost();
       } else {
-        this.request("GetVersion").catch(() => undefined);
+        void this.verifyConnection();
       }
     }, this.heartbeatInterval);
   }
@@ -205,10 +241,14 @@ export class ObsClient {
 
   private handleConnectionLost(): void {
     log.warn("obs", "connection lost (heartbeat timeout)");
-    this.socket?.close();
-    this.teardownSocket();
-    this.notifyAll("obs_disconnected");
-    this.attemptReconnect();
+    try {
+      this.socket?.close(4000, "Heartbeat timeout");
+    } catch {
+      this.teardownSocket();
+      void this.saveConnectionState(false);
+      this.notifyAll("obs_disconnected");
+      this.attemptReconnect();
+    }
   }
 
   disconnect(): void {
@@ -216,11 +256,7 @@ export class ObsClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.stopHeartbeat();
-    this.socket?.close(1000, "Manual disconnect");
-    this.socket = null;
-    this.isConnected = false;
-    this.sessionId = null;
+    this.closeCurrentSocket("Manual disconnect");
     this.scenes = [];
     this.currentScene = null;
     this.settings = null;
@@ -235,6 +271,7 @@ export class ObsClient {
    * ответе должен уйти base64(SHA256( base64(SHA256(password+salt)) + challenge )).
    */
   private async identify(
+    socket: WebSocket,
     password: string,
     auth?: { challenge: string; salt: string },
   ): Promise<void> {
@@ -248,15 +285,16 @@ export class ObsClient {
         authentication = await sha256b64(secret + auth.challenge);
       }
     }
+    if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) return;
     try {
-      this.send({
+      socket.send(JSON.stringify({
         op: 1,
         d: {
           rpcVersion: 1,
           authentication,
           eventSubscriptions: 1023,
         },
-      });
+      }));
     } catch (e) {
       log.error("obs", "identify failed", e);
     }
@@ -363,16 +401,55 @@ export class ObsClient {
     };
   }
 
+  isConnectedTo(url: string, password: string): boolean {
+    return (
+      this.isConnected && this.settings?.url === url && this.settings.password === password
+    );
+  }
+
+  hasConnectionActivity(): boolean {
+    return this.isConnected || this.connecting || this.socket !== null || this.reconnectTimer !== null;
+  }
+
+  isAutoReconnectBlocked(): boolean {
+    return this.retryBlocked;
+  }
+
+  /** Проверка живого сокета; успешный ответ освежает persisted timestamp. */
+  async verifyConnection(): Promise<boolean> {
+    if (!this.isConnected) return false;
+    try {
+      await this.request("GetVersion");
+      this.lastHeartbeat = Date.now();
+      await this.saveConnectionState(true);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async saveConnectionState(connected: boolean): Promise<void> {
-    await browser.storage.local.set({
-      obs_connection_state: {
-        connected,
-        scenes: this.scenes,
-        currentScene: this.currentScene,
-        sessionId: this.sessionId,
-        timestamp: Date.now(),
-      },
-    });
+    const state: ObsConnectionState = {
+      connected,
+      scenes: connected ? this.scenes : [],
+      currentScene: connected ? this.currentScene : null,
+      sessionId: connected ? this.sessionId : null,
+      timestamp: Date.now(),
+    };
+    try {
+      await browser.storage.local.set({ obs_connection_state: state });
+    } catch (e) {
+      log.error("obs", "failed to persist connection state", e);
+    }
+  }
+
+  private async setRetryBlocked(blocked: boolean): Promise<void> {
+    this.retryBlocked = blocked;
+    try {
+      await browser.storage.local.set({ [OBS_RETRY_BLOCKED_KEY]: blocked });
+    } catch (e) {
+      log.error("obs", "failed to persist retry state", e);
+    }
   }
 
   /** Уведомить и popup, и все вкладки игры одним вызовом. */

@@ -11,7 +11,7 @@
 import { SITE } from "@core/selectors";
 import { escapeHtml } from "@core/escape";
 import { log } from "@core/log";
-import { getLastGameData } from "../match-data";
+import { getLastGameData, getMatchId } from "../match-data";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
 
@@ -23,10 +23,19 @@ let settings: Settings | null = null;
 let gameDataListener: ((event: Event) => void) | null = null;
 /** Исходная разметка заголовка сайта — восстанавливается при disable(). */
 let originalHeaderHtml: string | null = null;
+let originalHeaderElement: HTMLElement | null = null;
+let originalHeaderStyle: string | null = null;
+let originalHeaderHadScopeAttr = false;
 const intervals = new Set<ReturnType<typeof setInterval>>();
 const timeouts = new Set<ReturnType<typeof setTimeout>>();
 const injectedStyles: HTMLStyleElement[] = [];
-let loadListener: (() => void) | null = null;
+const originalInlineStyles = new Map<HTMLElement, string | null>();
+let activeMatchId: string | null = null;
+let previousRouteTable: WeakRef<HTMLElement> | null = null;
+let previousRouteTableHtml = "";
+let previousRouteMatchId: string | null = null;
+let routeReadyInterval: ReturnType<typeof setInterval> | null = null;
+let pendingGameData: any = null;
 
 function trackInterval(id: ReturnType<typeof setInterval>): ReturnType<typeof setInterval> {
   intervals.add(id);
@@ -69,11 +78,15 @@ function appendStyle(css: string, id?: string): HTMLStyleElement {
  * MutationObserver и всех его подписчиков вхолостую.
  */
 function setStyleAttr(el: Element, css: string): void {
+  if (el instanceof HTMLElement && !originalInlineStyles.has(el)) {
+    originalInlineStyles.set(el, el.getAttribute("style"));
+  }
   if (el.getAttribute("style") !== css) el.setAttribute("style", css);
 }
 
 /** То же для отдельного свойства. */
 function setStyleProp(el: HTMLElement, prop: "height" | "maxHeight", value: string): void {
+  if (!originalInlineStyles.has(el)) originalInlineStyles.set(el, el.getAttribute("style"));
   if (el.style[prop] !== value) el.style[prop] = value;
 }
 
@@ -83,25 +96,51 @@ function statsEnabled(): boolean {
   );
 }
 
+function clearPreviousRouteSnapshot(): void {
+  previousRouteTable = null;
+  previousRouteTableHtml = "";
+  previousRouteMatchId = null;
+}
+
+function isRouteDomReady(): boolean {
+  const header = document.querySelector<HTMLElement>(SITE.statsHeader);
+  const table = document.querySelector<HTMLElement>(SITE.statsTable);
+  if (!header || !table) return false;
+  return !(
+    table === previousRouteTable?.deref() && table.innerHTML === previousRouteTableHtml
+  );
+}
+
 // ───────────────────────── построение таблицы ─────────────────────────
 
 function enhance(gameData: any): void {
   // Идемпотентность + защита от SPA-гонки: повторное событие или ожидание
   // таблицы, пережившее переход на другой матч, раньше давало дубликаты строк
   // и вставку данных ЧУЖОГО матча в свежеоткрытую таблицу.
-  const matchIdAtStart = location.pathname.split("/").pop() || "";
+  const matchIdAtStart = getMatchId() || "";
   // Данные должны принадлежать ЭТОЙ странице: кэш getLastGameData при
   // перевключении тумблера после SPA-перехода приносил матч A на страницу B.
   if (gameData?.id && String(gameData.id) !== matchIdAtStart) {
     log.debug(SCOPE, "cached data is for another match, skip", gameData.id, matchIdAtStart);
     return;
   }
+  if (!isRouteDomReady()) {
+    pendingGameData = gameData;
+    return;
+  }
+  pendingGameData = null;
+  clearPreviousRouteSnapshot();
   removeEnhancements();
 
   const header = document.querySelector<HTMLElement>(SITE.statsHeader);
   if (header) {
     const gameId = gameData.id || "";
-    if (originalHeaderHtml === null) originalHeaderHtml = header.innerHTML;
+    if (originalHeaderHtml === null) {
+      originalHeaderHtml = header.innerHTML;
+      originalHeaderElement = header;
+      originalHeaderStyle = header.getAttribute("style");
+      originalHeaderHadScopeAttr = header.hasAttribute("data-v-33ae8458");
+    }
 
     // winnerCode: 0 = мирные. Отсутствие поля раньше уверенно рисовало
     // «Победа мафии» — теперь нейтральный заголовок.
@@ -139,7 +178,7 @@ function enhance(gameData: any): void {
   const checkTable = trackInterval(
     setInterval(() => {
       // SPA-переход на другой матч — данные этого больше не актуальны.
-      if ((location.pathname.split("/").pop() || "") !== matchIdAtStart) {
+      if ((getMatchId() || "") !== matchIdAtStart) {
         clearTrackedInterval(checkTable);
         return;
       }
@@ -170,12 +209,25 @@ function removeEnhancements(): void {
 /** Вернуть заголовок сайта как был (мы его переписываем через innerHTML). */
 function restoreHeader(): void {
   if (originalHeaderHtml === null) return;
-  const header = document.querySelector<HTMLElement>(SITE.statsHeader);
+  const header = originalHeaderElement;
   if (header) {
     header.innerHTML = originalHeaderHtml;
-    header.removeAttribute("style");
+    if (originalHeaderStyle === null) header.removeAttribute("style");
+    else header.setAttribute("style", originalHeaderStyle);
+    if (!originalHeaderHadScopeAttr) header.removeAttribute("data-v-33ae8458");
   }
   originalHeaderHtml = null;
+  originalHeaderElement = null;
+  originalHeaderStyle = null;
+  originalHeaderHadScopeAttr = false;
+}
+
+function restoreInlineStyles(): void {
+  for (const [element, style] of originalInlineStyles) {
+    if (style === null) element.removeAttribute("style");
+    else element.setAttribute("style", style);
+  }
+  originalInlineStyles.clear();
 }
 
 function voterStyleFor(role: number): string {
@@ -791,6 +843,9 @@ function addPenaltyDot(
           dotContainer.style.zIndex = "10";
           dotContainer.style.display = "inline-flex";
           dotContainer.style.gap = "3px";
+          if (!originalInlineStyles.has(playerCell)) {
+            originalInlineStyles.set(playerCell, playerCell.getAttribute("style"));
+          }
           playerCell.style.position = "relative";
           playerCell.appendChild(dotContainer);
         }
@@ -1204,50 +1259,96 @@ function injectBaseStyles(): void {
 
 // ───────────────────────── жизненный цикл фичи ─────────────────────────
 
+function stopMatchRoute(preserveSnapshot = true): void {
+  const leavingMatchId = activeMatchId;
+  const leavingTable = activeMatchId
+    ? document.querySelector<HTMLElement>(SITE.statsTable)
+    : null;
+  if (gameDataListener) {
+    document.removeEventListener("gameDataParsed", gameDataListener);
+    gameDataListener = null;
+  }
+  for (const id of intervals) clearInterval(id);
+  intervals.clear();
+  for (const id of timeouts) clearTimeout(id);
+  timeouts.clear();
+  for (const style of injectedStyles) style.remove();
+  injectedStyles.length = 0;
+  removeEnhancements();
+  restoreHeader();
+  restoreInlineStyles();
+  pendingGameData = null;
+  if (leavingMatchId && preserveSnapshot) {
+    clearPreviousRouteSnapshot();
+    previousRouteMatchId = leavingMatchId;
+    previousRouteTable = leavingTable ? new WeakRef(leavingTable) : null;
+    previousRouteTableHtml = leavingTable?.innerHTML || "";
+  } else if (!preserveSnapshot) {
+    clearPreviousRouteSnapshot();
+  }
+  routeReadyInterval = null;
+  activeMatchId = null;
+}
+
+function startMatchRoute(matchId: string): void {
+  if (activeMatchId === matchId) return;
+  if (activeMatchId) stopMatchRoute();
+  if (previousRouteMatchId === matchId) {
+    clearPreviousRouteSnapshot();
+  }
+  activeMatchId = matchId;
+  log.debug(SCOPE, "Match page detected, initializing enhancer", matchId);
+
+  injectBaseStyles();
+
+  const readyStarted = Date.now();
+  routeReadyInterval = trackInterval(
+    setInterval(() => {
+      if (activeMatchId !== matchId) return;
+      if (!isRouteDomReady()) {
+        if (Date.now() - readyStarted < 10_000) return;
+        clearTrackedInterval(routeReadyInterval!);
+        routeReadyInterval = null;
+        pendingGameData = null;
+        clearPreviousRouteSnapshot();
+        return;
+      }
+      clearTrackedInterval(routeReadyInterval!);
+      routeReadyInterval = null;
+      clearPreviousRouteSnapshot();
+      applyAutoHeight();
+      trackInterval(setInterval(applyAutoHeight, 5000));
+      if (pendingGameData) enhance(pendingGameData);
+    }, 100),
+  );
+
+  gameDataListener = (event: Event) => {
+    if (!statsEnabled() || activeMatchId !== matchId) return;
+    log.debug(SCOPE, "Received game data, enhancing page");
+    enhance((event as CustomEvent).detail);
+  };
+  document.addEventListener("gameDataParsed", gameDataListener);
+
+  const cached = getLastGameData();
+  if (cached && statsEnabled()) enhance(cached);
+}
+
+/** Вызывается единым URL-роутером content/index.ts. */
+export function syncMatchStatsRoute(matchId: string | null): void {
+  if (!settings || !matchId) {
+    if (activeMatchId) stopMatchRoute(false);
+    return;
+  }
+  startMatchRoute(matchId);
+}
+
 export const matchStatsFeature: Feature = {
   id: "match-stats",
   settingKey: "match_page_stats_enabled",
 
   enable(ctx: FeatureContext): void {
     settings = ctx.settings;
-
-    // Работаем только на странице матча.
-    if (!window.location.pathname.includes("/match/")) {
-      log.debug(SCOPE, "not a match page, skip");
-      return;
-    }
-
-    log.debug(SCOPE, "Match page detected, initializing enhancer");
-
-    injectBaseStyles();
-
-    // Авто-высота: один прогон при готовности + периодическое обновление.
-    const startAutoHeight = () => {
-      applyAutoHeight();
-      const id = trackInterval(setInterval(applyAutoHeight, 5000));
-      // (clearInterval предыдущего не требуется — храним все в наборе intervals)
-      void id;
-    };
-    if (document.readyState === "complete") {
-      startAutoHeight();
-    } else {
-      loadListener = () => startAutoHeight();
-      window.addEventListener("load", loadListener);
-    }
-
-    // Повторный enable без disable не должен плодить слушателей.
-    if (gameDataListener) document.removeEventListener("gameDataParsed", gameDataListener);
-    gameDataListener = (event: Event) => {
-      if (!statsEnabled()) return;
-      log.debug(SCOPE, "Received game data, enhancing page");
-      enhance((event as CustomEvent).detail);
-    };
-    document.addEventListener("gameDataParsed", gameDataListener);
-
-    // Догон: событие могло уйти раньше подписки (fetch из HTTP-кеша
-    // завершается быстрее чтения настроек из storage).
-    const cached = getLastGameData();
-    if (cached && statsEnabled()) enhance(cached);
+    syncMatchStatsRoute(getMatchId());
   },
 
   update(ctx: FeatureContext): void {
@@ -1261,27 +1362,7 @@ export const matchStatsFeature: Feature = {
   },
 
   disable(): void {
-    // Снять слушатель события игры.
-    if (gameDataListener) {
-      document.removeEventListener("gameDataParsed", gameDataListener);
-      gameDataListener = null;
-    }
-    // Снять load-слушатель.
-    if (loadListener) {
-      window.removeEventListener("load", loadListener);
-      loadListener = null;
-    }
-    // Очистить все интервалы и таймауты.
-    for (const id of intervals) clearInterval(id);
-    intervals.clear();
-    for (const id of timeouts) clearTimeout(id);
-    timeouts.clear();
-    // Удалить инжектированные стили.
-    for (const style of injectedStyles) style.remove();
-    injectedStyles.length = 0;
-    // Удалить построенные элементы и вернуть заголовок сайта.
-    removeEnhancements();
-    restoreHeader();
+    stopMatchRoute(false);
     settings = null;
   },
 };

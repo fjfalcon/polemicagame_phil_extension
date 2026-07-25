@@ -8,29 +8,94 @@ import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
 import { onMessage } from "@core/messaging";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
-import { ObsClient } from "./obs-client";
+import { OBS_RETRY_BLOCKED_KEY, ObsClient } from "./obs-client";
 import { handleGameSearch, handleStopSearch } from "./auto-accept";
 import type { ExtMessage, ObsCommandMsg } from "@shared/types";
 
 const obs = new ObsClient();
+const OBS_WATCHDOG_ALARM = "polemica:obs-watchdog";
+const OBS_MANUAL_DISCONNECT_KEY = "obs_manual_disconnect";
+let obsQueue: Promise<void> = Promise.resolve();
+
+function enqueueObs<T>(task: () => Promise<T> | T): Promise<T> {
+  const result = obsQueue.then(task, task);
+  obsQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+async function setManualDisconnect(value: boolean): Promise<void> {
+  await browser.storage.local.set({ [OBS_MANUAL_DISCONNECT_KEY]: value });
+}
+
+async function isManuallyDisconnected(): Promise<boolean> {
+  const stored = await browser.storage.local.get({ [OBS_MANUAL_DISCONNECT_KEY]: false });
+  return stored[OBS_MANUAL_DISCONNECT_KEY] === true;
+}
+
+async function isAutoReconnectBlocked(): Promise<boolean> {
+  const stored = await browser.storage.local.get({ [OBS_RETRY_BLOCKED_KEY]: false });
+  return stored[OBS_RETRY_BLOCKED_KEY] === true;
+}
+
+async function setObsWatchdog(enabled: boolean): Promise<void> {
+  if (!enabled) {
+    await browser.alarms.clear(OBS_WATCHDOG_ALARM);
+    return;
+  }
+  const alarm = await browser.alarms.get(OBS_WATCHDOG_ALARM);
+  if (!alarm) await browser.alarms.create(OBS_WATCHDOG_ALARM, { periodInMinutes: 1 });
+}
+
+async function reconcileObsConnection(probe = false, ignorePersistedBlock = false): Promise<void> {
+  const s = await getSettings();
+  const suspended = await isManuallyDisconnected();
+  if (!s.obs_enabled || !s.obs_host || suspended) {
+    try {
+      await setObsWatchdog(false);
+    } finally {
+      if (obs.hasConnectionActivity()) obs.disconnect();
+    }
+    return;
+  }
+
+  await setObsWatchdog(true);
+  if (obs.isConnectedTo(s.obs_host, s.obs_password)) {
+    if (!probe || (await obs.verifyConnection())) return;
+  }
+  if (obs.isAutoReconnectBlocked()) return;
+  if (!ignorePersistedBlock && (await isAutoReconnectBlocked())) return;
+  await obs.connect(s.obs_host, s.obs_password);
+}
 
 async function handleObsCommand(cmd: ObsCommandMsg["command"], data: ObsCommandMsg["data"]) {
-  switch (cmd) {
-    case "connect":
-      obs.resetReconnectAttempts();
-      return obs.connect(data?.url ?? "", data?.password ?? "");
-    case "disconnect":
-      obs.disconnect();
-      return true;
-    case "get_status":
-      return obs.getStatus();
-    case "set_scene":
-      return obs.setCurrentScene(data?.sceneName ?? "");
-    case "get_scenes":
-      return obs.requestSceneList();
-    default:
-      throw new Error(`Unknown OBS command: ${cmd}`);
-  }
+  return enqueueObs(async () => {
+    switch (cmd) {
+      case "connect":
+        await setManualDisconnect(false);
+        await obs.allowAutoReconnect();
+        await setObsWatchdog(true);
+        obs.resetReconnectAttempts();
+        return obs.connect(data?.url ?? "", data?.password ?? "");
+      case "disconnect":
+        try {
+          await Promise.all([setManualDisconnect(true), setObsWatchdog(false)]);
+        } finally {
+          obs.disconnect();
+        }
+        return true;
+      case "get_status":
+        return obs.getStatus();
+      case "set_scene":
+        return obs.setCurrentScene(data?.sceneName ?? "");
+      case "get_scenes":
+        return obs.requestSceneList();
+      default:
+        throw new Error(`Unknown OBS command: ${cmd}`);
+    }
+  });
 }
 
 onMessage((msg: ExtMessage, sender) => {
@@ -50,19 +115,10 @@ onMessage((msg: ExtMessage, sender) => {
   return undefined;
 });
 
-async function restoreObsConnection(): Promise<void> {
-  try {
-    const s = await getSettings();
-    if (s.obs_enabled && s.obs_host) {
-      setTimeout(() => {
-        obs.connect(s.obs_host, s.obs_password).catch((e) =>
-          log.error("background", "restore OBS failed", e),
-        );
-      }, 2000);
-    }
-  } catch (e) {
-    log.error("background", "restore error", e);
-  }
+function restoreObsConnection(probe = false): void {
+  void enqueueObs(() => reconcileObsConnection(probe)).catch((e) =>
+    log.error("background", "restore OBS failed", e),
+  );
 }
 
 /**
@@ -100,10 +156,13 @@ async function runUpgradeMigrations(): Promise<void> {
   }
 }
 
-browser.runtime.onStartup.addListener(() => void restoreObsConnection());
+browser.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === OBS_WATCHDOG_ALARM) restoreObsConnection(true);
+});
+browser.runtime.onStartup.addListener(() => restoreObsConnection());
 browser.runtime.onInstalled.addListener(() => {
   void runUpgradeMigrations();
-  void restoreObsConnection();
+  restoreObsConnection();
 });
 
 // Диагностика: перехват ошибок + гейт персиста логов по настройке.
@@ -114,10 +173,31 @@ onSettingsChanged((patch) => {
   // Живая реакция на тумблер OBS: раньше выключение obs_enabled (в т.ч. с
   // другого устройства через sync) не рвало соединение — background смотрел
   // на настройку только при onStartup/onInstalled.
-  if ("obs_enabled" in patch) {
-    if (patch.obs_enabled === false) obs.disconnect();
-    else void restoreObsConnection();
+  if ("obs_enabled" in patch || "obs_host" in patch || "obs_password" in patch) {
+    void enqueueObs(async () => {
+      if (patch.obs_enabled === false) {
+        try {
+          await Promise.all([
+            setManualDisconnect(false),
+            obs.allowAutoReconnect(),
+            setObsWatchdog(false),
+          ]);
+        } finally {
+          obs.disconnect();
+        }
+        return;
+      }
+      if (patch.obs_enabled === true) {
+        await setManualDisconnect(false);
+        await obs.allowAutoReconnect();
+      }
+      if ("obs_host" in patch || "obs_password" in patch) await obs.allowAutoReconnect();
+      await reconcileObsConnection(false, true);
+    }).catch((e) => log.error("background", "OBS settings update failed", e));
   }
 });
+
+// Выполняется при каждом новом incarnation service worker, а не только при старте браузера.
+restoreObsConnection();
 
 log.info("background", "ready");
