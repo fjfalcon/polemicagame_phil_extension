@@ -266,6 +266,7 @@ function renderVotesBlock(
   extraStyle = "",
   tip = "",
   tourLabel = "",
+  tourTitle = "",
 ): string {
   const spans = voteList
     .map((v) => {
@@ -280,7 +281,7 @@ function renderVotesBlock(
   // Видимая подпись тура: три безымянных ряда чипов было невозможно прочитать
   // («почему у игрока 1 три группы цифр?»).
   const label = tourLabel
-    ? `<span class="pn-tour-label">${escapeHtml(tourLabel)}</span>`
+    ? `<span class="pn-tour-label" title="${escapeHtml(tourTitle || tourLabel)}">${escapeHtml(tourLabel)}</span>`
     : "";
   return `<div class="action"${extraStyle ? ` style="${extraStyle}"` : ""}${tipAttr}>${label}${spans}</div>`;
 }
@@ -331,8 +332,9 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           firstVotes,
           players,
           "",
-          `Голосование за №${player.position}`,
-          "выставление",
+          `Выставление №${player.position}`,
+          "Выс:",
+          "Выставление",
         );
       }
       if (secondVotes.length > 0) {
@@ -340,8 +342,9 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           secondVotes,
           players,
           "margin-top: 4px;",
-          `Переголосовка за №${player.position}`,
-          "перег.",
+          `Голосование за №${player.position}`,
+          "Гол",
+          "Голосование",
         );
       }
       if (thirdVotes.length > 0) {
@@ -351,6 +354,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           "margin-top: 4px;",
           `Голосование за подъём (№${player.position})`,
           "подъём",
+          "Голосование за подъём всех",
         );
       }
 
@@ -415,6 +419,22 @@ function buildPhaseTimeline(
   const timeline = document.createElement("div");
   timeline.className = "pn-timeline";
 
+  // Свёрнут по умолчанию (решение владельца): детали фаз в таблице и так
+  // раскрыты, разворачивать сводку сверху — по клику на заголовок.
+  const tlHeader = document.createElement("div");
+  tlHeader.className = "pn-tl-header";
+  tlHeader.innerHTML = `<span class="pn-tl-toggle">▸</span> Сводка по дням`;
+  const tlBody = document.createElement("div");
+  tlBody.className = "pn-tl-body";
+  tlBody.style.display = "none";
+  tlHeader.addEventListener("click", () => {
+    const show = tlBody.style.display === "none";
+    tlBody.style.display = show ? "" : "none";
+    const t = tlHeader.querySelector(".pn-tl-toggle");
+    if (t) t.textContent = show ? "▾" : "▸";
+  });
+  timeline.append(tlHeader, tlBody);
+
   phases.forEach((phase, index) => {
     const n = index + 1;
     // Итог голосования: последний тур (осн./переголос.), голоса по кандидатам.
@@ -423,11 +443,11 @@ function buildPhaseTimeline(
     const finalVotes = votes.filter((v: any) => (v.num || 0) === finalNum);
     const counts = new Map<number, number>();
     for (const v of finalVotes) counts.set(v.to, (counts.get(v.to) || 0) + 1);
-    const tourName = finalNum === 0 ? "" : finalNum === 1 ? " (перег.)" : " (подъём)";
+    const tourName = finalNum === 0 ? "" : finalNum === 1 ? " (голос.)" : " (подъём)";
     const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
     // Ничья по максимуму голосов: верхний чип НЕ «уехавший» (реальный день 1
     // референс-матча — шесть кандидатов по голосу, никто не покинул стол).
-    const isTie = sorted.length >= 2 && sorted[0][1] === sorted[1][1];
+    const isTie = n > 1 && sorted.length >= 2 && sorted[0][1] === sorted[1][1];
     const dayHtml = counts.size
       ? sorted.map(([pos, cnt]) => chip(pos, `<i>·${cnt}</i>`)).join("") +
         escapeHtml(tourName) +
@@ -474,7 +494,7 @@ function buildPhaseTimeline(
       if (t) t.textContent = show ? "▾" : "▸";
     });
 
-    timeline.appendChild(line);
+    tlBody.appendChild(line);
   });
 
   const root = table.closest<HTMLElement>(SITE.statsTableRoot) || table;
@@ -485,6 +505,10 @@ function buildPhaseTimeline(
     .pn-timeline { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px;
       padding: 10px 14px; background: rgba(30, 41, 59, 0.5);
       border: 1px solid rgba(255,255,255,.08); border-radius: 12px; }
+    .pn-tl-header { display: flex; align-items: center; gap: 6px; cursor: pointer;
+      color: #8b90a0; font-size: 12px; padding: 2px 4px; border-radius: 6px; }
+    .pn-tl-header:hover { background: rgba(255,255,255,.05); }
+    .pn-tl-body { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
     .pn-tl-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
       cursor: pointer; padding: 3px 4px; border-radius: 6px; font-size: 13px; }
     .pn-tl-line:hover { background: rgba(255,255,255,.05); }
