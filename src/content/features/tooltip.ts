@@ -162,7 +162,10 @@ const activeTooltips = new Set<HTMLDivElement>();
 let tooltipOwnerId = 0;
 
 function getPlayers(): MatchPlayer[] | null {
-  return matchData?.players ?? matchData?.data?.players ?? null;
+  // data.players ПЕРВЫМ: у него есть position+username. Верхнеуровневый
+  // players сайта несёт tablePosition (без position) — поиск по нему всегда
+  // промахивался, и тултипы показывали «3 3» вместо «3 · Ник».
+  return matchData?.data?.players ?? matchData?.players ?? null;
 }
 
 function getPlayerName(number: string): string {
@@ -188,15 +191,18 @@ function getRoleColor(number: string): string {
     return "white";
   }
   log.debug("tooltip", `Player ${number} role:`, player.role);
+  // Единая палитра ролей (8.1.30): до этого здесь дон был красным (цвет
+  // мирных в match-stats), мафия — синей, мирный — белым. Один игрок имел
+  // три разных цвета в трёх местах страницы.
   switch (player.role) {
     case 3:
-      return "#fbbf24"; // Шериф — жёлтый
+      return "#facc15"; // Шериф — жёлтый
     case 2:
-      return "#ffffff"; // Мирный — белый
+      return "#f87171"; // Мирный — красный
     case 1:
-      return "#0ea5e9"; // Мафия — синий
+      return "#d1d5db"; // Мафия — светло-серый
     case 0:
-      return "#ff3b30"; // Дон — красный
+      return "#c084fc"; // Дон — фиолетовый
     default:
       return "#ffffff";
   }
@@ -245,11 +251,17 @@ function createTooltip(content: string, isBestMove: boolean): HTMLDivElement {
     const initiatorMatch = lines[1]?.match(/Инициатор: (\d+)/);
     const initiatorNumber = initiatorMatch ? initiatorMatch[1] : "";
     const initiatorName = getPlayerName(initiatorNumber);
+    // Страховка от «3 3»: если ник не резолвился, getPlayerName вернул номер —
+    // показываем номер один раз, а не дважды.
+    const initiatorLabel =
+      initiatorName === initiatorNumber
+        ? `№${initiatorNumber}`
+        : `${initiatorNumber} · ${truncateName(initiatorName)}`;
 
     tooltip.innerHTML = `
       <div class="enhanced-tooltip-title">${escapeHtml(title)}</div>
       <div class="enhanced-tooltip-initiator">
-        Инициатор: ${escapeHtml(initiatorNumber)} ${escapeHtml(truncateName(initiatorName))}
+        Инициатор: ${escapeHtml(initiatorLabel)}
       </div>
       <div class="enhanced-tooltip-votes">
         ${lines
@@ -259,15 +271,20 @@ function createTooltip(content: string, isBestMove: boolean): HTMLDivElement {
             const numMatch = playerPart.match(/\d+/);
             const playerNumber = numMatch ? numMatch[0] : "";
             const playerName = getPlayerName(playerNumber);
+            const nameResolved = playerName !== playerNumber;
             const isYes = (result ?? "").includes("✓");
 
             return `
               <div class="enhanced-tooltip-vote">
                 <div class="player-info">
                   <span class="player-number">${escapeHtml(playerNumber)}</span>
-                  <span class="player-name" title="${escapeHtml(playerName)}" data-full-name="${escapeHtml(playerName)}">
+                  ${
+                    nameResolved
+                      ? `<span class="player-name" title="${escapeHtml(playerName)}" data-full-name="${escapeHtml(playerName)}">
                     ${escapeHtml(truncateName(playerName))}
-                  </span>
+                  </span>`
+                      : ""
+                  }
                 </div>
                 <span class="vote-icon ${isYes ? "vote-yes" : "vote-no"}">${isYes ? "✓" : "✗"}</span>
               </div>

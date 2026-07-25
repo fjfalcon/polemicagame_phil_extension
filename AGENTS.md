@@ -25,7 +25,7 @@ Twitch-чат поверх игры, хоткеи.
 ```bash
 npm run typecheck        # tsc --noEmit — обязан быть чистым
 npm run build            # оба таргета: dist/chrome и dist/firefox
-npx web-ext lint -s dist/firefox   # 0 errors; ~22 warnings (innerHTML) — норма
+npx web-ext lint -s dist/firefox   # 0 errors; ~23 warnings (innerHTML) — норма
 ```
 
 - Один JS-бандл (tsup, iife, без минификации) на оба браузера; различия только

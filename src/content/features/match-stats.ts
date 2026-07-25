@@ -205,7 +205,9 @@ function enhance(gameData: any): void {
 
 function removeEnhancements(): void {
   document
-    .querySelectorAll(".row[data-phase], .best-move-dot, .best-move-tooltip, .penalty-dots")
+    .querySelectorAll(
+      ".row[data-phase], .best-move-dot, .best-move-tooltip, .penalty-dots, .pn-timeline",
+    )
     .forEach((element) => element.remove());
 }
 
@@ -233,11 +235,21 @@ function restoreInlineStyles(): void {
   originalInlineStyles.clear();
 }
 
+/**
+ * ЕДИНАЯ палитра ролей (канон 8.1.30, согласована с владельцем):
+ * мирный красный, шериф жёлтый, мафия светло-серая, дон фиолетовый.
+ * До этого в проекте жили ЧЕТЫРЕ разные палитры — один и тот же игрок был
+ * белым в голосах, синим в тултипе и серым в метках.
+ */
+export const ROLE_COLORS: Record<number, string> = {
+  0: "#c084fc", // дон
+  1: "#d1d5db", // мафия
+  2: "#f87171", // мирный
+  3: "#facc15", // шериф
+};
+
 function voterStyleFor(role: number): string {
-  if (role === 0) return "color: #9333ea;"; // дон
-  if (role === 1) return "color: white;"; // мафия
-  if (role === 3) return "color: #eab308;"; // шериф
-  return "color: #ef4444;"; // обычный игрок
+  return `color: ${ROLE_COLORS[role] ?? ROLE_COLORS[2]};`;
 }
 
 function voterClassFor(role: number): string {
@@ -253,6 +265,7 @@ function renderVotesBlock(
   players: any[],
   extraStyle = "",
   tip = "",
+  tourLabel = "",
 ): string {
   const spans = voteList
     .map((v) => {
@@ -264,7 +277,12 @@ function renderVotesBlock(
     })
     .join("");
   const tipAttr = tip ? ` data-tip="${escapeHtml(tip)}"` : "";
-  return `<div class="action"${extraStyle ? ` style="${extraStyle}"` : ""}${tipAttr}>${spans}</div>`;
+  // Видимая подпись тура: три безымянных ряда чипов было невозможно прочитать
+  // («почему у игрока 1 три группы цифр?»).
+  const label = tourLabel
+    ? `<span class="pn-tour-label">${escapeHtml(tourLabel)}</span>`
+    : "";
+  return `<div class="action"${extraStyle ? ` style="${extraStyle}"` : ""}${tipAttr}>${label}${spans}</div>`;
 }
 
 function enhanceTable(table: HTMLElement, gameData: any): void {
@@ -309,7 +327,13 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
 
       let html = "";
       if (firstVotes.length > 0) {
-        html += renderVotesBlock(firstVotes, players, "", `Голосование за №${player.position}`);
+        html += renderVotesBlock(
+          firstVotes,
+          players,
+          "",
+          `Голосование за №${player.position}`,
+          "осн.",
+        );
       }
       if (secondVotes.length > 0) {
         html += renderVotesBlock(
@@ -317,6 +341,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           players,
           "margin-top: 4px;",
           `Переголосовка за №${player.position}`,
+          "перег.",
         );
       }
       if (thirdVotes.length > 0) {
@@ -325,6 +350,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           players,
           "margin-top: 4px;",
           `Голосование за подъём (№${player.position})`,
+          "подъём",
         );
       }
 
@@ -350,10 +376,117 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
     }
   });
 
+  // Таймлайн со сворачиванием: детальные строки фаз спрятаны, над таблицей —
+  // компактная строка на каждый день (итог голосования + ночь + штрафы);
+  // клик по строке раскрывает подробности. Таблица вдвое короче.
+  buildPhaseTimeline(table, players, phases, gameDetails);
+
   trackTimeout(() => {
     addBestMoveIndicators(table, gameData);
     log.debug(SCOPE, "Best move indicators added");
   }, 100);
+}
+
+function buildPhaseTimeline(
+  table: HTMLElement,
+  players: any[],
+  phases: Array<{ day: any[]; night: any[] }>,
+  gameDetails: any,
+): void {
+  const detailRowsByPhase = new Map<number, HTMLElement[]>();
+  table.querySelectorAll<HTMLElement>(".row[data-phase]").forEach((row) => {
+    const m = row.getAttribute("data-phase")?.match(/^(?:day|night)-(\d+)$/);
+    if (!m) return;
+    const n = parseInt(m[1], 10);
+    if (!detailRowsByPhase.has(n)) detailRowsByPhase.set(n, []);
+    detailRowsByPhase.get(n)!.push(row);
+    row.style.display = "none";
+    row.classList.add("pn-phase-detail");
+  });
+  if (detailRowsByPhase.size === 0) return;
+
+  const roleOf = (pos: number): number =>
+    players.find((p: any) => p.position === pos)?.role ?? 2;
+  const chip = (pos: number, extra = ""): string =>
+    `<span class="pn-tl-chip" style="${voterStyleFor(roleOf(pos))}">${escapeHtml(String(pos))}${extra}</span>`;
+
+  const timeline = document.createElement("div");
+  timeline.className = "pn-timeline";
+
+  phases.forEach((phase, index) => {
+    const n = index + 1;
+    // Итог голосования: последний тур (осн./переголос.), голоса по кандидатам.
+    const votes = phase.day.filter((a: any) => a.type === "vote");
+    const finalNum = votes.reduce((mx: number, v: any) => Math.max(mx, v.num || 0), 0);
+    const finalVotes = votes.filter((v: any) => (v.num || 0) === finalNum);
+    const counts = new Map<number, number>();
+    for (const v of finalVotes) counts.set(v.to, (counts.get(v.to) || 0) + 1);
+    const tourName = finalNum === 0 ? "" : finalNum === 1 ? " (перег.)" : " (подъём)";
+    const dayHtml = counts.size
+      ? [...counts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([pos, cnt]) => chip(pos, `<i>·${cnt}</i>`))
+          .join("") + escapeHtml(tourName)
+      : '<span class="pn-tl-none">без голосования</span>';
+
+    const nightHtml = phase.night
+      .map(
+        (a: any) =>
+          `<span class="pn-tl-night">${getActionIcon(a.type)}${chip(a.to)}</span>`,
+      )
+      .join("");
+
+    // Штрафы этого дня — видны даже при свёрнутых деталях.
+    const penaltyHtml = players
+      .flatMap((p: any) => p.penalties || [])
+      .filter((pen: any) => pen?.stage?.day === n)
+      .map((pen: any) => `<span class="pn-tl-pen">⚠${escapeHtml(String(pen.player))}</span>`)
+      .join("");
+
+    const line = document.createElement("div");
+    line.className = "pn-tl-line";
+    line.innerHTML =
+      `<span class="pn-tl-toggle">▸</span>` +
+      `<span class="pn-tl-phase">${n} ☀️</span><span class="pn-tl-group">${dayHtml}</span>` +
+      (nightHtml ? `<span class="pn-tl-phase">🌙</span><span class="pn-tl-group">${nightHtml}</span>` : "") +
+      penaltyHtml;
+
+    line.addEventListener("click", () => {
+      const rows = detailRowsByPhase.get(n) || [];
+      const show = rows[0]?.style.display === "none";
+      rows.forEach((r) => (r.style.display = show ? "" : "none"));
+      const t = line.querySelector(".pn-tl-toggle");
+      if (t) t.textContent = show ? "▾" : "▸";
+    });
+
+    timeline.appendChild(line);
+  });
+
+  const root = table.closest<HTMLElement>(SITE.statsTableRoot) || table;
+  root.parentElement?.insertBefore(timeline, root);
+
+  appendStyle(
+    `
+    .pn-timeline { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px;
+      padding: 10px 14px; background: rgba(30, 41, 59, 0.5);
+      border: 1px solid rgba(255,255,255,.08); border-radius: 12px; }
+    .pn-tl-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      cursor: pointer; padding: 3px 4px; border-radius: 6px; font-size: 13px; }
+    .pn-tl-line:hover { background: rgba(255,255,255,.05); }
+    .pn-tl-toggle { color: #8b90a0; width: 12px; }
+    .pn-tl-phase { color: #8b90a0; font-size: 12px; }
+    .pn-tl-group { display: inline-flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+    .pn-tl-chip { background: rgba(255,255,255,.07); border-radius: 5px;
+      padding: 1px 7px; font-size: 12px; }
+    .pn-tl-chip i { font-style: normal; color: #8b90a0; font-size: 11px; }
+    .pn-tl-night { display: inline-flex; align-items: center; gap: 2px; }
+    .pn-tl-none { color: #5b6070; font-size: 12px; }
+    .pn-tl-pen { color: #fbbf24; font-size: 12px; margin-left: 4px; }
+    .pn-tour-label { color: rgba(255,255,255,.45); font-size: 10px;
+      margin-right: 4px; align-self: center; }
+  `,
+    "pn-timeline-styles",
+  );
 }
 
 function createNightRow(phaseNumber: number, phase: any, players: any[]): HTMLElement {
@@ -649,9 +782,10 @@ function addBestMoveStyles(): void {
       font-weight: 500;
       font-size: 12px;
     }
-    .mafs .number { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
-    .civs .number { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-    .sheriff .number { background: rgba(234, 179, 8, 0.2); color: #eab308; }
+    /* Единая палитра ролей (8.1.30): «Чёрные» больше не синие. */
+    .mafs .number { background: rgba(209, 213, 219, 0.14); color: #d1d5db; }
+    .civs .number { background: rgba(248, 113, 113, 0.14); color: #f87171; }
+    .sheriff .number { background: rgba(250, 204, 21, 0.14); color: #facc15; }
     .vice .number { background: rgba(147, 51, 234, 0.2); color: #9333ea; }
     .best-move-dot:hover + .best-move-tooltip { display: block; }
     .cell { position: relative !important; }
@@ -679,19 +813,23 @@ function actionTip(type: string, to: unknown): string {
   }
 }
 
+/**
+ * Эмодзи вместо картинок с трёх сторонних CDN: раньше каждая страница матча
+ * сливала IP пользователя vexels/icons8/flaticon, а лупа «голоса» была
+ * неотличима от лупы шерифа. Заодно закрыт пункт техдолга про хотлинк.
+ */
 function getActionIcon(type: string): string {
-  switch (type) {
-    case "kill":
-      return '<img src="https://images.vexels.com/media/users/3/136961/isolated/lists/939659c2bb1b5e619a537af30d3a5849-target-icon.png" alt="Target" style="width: 16px; height: 16px; vertical-align: middle;">';
-    case "check":
-      return '<img src="https://img.icons8.com/ios7/200/FFFFFF/search.png" alt="Magnifying Glass" style="width: 16px; height: 16px; vertical-align: middle;">';
-    case "don_check":
-      return '<img src="https://cdn-icons-png.flaticon.com/512/3296/3296104.png" alt="Eye" style="width: 16px; height: 16px; vertical-align: middle;">';
-    case "vote":
-      return '<img src="https://img.icons8.com/ios_filled/512/FFFFFF/search.png" alt="Thumbs Up" style="width: 16px; height: 16px; vertical-align: middle;">';
-    default:
-      return '<img src="https://cdn-icons-png.flaticon.com/512/271/271228.png" alt="Arrow" style="width: 16px; height: 16px; vertical-align: middle;">';
-  }
+  const icon =
+    type === "kill"
+      ? "🎯"
+      : type === "check"
+        ? "🔍"
+        : type === "don_check"
+          ? "👑"
+          : type === "vote"
+            ? "🗳️"
+            : "•";
+  return `<span style="font-size: 13px; vertical-align: middle;">${icon}</span>`;
 }
 
 function processGamePhases(gameDetails: any): Array<{ day: any[]; night: any[] }> {
@@ -789,13 +927,13 @@ function addPenaltyIndicators(table: HTMLElement, gameData: any): void {
 
         switch (type) {
           case "disqual":
-            tooltipText = `Дисквалификация\n${initiator}${votes}`;
+            tooltipText = `Дисквалификация · ${phaseLabel}\n${initiator}${votes}`;
             break;
           case "stop":
-            tooltipText = `ППК\n${initiator}${votes}`;
+            tooltipText = `ППК · ${phaseLabel}\n${initiator}${votes}`;
             break;
           case "tech":
-            tooltipText = `ТЕХ.ФОЛ\n${initiator}${votes}`;
+            tooltipText = `Тех. фол · ${phaseLabel}\n${initiator}${votes}`;
             break;
         }
 
@@ -895,14 +1033,21 @@ function applyAutoHeight(): void {
     }
   }
   if (dataVAttribute) {
-    appendStyle(`[${dataVAttribute}] { height: auto !important; }`, "pn-stats-auto-height");
+    // Селектор заякорен на контейнер таблицы: голый [data-v-X] снимал height
+    // у ВСЕХ элементов компонента по странице — она растягивалась целиком.
+    appendStyle(
+      `${SITE.statsTableRoot} [${dataVAttribute}], ${SITE.statsTableRoot}[${dataVAttribute}] { height: auto !important; }`,
+      "pn-stats-auto-height",
+    );
   }
 
   setStyleProp(gameStatsTable, "height", "auto");
 
-  // Чиним прокручиваемых родителей.
+  // Чиним прокручиваемых родителей — но не дальше трёх уровней вверх:
+  // обход до корня документа разворачивал скролл-контейнеры всего лейаута.
   let parent = gameStatsTable.parentElement;
-  while (parent) {
+  let hops = 0;
+  while (parent && parent !== document.body && hops < 3) {
     const computedStyle = window.getComputedStyle(parent);
     if (
       computedStyle.overflow.includes("scroll") ||
@@ -915,6 +1060,7 @@ function applyAutoHeight(): void {
       setStyleProp(parent, "maxHeight", "none");
     }
     parent = parent.parentElement;
+    hops++;
   }
 
   // Строки итога и MMR.
