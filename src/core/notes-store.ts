@@ -14,8 +14,30 @@
 import { browser } from "./env";
 import { log } from "./log";
 
-export type NoteRecord = { text: string; timestamp: number; version?: string; tag?: string };
+export type NoteRecord = {
+  text: string;
+  timestamp: number;
+  version?: string;
+  tag?: string;
+  /** Последний известный ник — для экспорта/отображения записей с id-ключом. */
+  nick?: string;
+};
 export type NotesMap = Record<string, NoteRecord | string>;
+
+/**
+ * Ключи заметок (8.1.29): предпочтительно `u:<userId>` сайта — id вечный,
+ * ник меняется. Старые ключи-ники продолжают работать как фолбэк и лениво
+ * мигрируют на id, когда статистика игрока резолвит его userId.
+ */
+export const ID_KEY_PREFIX = "u:";
+
+export function idKey(userId: number | string): string {
+  return `${ID_KEY_PREFIX}${userId}`;
+}
+
+export function isIdKey(key: string): boolean {
+  return key.startsWith(ID_KEY_PREFIX);
+}
 
 export const NOTES_KEY = "playerNotes";
 export const TAGS_KEY = "tagCustomColors";

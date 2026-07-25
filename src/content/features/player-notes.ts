@@ -31,6 +31,7 @@ import {
   saveNotes as saveNotesToStore,
   saveCustomTags as saveCustomTagsToStore,
   isSafeNoteKey,
+  idKey,
   NOTES_KEY,
   TAGS_KEY,
   NOTES_VERSION,
@@ -444,15 +445,82 @@ class PlayerNotesManager {
     return await saveNotesToStore(this.notes);
   }
 
+  /** userId игрока, если статистика его уже резолвила (иначе undefined). */
+  private noteUserId(username: string): number | string | undefined {
+    const id = this.playerStats.get(username.toLowerCase())?.id;
+    return id === undefined || id === null || id === "" || id === "???" ? undefined : id;
+  }
+
+  /**
+   * Ключ заметки игрока: `u:<id>`, если id известен, иначе ник (легаси).
+   * Заметки по id переживают смену ника и не путают тёзок.
+   */
+  private noteKeyFor(username: string): string {
+    const id = this.noteUserId(username);
+    if (id !== undefined) {
+      const key = idKey(id);
+      // Для ЧТЕНИЯ id-ключ приоритетен, но если записи под ним ещё нет,
+      // а под ником есть — читаем ник (миграция могла не успеть).
+      if (this.notes[key] !== undefined || this.notes[username] === undefined) return key;
+    }
+    return username;
+  }
+
+  private getNote(username: string): NoteRecord | string | undefined {
+    return this.notes[this.noteKeyFor(username)];
+  }
+
   private getNoteText(username: string): string {
-    const note = this.notes[username];
+    const note = this.getNote(username);
     if (!note) return "";
     return typeof note === "string" ? note : note.text || "";
   }
 
   private getNoteTag(username: string): string {
-    const note = this.notes[username];
+    const note = this.getNote(username);
     return note && typeof note !== "string" ? note.tag || "" : "";
+  }
+
+  /** Все легаси-ключи-ники этого игрока (точный + отличающиеся регистром). */
+  private nickKeysFor(username: string): string[] {
+    const lower = username.toLowerCase();
+    return Object.keys(this.notes).filter(
+      (k) => !k.startsWith("u:") && k.toLowerCase() === lower,
+    );
+  }
+
+  /**
+   * Ленивая миграция ник → id: вызывается, когда статистика резолвила userId.
+   * «Vasya» и «vasya» сливаются в одну запись (побеждает более свежая),
+   * ник сохраняется внутри записи для экспорта и отображения.
+   */
+  private async migrateNoteToId(username: string, userId: number | string): Promise<void> {
+    const nickKeys = this.nickKeysFor(username);
+    if (nickKeys.length === 0) return;
+    const key = idKey(userId);
+
+    let best: NoteRecord | undefined =
+      typeof this.notes[key] === "object" ? (this.notes[key] as NoteRecord) : undefined;
+    const ts = (n: NoteRecord | string | undefined) =>
+      n && typeof n !== "string" && typeof n.timestamp === "number" ? n.timestamp : 0;
+    for (const nk of nickKeys) {
+      const note = this.notes[nk];
+      const record: NoteRecord =
+        typeof note === "string" ? { text: note, timestamp: 0 } : (note as NoteRecord);
+      if (!best || ts(record) > ts(best)) best = record;
+    }
+    if (!best) return;
+
+    this.notes[key] = { ...best, nick: username };
+    for (const nk of nickKeys) delete this.notes[nk];
+    if (await this.saveNotes()) {
+      log.debug("player-notes", "note migrated to id key", username, key);
+    } else {
+      // Запись не удалась — не оставляем память рассинхронённой с диском.
+      await this.loadNotes();
+    }
+    this.refreshNoteIndicators();
+    this.refreshPlayerTags();
   }
 
   /** Подсветить плитку игрока меткой (цвет или градиент) через overlay-рамку. */
@@ -623,6 +691,11 @@ class PlayerNotesManager {
       this.playerStats.set(key, entry);
       this.statsFetchedAt.set(key, Date.now());
       if (player) this.activeGameCheckedAt.delete(key);
+
+      // userId резолвлен — самое время лениво перевезти заметку с ник-ключа
+      // на вечный id-ключ (смена ника больше не теряет заметку).
+      const resolvedId = this.noteUserId(username);
+      if (resolvedId !== undefined) void this.migrateNoteToId(username, resolvedId);
 
       // Обновляем ВСЕ отрисованные тултипы этого игрока: сайт рендерит одного
       // игрока в двух плитках (десктоп/мобайл), а querySelector обновлял
@@ -1128,22 +1201,37 @@ class PlayerNotesManager {
         return false;
       }
       const value = textarea.value.trim();
-      const previous = this.notes[username];
+      // Пишем по id-ключу, если статистика уже резолвила игрока: такая заметка
+      // переживёт смену ника и не перепутает тёзок. Иначе — легаси-ник.
+      const id = this.noteUserId(username);
+      const key = id !== undefined ? idKey(id) : username;
+      // Снапшот ВСЕХ затрагиваемых ключей для отката (id + ник-варианты).
+      const touched = new Map<string, NoteRecord | string | undefined>();
+      touched.set(key, this.notes[key]);
+      const staleNickKeys = id !== undefined ? this.nickKeysFor(username) : [];
+      for (const nk of staleNickKeys) touched.set(nk, this.notes[nk]);
+
       if (value || selectedTag) {
-        this.notes[username] = {
+        this.notes[key] = {
           text: value,
           timestamp: Date.now(),
           version: VERSION,
           tag: selectedTag || undefined,
+          ...(id !== undefined ? { nick: username } : {}),
         };
       } else {
-        delete this.notes[username];
+        delete this.notes[key];
       }
+      // Запись по id-ключу поглощает легаси-ники этого игрока.
+      for (const nk of staleNickKeys) delete this.notes[nk];
+
       if (!(await this.saveNotes())) {
         // Откатываем память под состояние хранилища, иначе интерфейс будет
         // показывать заметку, которой на диске нет.
-        if (previous === undefined) delete this.notes[username];
-        else this.notes[username] = previous;
+        for (const [k, v] of touched) {
+          if (v === undefined) delete this.notes[k];
+          else this.notes[k] = v;
+        }
         return false;
       }
       // Обе плитки игрока (десктоп/мобайл), не только первая.
