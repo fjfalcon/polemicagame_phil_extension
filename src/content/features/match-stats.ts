@@ -361,6 +361,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
         align-items: center;
         justify-content: center;
         gap: 4px;
+        min-width: 0;
       `;
       cell.innerHTML = html;
       dayRow.appendChild(cell);
@@ -1336,7 +1337,11 @@ function injectBaseStyles(): void {
       border-radius: 8px !important;
       padding: 2px 6px !important;
       display: inline-flex !important;
-      flex-wrap: nowrap !important;
+      /* wrap + max-width: «подъём» с 7-8 голосами шире колонки — без переноса
+         блок вылезал за границы ячейки (влево, под колонку №). */
+      flex-wrap: wrap !important;
+      max-width: 100% !important;
+      box-sizing: border-box !important;
       justify-content: center !important;
       align-items: center !important;
       gap: 2px !important;
