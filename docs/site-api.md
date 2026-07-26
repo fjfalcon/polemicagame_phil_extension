@@ -75,6 +75,48 @@ JSON-эндпоинта данных матча НЕТ (перебор канд�
 `set_readiness` в сокет из page-world можно, но это хрупко (ломается любым
 обновлением сайта) и отличимо от человека на сервере; DOM-клик — нет.
 
+## Очередь поиска игры (три галочки) — ОТДЕЛЬНЫЙ сервис
+
+Страница `/game-search` грузит собственный бандл `bundle/game-search.js` и
+свой сокет, отличный от лобби-сокета главной. Адреса приходят атрибутами
+Vue-компонента `<game-search>` в SSR-HTML страницы:
+`game-search-service-url="https://het1.polemicagame.com:4242"`,
+`rating-game-search-service-url="https://game.polemicagame.com/search"`,
+плюс `:new-game-service='{"httpUrl":"https://game.polemicagame.com"}'`.
+Там же лежит `current-user` с **authKey текущего пользователя** — в логи и
+экспорт не тащить.
+
+Три галочки — это censorship-режимы (из кода):
+`standard` = «Обычный», `polite` = «Рейтинг» (только Pro-подписка),
+`prime` = «Prime». Каждая имеет `count`/`countTarget: 10`.
+
+**Счётчики очередей — публичный REST** (проверено, ответ мгновенный):
+
+```
+GET https://game.polemicagame.com/api/search
+→ {"queues":{"standard":{"available":false,"players":3},
+             "polite":{...,"players":1},
+             "prime":{...,"players":2}}}
+```
+
+**Поимённый состав очереди — только сокетом и только для СЕБЯ.**
+`censorshipModesUpdate` умеет читать `players` и числом, и массивом
+(`Array.isArray(r) ? (count=r.length, participants=r) : count=r`), а
+`playersInSearch` разворачивает состояние в
+`{id, username, avatar_url, mmr, stream{link}, subscription}`. Наполняет
+его событие `on_game_search_state`, которое приходит ПОСЛЕ
+`start_game_search` — то есть список видно, только пока сам стоишь в этой
+очереди. Анонимный `/api/search` отдаёт голые числа.
+
+События поискового сокета: клиент→сервер `start_game_search`
+(`{gameMode, role, userId, authKey, censorship:[...]}`), `stop_game_search`,
+`update_search_settings` (`{censorship:[...]}`), `accept_game`,
+`check_if_user_is_in_game`; сервер→клиент `on_game_search_state`,
+`on_start_game_search`, `on_stop_game_search`, `on_game_found`,
+`redirect_to_game`, `connection_refused`.
+Ещё REST того же сервиса: `POST /api/search/me` (`{userId, authKey}` —
+своё состояние поиска), `/api/games`, `/api/games/join`, `/api/games/quit`.
+
 ## Прочие маршруты из бандла (не проверялись, для справки)
 
 auth: `/auth/login|logout|register|social-login`; кабинет:
