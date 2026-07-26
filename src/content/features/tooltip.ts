@@ -388,6 +388,13 @@ function enhanceTooltip(element: HTMLElement): void {
 const DOT_SELECTOR = `${SITE.penaltyDot}, ${SITE.bestMoveDot}`;
 
 function scanRoot(root: ParentNode): void {
+  // querySelectorAll ищет только ПОТОМКОВ. Точка ЛХ добавляется голым
+  // appendChild в существующую ячейку — в мутации addedNodes лежит сама
+  // точка, и без проверки корня она навсегда оставалась с нативным
+  // title-тултипом (штрафные точки везло: они приходят контейнером).
+  if (root instanceof Element && root.matches(DOT_SELECTOR)) {
+    enhanceTooltip(root as HTMLElement);
+  }
   root.querySelectorAll<HTMLElement>(DOT_SELECTOR).forEach((dot) => enhanceTooltip(dot));
 }
 
