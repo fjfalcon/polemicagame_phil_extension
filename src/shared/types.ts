@@ -43,6 +43,8 @@ export interface Settings {
   update_check_enabled: boolean;
   /** Вести логи в storage.local для диагностики (выгружаются из popup). */
   debug_logging_enabled: boolean;
+  /** Диагностика подключения очереди поиска (WS-события, дрейф таймеров). */
+  connection_diag_enabled: boolean;
   // OBS
   obs_enabled: boolean;
   obs_host: string;

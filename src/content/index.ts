@@ -21,6 +21,7 @@ import { pauseHotkeyFeature } from "./features/pause-hotkey";
 import { f5RefreshFeature } from "./features/f5-refresh";
 import { roleMarkerFeature } from "./features/role-marker";
 import { updateNotifyFeature } from "./features/update-notify";
+import { connectionDiagFeature } from "./features/connection-diag";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -35,6 +36,7 @@ const manager = new FeatureManager().register(
   f5RefreshFeature,
   roleMarkerFeature,
   updateNotifyFeature,
+  connectionDiagFeature,
   obsPanelFeature,
   twitchPanelFeature,
 );

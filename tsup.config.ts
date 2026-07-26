@@ -13,6 +13,9 @@ export default defineConfig({
     background: "src/background/index.ts",
     content: "src/content/index.ts",
     popup: "src/popup/index.ts",
+    // PAGE-скрипт диагностики подключения (MAIN world, инжект тегом).
+    // Самодостаточен: без импортов core/* (см. шапку файла).
+    "conn-diag-page": "src/content/page/conn-diag-page.ts",
   },
   outDir: ".dist-js",
   format: ["iife"],

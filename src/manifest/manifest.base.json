@@ -20,6 +20,12 @@
     "48": "icon48.png",
     "128": "icon128.png"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["conn-diag-page.js"],
+      "matches": ["https://*.polemicagame.com/*"]
+    }
+  ],
   "content_scripts": [
     {
       "matches": [

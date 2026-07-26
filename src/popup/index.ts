@@ -425,6 +425,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
     set("debug_logging_enabled", items.debug_logging_enabled);
+    set("connection_diag_enabled", items.connection_diag_enabled);
 
     // OBS
     const obsEnabled = $<HTMLInputElement>("obs_enabled");
@@ -501,6 +502,7 @@ document.addEventListener("DOMContentLoaded", () => {
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
       debug_logging_enabled: cb("debug_logging_enabled", true),
+      connection_diag_enabled: cb("connection_diag_enabled", false),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       pause_hotkey_enabled: cb("pause_hotkey_enabled", true),
       pause_hotkey_code: pauseHotkeyCode,
@@ -585,6 +587,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "f5_refresh_fix_enabled",
     "update_check_enabled",
     "debug_logging_enabled",
+    "connection_diag_enabled",
   ];
   simpleChangeIds.forEach((id) => {
     const el = $(id);
