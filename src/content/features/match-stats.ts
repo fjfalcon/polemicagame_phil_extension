@@ -307,6 +307,25 @@ function renderVotesBlock(
   return `<div class="action"${extraStyle ? ` style="${extraStyle}"` : ""}${tipAttr}>${label}${spans}</div>`;
 }
 
+/**
+ * Исход дня по финальному туру голосования.
+ *
+ * `departed` — массив, а НЕ один игрок: при ничьей в туре подъёма стол
+ * покидают ВСЕ ничейные кандидаты сразу («попил»). Проверено на реальном
+ * матче polemicagame.com/match/598995, день 4: шесть живых (чётный стол),
+ * num 1 → 5:[1,4,10] против 4:[3,5,6] — ничья 3:3; num 2 повторил её один
+ * в один — ушли и №4, и №5. Одноместная сигнатура такой день выразить не
+ * могла и не давала точку ЛХ никому из ушедших.
+ *
+ * Ничья в туре голосования (num 1), не перешедшая в подъём, ухода не даёт.
+ *
+ * ДОПУЩЕНИЕ (не факт): любая ничья в подъёме трактуется как состоявшийся
+ * уход. Полное правило владельца — «…и все проголосовали за подъём», то есть
+ * бюллетень подъёма может и не набрать большинства, и тогда не уходит никто.
+ * Отличить провалившийся подъём в данных пока НЕЧЕМ (см. AGENTS.md §6 п.12 —
+ * там же гипотеза о том, где этот бюллетень лежит). Если гипотеза
+ * подтвердится, здесь появится проверка исхода, а не подсчёт ничьей.
+ */
 function resolveDayOutcome(
   votes: any[],
   day: number,
@@ -314,7 +333,7 @@ function resolveDayOutcome(
   finalNum: number;
   counts: Array<[number, number]>;
   tied: boolean;
-  departed: number | null;
+  departed: number[];
 } {
   const dayVotes = votes.filter((vote: any) => vote.day === day);
   const finalNum = dayVotes.reduce(
@@ -332,7 +351,17 @@ function resolveDayOutcome(
     });
   const counts = [...countsByCandidate.entries()].sort((a, b) => b[1] - a[1]);
   const tied = counts.length >= 2 && counts[0][1] === counts[1][1];
-  const departed = finalNum === 0 || tied ? null : (counts[0]?.[0] ?? null);
+
+  let departed: number[] = [];
+  if (finalNum > 0 && counts.length > 0) {
+    if (!tied) {
+      departed = [counts[0][0]];
+    } else if (finalNum >= 2) {
+      // Подъём с ничьей: уходят все, кто набрал максимум.
+      const top = counts[0][1];
+      departed = counts.filter(([, cnt]) => cnt === top).map(([pos]) => pos);
+    }
+  }
 
   return { finalNum, counts, tied, departed };
 }
@@ -508,16 +537,29 @@ function buildPhaseTimeline(
   phases.forEach((phase, index) => {
     const n = index + 1;
     // Итог дня: финальный тур и голоса по кандидатам считаются общим resolver'ом.
-    const { finalNum, counts: sorted, tied } = resolveDayOutcome(
+    const { finalNum, counts: sorted, tied, departed } = resolveDayOutcome(
       gameDetails.votes || [],
       n,
     );
     const tourName = finalNum === 0 ? "" : finalNum === 1 ? " (голос.)" : " (подъём)";
-    const isTie = n > 1 && tied;
+    // Гард по finalNum, а не по номеру дня: день из одних выставлений — это не
+    // ничья (голосования не было), а настоящая ничья в первом дне существует,
+    // если у стола включён zeroVoting. Прежний `n > 1` врал в обе стороны.
+    const isTie = finalNum > 0 && tied;
+    // При ничьей в подъёме игроки реально уходят — «ничья» тут ввела бы в
+    // заблуждение («никто не ушёл»), хотя стол покинули двое-четверо.
+    const tieNote =
+      departed.length > 1
+        ? `<span class="pn-tl-none"> · подъём: ${escapeHtml(
+            [...departed].sort((a, b) => a - b).join(", "),
+          )}</span>`
+        : isTie
+          ? '<span class="pn-tl-none"> · ничья</span>'
+          : "";
     const dayHtml = sorted.length
       ? sorted.map(([pos, cnt]) => chip(pos, `<i>·${cnt}</i>`)).join("") +
         escapeHtml(tourName) +
-        (isTie ? '<span class="pn-tl-none"> · ничья</span>' : "")
+        tieNote
       : '<span class="pn-tl-none">без голосования</span>';
 
     const nightHtml = phase.night
@@ -671,13 +713,10 @@ function addDotToCell(
 ): void {
   const rows = table.querySelectorAll<HTMLElement>(SITE.statsRow);
   rows.forEach((row) => {
-    const phaseCell = row.querySelector(SITE.statsCellTitle);
-    const phaseText = phaseCell?.textContent || "";
-
-    const isTargetRow =
-      phaseType === "night"
-        ? phaseText.includes(`${phaseNumber} 🌙`)
-        : phaseText.includes(`${phaseNumber} ☀️`);
+    // Точное совпадение по data-phase, а НЕ подстрока «N ☀️»: «11 ☀️» содержит
+    // «1 ☀️», и точка дня 1 продублировалась бы в день 11. Число дней в матче
+    // не фиксировано (AGENTS.md §4 п.8).
+    const isTargetRow = row.getAttribute("data-phase") === `${phaseType}-${phaseNumber}`;
 
     if (isTargetRow) {
       const playerCell = row.querySelector<HTMLElement>(
@@ -740,12 +779,16 @@ function findShotNight(playerPosition: number, gameData: any): number | null {
 
 /**
  * ВАЖНО: день ухода определяется исходом финального тура, а не выставлениями
- * num=0. День без голосования и ничья явно не имеют ушедшего игрока.
+ * num=0. День без голосования и ничья в туре голосования ушедших не дают,
+ * а ничья в подъёме даёт СРАЗУ НЕСКОЛЬКИХ — поэтому проверяем вхождение в
+ * массив, а не равенство (см. resolveDayOutcome).
  */
 function findVotedDay(playerPosition: number, gameData: any): number | null {
   const votes = gameData.data?.votes || [];
-  const days = [...new Set<number>(votes.map((vote: any) => vote.day))].sort((a, b) => a - b);
-  return days.find((day) => resolveDayOutcome(votes, day).departed === playerPosition) ?? null;
+  const days = [...new Set<number>(votes.map((vote: any) => vote.day))]
+    .filter((day) => Number.isFinite(day) && day > 0)
+    .sort((a, b) => a - b);
+  return days.find((day) => resolveDayOutcome(votes, day).departed.includes(playerPosition)) ?? null;
 }
 
 function addBestMoveStyles(): void {
@@ -896,11 +939,12 @@ function processGamePhases(gameDetails: any): Array<{ day: any[]; night: any[] }
     () => ({ day: [], night: [] }),
   );
 
-  // Туры голосования. В данных сайта (сверено с реальным JSON матча):
-  // num=0 — ОСНОВНОЕ голосование, num=1 — переголосовка, num=2 — «поднять всех».
-  // Раньше обрабатывались только num===1 и num===2: основной тур вообще не
-  // попадал в таблицу, переголосовка рисовалась как основной, а третий тур —
-  // как переголосовка. (isLeading убран — его никто не рендерил.)
+  // Туры голосования (AGENTS.md §4 п.8, термины сообщества):
+  // num=0 — ВЫСТАВЛЕНИЕ (заявки в речах), num=1 — голосование, num=2 — подъём.
+  // Раньше обрабатывались только num===1 и num===2: выставление вообще не
+  // попадало в таблицу. (isLeading убран — его никто не рендерил.)
+  // НЕ «исправлять» на основной/переголосовку — этот misread уже дважды
+  // порождал баги (день ухода по выставлениям; classic-режим 8.1.34-8.1.35).
   votes.forEach((vote: any) => {
     if (!vote.day || vote.day <= 0 || vote.day > maxDay) return;
     phases[vote.day - 1].day.push({
@@ -952,7 +996,13 @@ function addPenaltyIndicators(table: HTMLElement, gameData: any): void {
           : stage.night
             ? `${stage.night} 🌙`
             : null;
-        if (!phaseLabel) return;
+        // Ключ строки для поиска — атрибут, а не человекочитаемая подпись.
+        const phaseKey = stage.day
+          ? `day-${stage.day}`
+          : stage.night
+            ? `night-${stage.night}`
+            : null;
+        if (!phaseLabel || !phaseKey) return;
         const type = penalty.type;
 
         const initiatorName = gameData.data.players.find(
@@ -993,7 +1043,7 @@ function addPenaltyIndicators(table: HTMLElement, gameData: any): void {
           .map(([voter, vote]) => `${voter}:${vote ? 1 : 0}`)
           .join(",");
         const penaltyKey = `${phaseLabel}|${type}|${penalty.initiator}|${playerPosition}|${votePairs}`;
-        addPenaltyDot(table, playerPosition, phaseLabel, color, tooltipText, penaltyKey);
+        addPenaltyDot(table, playerPosition, phaseKey, color, tooltipText, penaltyKey);
       });
     }
   });
@@ -1002,7 +1052,8 @@ function addPenaltyIndicators(table: HTMLElement, gameData: any): void {
 function addPenaltyDot(
   table: HTMLElement,
   playerPosition: number,
-  phaseLabel: string,
+  /** Ключ строки фазы вида `day-3` / `night-2` — см. addDotToCell про подстроки. */
+  phaseKey: string,
   color: string,
   tooltipText: string,
   penaltyKey: string,
@@ -1010,10 +1061,7 @@ function addPenaltyDot(
   const rows = table.querySelectorAll<HTMLElement>(SITE.statsRow);
 
   rows.forEach((row) => {
-    const phaseCell = row.querySelector(SITE.statsCellTitle);
-    const phaseText = phaseCell?.textContent || "";
-
-    if (phaseText.includes(phaseLabel)) {
+    if (row.getAttribute("data-phase") === phaseKey) {
       const playerCell = row.querySelector<HTMLElement>(
         `.cell[data-player="${playerPosition}"]`,
       );
