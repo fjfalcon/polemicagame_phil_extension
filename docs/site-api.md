@@ -63,7 +63,13 @@ JSON-эндпоинта данных матча НЕТ (перебор канд�
 - клиент→сервер: `set_readiness` (кнопка «Готов»), `stop_game_search`,
   `connect_to_lobby`, `create_lobby_in_media_room`, `quit_lobby`,
   `quit_game`, `set_lobby_name/password`, `set_judge`, `set_lobby_leader`,
-  `kick_out_player`, `update_lobby_data`.
+  `kick_out_player`.
+
+Состав СВОЕГО лобби тоже идёт сокетом: `on_connected_to_lobby` несёт
+объект лобби с `users: [{userId, nickname, ...}]`, каждый вход/выход
+пушится `update_lobby_data` (полный `users` + `playerNumber`, `leaderId`,
+`judgeId`). HTTP-поллинг `get-current-games` кормит только витрину
+«Открытые лобби» на странице поиска.
 
 Решение (2026-07-26): автопринятие ОСТАЁТСЯ DOM-кликом. Слать
 `set_readiness` в сокет из page-world можно, но это хрупко (ломается любым
