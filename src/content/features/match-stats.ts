@@ -307,6 +307,36 @@ function renderVotesBlock(
   return `<div class="action"${extraStyle ? ` style="${extraStyle}"` : ""}${tipAttr}>${label}${spans}</div>`;
 }
 
+function resolveDayOutcome(
+  votes: any[],
+  day: number,
+): {
+  finalNum: number;
+  counts: Array<[number, number]>;
+  tied: boolean;
+  departed: number | null;
+} {
+  const dayVotes = votes.filter((vote: any) => vote.day === day);
+  const finalNum = dayVotes.reduce(
+    (max: number, vote: any) => Math.max(max, vote.num || 0),
+    0,
+  );
+  const countsByCandidate = new Map<number, number>();
+  dayVotes
+    .filter((vote: any) => (vote.num || 0) === finalNum)
+    .forEach((vote: any) => {
+      countsByCandidate.set(
+        vote.candidate,
+        (countsByCandidate.get(vote.candidate) || 0) + 1,
+      );
+    });
+  const counts = [...countsByCandidate.entries()].sort((a, b) => b[1] - a[1]);
+  const tied = counts.length >= 2 && counts[0][1] === counts[1][1];
+  const departed = finalNum === 0 || tied ? null : (counts[0]?.[0] ?? null);
+
+  return { finalNum, counts, tied, departed };
+}
+
 function enhanceTable(table: HTMLElement, gameData: any): void {
   const gameDetails = gameData.data || {};
   const players = gameDetails.players || [];
@@ -477,18 +507,14 @@ function buildPhaseTimeline(
 
   phases.forEach((phase, index) => {
     const n = index + 1;
-    // Итог голосования: последний тур (осн./переголос.), голоса по кандидатам.
-    const votes = phase.day.filter((a: any) => a.type === "vote");
-    const finalNum = votes.reduce((mx: number, v: any) => Math.max(mx, v.num || 0), 0);
-    const finalVotes = votes.filter((v: any) => (v.num || 0) === finalNum);
-    const counts = new Map<number, number>();
-    for (const v of finalVotes) counts.set(v.to, (counts.get(v.to) || 0) + 1);
+    // Итог дня: финальный тур и голоса по кандидатам считаются общим resolver'ом.
+    const { finalNum, counts: sorted, tied } = resolveDayOutcome(
+      gameDetails.votes || [],
+      n,
+    );
     const tourName = finalNum === 0 ? "" : finalNum === 1 ? " (голос.)" : " (подъём)";
-    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-    // Ничья по максимуму голосов: верхний чип НЕ «уехавший» (реальный день 1
-    // референс-матча — шесть кандидатов по голосу, никто не покинул стол).
-    const isTie = n > 1 && sorted.length >= 2 && sorted[0][1] === sorted[1][1];
-    const dayHtml = counts.size
+    const isTie = n > 1 && tied;
+    const dayHtml = sorted.length
       ? sorted.map(([pos, cnt]) => chip(pos, `<i>·${cnt}</i>`)).join("") +
         escapeHtml(tourName) +
         (isTie ? '<span class="pn-tl-none"> · ничья</span>' : "")
@@ -712,32 +738,14 @@ function findShotNight(playerPosition: number, gameData: any): number | null {
   return null;
 }
 
+/**
+ * ВАЖНО: день ухода определяется исходом финального тура, а не выставлениями
+ * num=0. День без голосования и ничья явно не имеют ушедшего игрока.
+ */
 function findVotedDay(playerPosition: number, gameData: any): number | null {
   const votes = gameData.data?.votes || [];
-  let maxDay: number | null = null;
-  let maxVotes = 0;
-
-  const dayVotes: Record<number, number> = {};
-  votes.forEach((vote: any) => {
-    // ВНИМАНИЕ, здесь известная неточность (техдолг AGENTS.md §6 п.12):
-    // num=0 — это ВЫСТАВЛЕНИЕ (AGENTS.md §4 п.8), а не «основной тур», как
-    // утверждал прежний комментарий. День ухода игрока считается по
-    // выставлениям, а не по голосам, поэтому дот ЛХ может сесть не на тот день
-    // (в режиме classic — вплоть до пустой ячейки дня без голосования).
-    // Чинить нужно вместе с определением исхода дня, а не заменой одной цифры.
-    if (vote.candidate === playerPosition && !vote.num) {
-      dayVotes[vote.day] = (dayVotes[vote.day] || 0) + 1;
-    }
-  });
-
-  Object.entries(dayVotes).forEach(([day, count]) => {
-    if (count > maxVotes) {
-      maxVotes = count;
-      maxDay = parseInt(day, 10);
-    }
-  });
-
-  return maxDay;
+  const days = [...new Set<number>(votes.map((vote: any) => vote.day))].sort((a, b) => a - b);
+  return days.find((day) => resolveDayOutcome(votes, day).departed === playerPosition) ?? null;
 }
 
 function addBestMoveStyles(): void {
