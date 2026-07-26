@@ -1,0 +1,424 @@
+{
+ "_comment": "Урезанный (без checks/bonuses/judge/bestPlayer, players упрощены до position/username/role) НАСТОЯЩИЙ JSON матча polemicagame.com/match/598995, снят 26.07.2026 из атрибута :game-data. ОБЁРТКА data СОХРАНЕНА как в реальном payload: votes/config/stage/players лежат в data.*, как и в legacy/match_314446.json. Второй источник правды о форме. Ценность: день 4 — «попил» (ничья 3:3 в голосовании И в подъёме → ушли №4 и №5) и БЮЛЛЕТЕНЬ ПОДЪЁМА — записи БЕЗ поля num (candidate: 1 = «за»); в дне 4 «за» все 6 живых. Семантика подтверждена владельцем. См. AGENTS.md §4 п.8.",
+ "id": 598995,
+ "type": "match",
+ "data": {
+  "config": {
+   "openVoting": false,
+   "refereeKnowRoles": false,
+   "dealingType": "auto",
+   "scoringType": 1,
+   "lift3From9": false,
+   "zeroVoting": "none",
+   "scoringVersion": "3.0"
+  },
+  "stage": {
+   "type": "gameOver",
+   "day": 5,
+   "player": 1
+  },
+  "result": 1,
+  "players": [
+   {
+    "position": 1,
+    "username": "КрЯтин",
+    "role": 2
+   },
+   {
+    "position": 2,
+    "username": "MR_JAM",
+    "role": 2
+   },
+   {
+    "position": 3,
+    "username": "Неособерман",
+    "role": 3
+   },
+   {
+    "position": 4,
+    "username": "Монтэг",
+    "role": 0
+   },
+   {
+    "position": 5,
+    "username": "Lenc",
+    "role": 2
+   },
+   {
+    "position": 6,
+    "username": "xvii",
+    "role": 2
+   },
+   {
+    "position": 7,
+    "username": "Иван Бездопный",
+    "role": 2
+   },
+   {
+    "position": 8,
+    "username": "The Gеntleman",
+    "role": 1
+   },
+   {
+    "position": 9,
+    "username": "fj",
+    "role": 2
+   },
+   {
+    "position": 10,
+    "username": "_ Leo _",
+    "role": 1
+   }
+  ],
+  "votes": [
+   {
+    "day": 1,
+    "num": 0,
+    "voter": 4,
+    "candidate": 9
+   },
+   {
+    "day": 2,
+    "num": 0,
+    "voter": 2,
+    "candidate": 8
+   },
+   {
+    "day": 2,
+    "num": 0,
+    "voter": 3,
+    "candidate": 4
+   },
+   {
+    "day": 2,
+    "num": 0,
+    "voter": 4,
+    "candidate": 3
+   },
+   {
+    "day": 2,
+    "num": 0,
+    "voter": 5,
+    "candidate": 6
+   },
+   {
+    "day": 2,
+    "num": 0,
+    "voter": 6,
+    "candidate": 5
+   },
+   {
+    "day": 2,
+    "num": 0,
+    "voter": 8,
+    "candidate": 2
+   },
+   {
+    "day": 2,
+    "num": 1,
+    "voter": 1,
+    "candidate": 8
+   },
+   {
+    "day": 2,
+    "num": 1,
+    "voter": 2,
+    "candidate": 8
+   },
+   {
+    "day": 2,
+    "num": 1,
+    "voter": 3,
+    "candidate": 6
+   },
+   {
+    "day": 2,
+    "num": 1,
+    "voter": 4,
+    "candidate": 5
+   },
+   {
+    "day": 2,
+    "num": 1,
+    "voter": 5,
+    "candidate": 8
+   },
+   {
+    "day": 2,
+    "num": 1,
+    "voter": 6,
+    "candidate": 5
+   },
+   {
+    "day": 2,
+    "num": 1,
+    "voter": 8,
+    "candidate": 2
+   },
+   {
+    "day": 2,
+    "num": 1,
+    "voter": 9,
+    "candidate": 8
+   },
+   {
+    "day": 2,
+    "num": 1,
+    "voter": 10,
+    "candidate": 6
+   },
+   {
+    "day": 3,
+    "num": 0,
+    "voter": 3,
+    "candidate": 4
+   },
+   {
+    "day": 3,
+    "num": 0,
+    "voter": 4,
+    "candidate": 2
+   },
+   {
+    "day": 3,
+    "num": 0,
+    "voter": 5,
+    "candidate": 3
+   },
+   {
+    "day": 3,
+    "num": 0,
+    "voter": 6,
+    "candidate": 5
+   },
+   {
+    "day": 3,
+    "num": 1,
+    "voter": 1,
+    "candidate": 2
+   },
+   {
+    "day": 3,
+    "num": 1,
+    "voter": 2,
+    "candidate": 4
+   },
+   {
+    "day": 3,
+    "num": 1,
+    "voter": 3,
+    "candidate": 4
+   },
+   {
+    "day": 3,
+    "num": 1,
+    "voter": 4,
+    "candidate": 2
+   },
+   {
+    "day": 3,
+    "num": 1,
+    "voter": 5,
+    "candidate": 2
+   },
+   {
+    "day": 3,
+    "num": 1,
+    "voter": 6,
+    "candidate": 2
+   },
+   {
+    "day": 3,
+    "num": 1,
+    "voter": 10,
+    "candidate": 2
+   },
+   {
+    "day": 4,
+    "num": 0,
+    "voter": 4,
+    "candidate": 5
+   },
+   {
+    "day": 4,
+    "num": 0,
+    "voter": 5,
+    "candidate": 4
+   },
+   {
+    "day": 4,
+    "num": 1,
+    "voter": 1,
+    "candidate": 5
+   },
+   {
+    "day": 4,
+    "num": 1,
+    "voter": 3,
+    "candidate": 4
+   },
+   {
+    "day": 4,
+    "num": 1,
+    "voter": 4,
+    "candidate": 5
+   },
+   {
+    "day": 4,
+    "num": 1,
+    "voter": 5,
+    "candidate": 4
+   },
+   {
+    "day": 4,
+    "num": 1,
+    "voter": 6,
+    "candidate": 4
+   },
+   {
+    "day": 4,
+    "num": 1,
+    "voter": 10,
+    "candidate": 5
+   },
+   {
+    "day": 4,
+    "num": 2,
+    "voter": 1,
+    "candidate": 5
+   },
+   {
+    "day": 4,
+    "num": 2,
+    "voter": 3,
+    "candidate": 4
+   },
+   {
+    "day": 4,
+    "num": 2,
+    "voter": 4,
+    "candidate": 5
+   },
+   {
+    "day": 4,
+    "num": 2,
+    "voter": 5,
+    "candidate": 4
+   },
+   {
+    "day": 4,
+    "num": 2,
+    "voter": 6,
+    "candidate": 4
+   },
+   {
+    "day": 4,
+    "num": 2,
+    "voter": 10,
+    "candidate": 5
+   },
+   {
+    "day": 4,
+    "voter": 1,
+    "candidate": 1
+   },
+   {
+    "day": 4,
+    "voter": 3,
+    "candidate": 1
+   },
+   {
+    "day": 4,
+    "voter": 4,
+    "candidate": 1
+   },
+   {
+    "day": 4,
+    "voter": 5,
+    "candidate": 1
+   },
+   {
+    "day": 4,
+    "voter": 6,
+    "candidate": 1
+   },
+   {
+    "day": 4,
+    "voter": 10,
+    "candidate": 1
+   },
+   {
+    "day": 5,
+    "num": 0,
+    "voter": 3,
+    "candidate": 10
+   },
+   {
+    "day": 5,
+    "num": 0,
+    "voter": 10,
+    "candidate": 3
+   },
+   {
+    "day": 5,
+    "num": 1,
+    "voter": 1,
+    "candidate": 3
+   },
+   {
+    "day": 5,
+    "num": 1,
+    "voter": 3,
+    "candidate": 10
+   },
+   {
+    "day": 5,
+    "num": 1,
+    "voter": 10,
+    "candidate": 3
+   }
+  ],
+  "shots": [
+   {
+    "night": 1,
+    "shooter": 4,
+    "victim": 7
+   },
+   {
+    "night": 1,
+    "shooter": 8,
+    "victim": 7
+   },
+   {
+    "night": 1,
+    "shooter": 10,
+    "victim": 7
+   },
+   {
+    "night": 2,
+    "shooter": 4,
+    "victim": 9
+   },
+   {
+    "night": 2,
+    "shooter": 10,
+    "victim": 9
+   },
+   {
+    "night": 3,
+    "shooter": 4,
+    "victim": 6
+   },
+   {
+    "night": 3,
+    "shooter": 10,
+    "victim": 1
+   },
+   {
+    "night": 4,
+    "shooter": 10,
+    "victim": 6
+   }
+  ]
+ }
+}

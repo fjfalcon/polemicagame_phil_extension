@@ -319,13 +319,19 @@ function renderVotesBlock(
  *
  * Ничья в туре голосования (num 1), не перешедшая в подъём, ухода не даёт.
  *
- * ДОПУЩЕНИЕ (не факт): любая ничья в подъёме трактуется как состоявшийся
- * уход. Полное правило владельца — «…и все проголосовали за подъём», то есть
- * бюллетень подъёма может и не набрать большинства, и тогда не уходит никто.
- * Отличить провалившийся подъём в данных пока НЕЧЕМ (см. AGENTS.md §6 п.12 —
- * там же гипотеза о том, где этот бюллетень лежит). Если гипотеза
- * подтвердится, здесь появится проверка исхода, а не подсчёт ничьей.
+ * Ничья в подъёме решается БЮЛЛЕТЕНЕМ «поднимаем всех?» — это записи БЕЗ
+ * поля num, `candidate: 1` = «за» (семантика подтверждена владельцем на
+ * docs/fixtures/match_598995.json: день 4, «за» все 6 живых → ушли №4 и №5).
+ * Если голосов «за» больше, чем «против», попил состоялся — уходят все
+ * ничейные кандидаты. Остаточное допущение: у матчей БЕЗ записей бюллетеня
+ * (старый формат?) ничья в подъёме по-прежнему трактуется как уход — маркер
+ * «против» пока не встречался в данных (ожидаемо `candidate: 0`).
  */
+/** Бюллетень «поднимаем всех?» дня: записи голосов без поля num. */
+function isLiftBallot(vote: any): boolean {
+  return vote.num === undefined || vote.num === null;
+}
+
 function resolveDayOutcome(
   votes: any[],
   day: number,
@@ -335,7 +341,7 @@ function resolveDayOutcome(
   tied: boolean;
   departed: number[];
 } {
-  const dayVotes = votes.filter((vote: any) => vote.day === day);
+  const dayVotes = votes.filter((vote: any) => vote.day === day && !isLiftBallot(vote));
   const finalNum = dayVotes.reduce(
     (max: number, vote: any) => Math.max(max, vote.num || 0),
     0,
@@ -357,9 +363,14 @@ function resolveDayOutcome(
     if (!tied) {
       departed = [counts[0][0]];
     } else if (finalNum >= 2) {
-      // Подъём с ничьей: уходят все, кто набрал максимум.
-      const top = counts[0][1];
-      departed = counts.filter(([, cnt]) => cnt === top).map(([pos]) => pos);
+      const ballot = votes.filter((v: any) => v.day === day && isLiftBallot(v));
+      const yes = ballot.filter((v: any) => v.candidate === 1).length;
+      const no = ballot.length - yes;
+      // Бюллетень есть → он решает; бюллетеня нет → допущение «попил состоялся».
+      if (ballot.length === 0 || yes > no) {
+        const top = counts[0][1];
+        departed = counts.filter(([, cnt]) => cnt === top).map(([pos]) => pos);
+      }
     }
   }
 
@@ -386,6 +397,12 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
   let lastInsertedRow: HTMLElement = roleRow;
   phases.forEach((phase, index) => {
     const phaseNumber = index + 1;
+    // Бюллетень подъёма рисуется в ячейках УШЕДШИХ попилом (departed > 1 —
+    // значит резолвер подтвердил исход по бюллетеню). Провалившийся подъём
+    // блока не получает: подпись «попил» над днём, где никто не ушёл, врала
+    // бы; сводка в этом случае честно пишет «ничья».
+    const outcome = resolveDayOutcome(gameDetails.votes || [], phaseNumber);
+    const liftTargets = outcome.departed.length > 1 ? outcome.departed : [];
 
     // Строка дня.
     const dayRow = document.createElement("div");
@@ -403,7 +420,11 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
       cell.className = "cell player role";
       cell.setAttribute("data-player", String(player.position));
 
-      const votes = phase.day.filter((a: any) => a.to === player.position);
+      // Бюллетень подъёма (записи без num, candidate 1 = «за») — НЕ голос за
+      // игрока: его candidate это «да/нет», а не позиция. Без фильтра шесть
+      // голосов «за подъём» рисовались ложными «Выс» в ячейке игрока №1
+      // (реальный кейс: docs/fixtures/match_598995.json, день 4).
+      const votes = phase.day.filter((a: any) => a.to === player.position && !a.lift);
       // «Как в старой версии» = выставления (num 0) не показываются вовсе.
       // Это не упрощение, а точное поведение legacy: processGamePhases там
       // (legacy/match-enhancer.js:651-694) клал в phase.day ТОЛЬКО num 1 и 2,
@@ -416,6 +437,13 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
       const firstVotes = votes.filter((v: any) => (classic ? v.num === 1 : !v.num));
       const secondVotes = classic ? [] : votes.filter((v: any) => v.num === 1);
       const thirdVotes = votes.filter((v: any) => v.num === 2);
+      // Бюллетень рисуем в ячейках ничейных кандидатов финального тура (по
+      // просьбе владельца: «должно быть в игроках 4 и 5, а не у №1»). Не в
+      // classic: legacy его не знал и не рисовал.
+      const liftBallot =
+        !classic && liftTargets.includes(player.position)
+          ? phase.day.filter((a: any) => a.lift && a.to === 1)
+          : [];
 
       let html = "";
       const labeled = !classic;
@@ -450,6 +478,16 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           `Голосование за подъём (№${player.position})`,
           labeled ? "подъём" : "",
           "Голосование за подъём всех",
+        );
+      }
+      if (liftBallot.length > 0) {
+        html += renderVotesBlock(
+          liftBallot,
+          players,
+          "margin-top: 4px;",
+          "Кто голосовал «поднимаем всех» (попил)",
+          "попил",
+          "Бюллетень «поднимаем всех?»: чипы — кто проголосовал «за»",
         );
       }
 
@@ -952,6 +990,10 @@ function processGamePhases(gameDetails: any): Array<{ day: any[]; night: any[] }
       from: vote.voter,
       to: vote.candidate,
       num: vote.num || 0,
+      // Запись БЕЗ num — бюллетень «поднимаем всех?» (candidate 1 = «за»),
+      // НЕ голос за игрока. Без флага `vote.num || 0` сливал его с
+      // выставлениями (шесть ложных «Выс» у №1 в match_598995, день 4).
+      lift: isLiftBallot(vote),
     });
   });
 
