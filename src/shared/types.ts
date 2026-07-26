@@ -29,6 +29,8 @@ export interface Settings {
   role_phase_auto_switch_enabled: boolean;
   /** Режим поворота камер: клик по игроку переворачивает его видео на 180°. */
   camera_rotate_enabled: boolean;
+  /** Кнопка локального мьюта игрока (глушит его звук только у меня). */
+  player_mute_enabled: boolean;
   /** Квадратик-метка роли у игрока (мой read, сбрасывается за игру). */
   role_marker_enabled: boolean;
   /** Возвращать F5 нормальное обновление страницы (сайт перехватывает его под настройки). */

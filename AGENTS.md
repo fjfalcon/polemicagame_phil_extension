@@ -150,6 +150,7 @@ src/
 | local | playerNotes, tagCustomColors, pn_notes_migrated_v1 | notes-store.ts. Ключи заметок (8.1.29): `u:<userId>` (предпочтительно, вечный) + легаси-ники (фолбэк, лениво мигрируют) |
 | local | obs_password | settings.ts (LOCAL_KEYS) |
 | local | roleMarks | role-marker (метки «мой read», ключи g:<id> / l:<состав>) |
+| local | pn_muted_players | player-notes: ники (lowercase) с локально выключенным звуком (8.1.41, глушение через video.volume=0 + маркер data-pn-muted) |
 | local | polemica:logs:{content-<session>,bg,popup,ext} | log.ts (CAP 600/контекст; content-сессии старше 24ч чистятся) |
 | local | obs_connection_state, obs_auto_scene_state | obs-client/obs-panel |
 | local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |

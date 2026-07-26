@@ -789,6 +789,17 @@ function findWebcamButton(): HTMLElement | null {
   const candidates = Array.from(document.querySelectorAll<HTMLElement>(SITE.webcamButton));
   if (candidates.length === 0) return null;
   const looksLikeCamera = (el: HTMLElement): boolean => {
+    // Главный признак (room-бандл сайта, сверено 26.07.2026): кнопка камеры —
+    // это RoomButton с hotKey «V» → внутри <span class="button__command">V</span>
+    // (или «Alt+V» при включённом модификаторе). У микрофона там «M», у прочих
+    // кнопок — другое/пусто. Иконка теперь img.button__icon с ХЕШИРОВАННЫМ
+    // webpack-именем — по src кнопку не распознать, из-за этого автовыключение
+    // камеры молча умерло: старая эвристика (use[href]/title/aria) не находила
+    // НИ ОДНОГО кандидата.
+    const hotkeyLabel = el.querySelector(".button__command")?.textContent?.trim().toLowerCase() || "";
+    const hotkeyTail = hotkeyLabel.split("+").pop()?.trim() || "";
+    if (hotkeyTail === "v") return true;
+    // Старые признаки — на случай отката разметки сайта.
     const use = el.querySelector("use");
     const href = (use?.getAttribute("href") || use?.getAttribute("xlink:href") || "").toLowerCase();
     const label = `${el.getAttribute("title") || ""} ${el.getAttribute("aria-label") || ""}`.toLowerCase();

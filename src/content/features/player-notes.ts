@@ -109,6 +109,9 @@ const VERSION = NOTES_VERSION;
 /** TTL кэшей статистики: за игровой вечер MMR меняется каждой игрой. */
 const STATS_TTL_MS = 5 * 60 * 1000;
 
+/** storage.local: массив ников (lowercase) с выключенным у нас звуком. */
+const MUTED_PLAYERS_KEY = "pn_muted_players";
+
 /**
  * Один общий запрос списка активных игр на всех игроков. Раньше in-flight
  * дедуп ключевался ником: вход в игру с 10 игроками давал 10 ПАРАЛЛЕЛЬНЫХ
@@ -231,6 +234,16 @@ class PlayerNotesManager {
   private statsInFlight = new Set<string>();
   /** Ники с временно скрытым видео (в пределах сессии). */
   private hiddenVideos = new Set<string>();
+  /**
+   * Локально замьюченные игроки (ники, lowercase). ПЕРСИСТЕНТНО в
+   * storage.local (ключ pn_muted_players) — по просьбе владельца мьют
+   * действует во всех следующих играх, пока его не сняли. Глушим через
+   * volume = 0 на ВСЕХ media-элементах плитки (см. applyMuteState — звук
+   * идёт через отдельный <audio>, НЕ через video): Vue сайта биндит muted
+   * и srcObject, но НЕ volume, поэтому наше значение переживает апдейты
+   * компонента; пересоздание элемента ловится обычным refresh-циклом.
+   */
+  private mutedPlayers = new Set<string>();
   /** Закрытие открытой модалки заметки — нужно, чтобы disable() снял её слушатели. */
   private closeOpenModal: (() => void) | null = null;
 
@@ -253,6 +266,7 @@ class PlayerNotesManager {
 
   async enable(): Promise<void> {
     await this.loadNotes();
+    await this.loadMutedPlayers();
 
     this.syncMatchPageRoute(getMatchId() !== null);
 
@@ -318,6 +332,17 @@ class PlayerNotesManager {
       if (changes[TAGS_KEY]) {
         const next = changes[TAGS_KEY].newValue;
         if (Array.isArray(next)) this.customTags = next as string[];
+      }
+      // Мьюты общие между вкладками: без этой ветки вкладка со старым Set
+      // затирала бы чужие мьюты при первом же своём клике (пишется весь список).
+      if (changes[MUTED_PLAYERS_KEY]) {
+        const next = changes[MUTED_PLAYERS_KEY].newValue;
+        if (Array.isArray(next)) {
+          this.mutedPlayers = new Set(
+            next.filter((u): u is string => typeof u === "string" && u !== ""),
+          );
+          this.processExistingElements();
+        }
       }
       if (!changes[NOTES_KEY]) return;
       this.notes = (changes[NOTES_KEY].newValue as NotesMap) || {};
@@ -416,6 +441,15 @@ class PlayerNotesManager {
     this.playerStats.clear();
     this.lastGamesCache.clear();
     this.hiddenVideos.clear();
+    // Мьют персистентный, но при выключенной фиче звук обязан вернуться:
+    // расширение «ничего не делает», когда его выключили (§4 п.7).
+    document
+      .querySelectorAll<HTMLMediaElement>('video[data-pn-muted="true"], audio[data-pn-muted="true"]')
+      .forEach((v) => {
+        if (v.volume === 0) v.volume = 1;
+        delete v.dataset.pnMuted;
+      });
+    this.mutedPlayers.clear();
   }
 
   update(ctx: FeatureContext): void {
@@ -462,6 +496,24 @@ class PlayerNotesManager {
     this.notesReadOnly = loadFailed === true;
     if (this.notesReadOnly) log.warn("player-notes", "notes load failed — saves blocked");
     log.debug("player-notes", "notes loaded", Object.keys(this.notes).length);
+  }
+
+  private async loadMutedPlayers(): Promise<void> {
+    try {
+      const res = await browser.storage.local.get({ [MUTED_PLAYERS_KEY]: [] });
+      const list = res[MUTED_PLAYERS_KEY];
+      if (Array.isArray(list)) {
+        for (const u of list) if (typeof u === "string" && u) this.mutedPlayers.add(u);
+      }
+    } catch (e) {
+      log.warn("player-notes", "muted players load failed", e);
+    }
+  }
+
+  private persistMutedPlayers(): void {
+    void browser.storage.local
+      .set({ [MUTED_PLAYERS_KEY]: [...this.mutedPlayers] })
+      .catch((e) => log.warn("player-notes", "muted players save failed", e));
   }
 
   private async saveCustomTags(): Promise<void> {
@@ -798,6 +850,13 @@ class PlayerNotesManager {
 
   private applyButtonTheme(button: HTMLElement | null): void {
     if (!button) return;
+    // Красная иконка замьюченного игрока — индикатор состояния, тема не должна
+    // её перекрашивать (applyStatsButtonTheme проходит по всем кнопкам при
+    // каждом изменении настроек, а гейт pnMuteState в syncMuteButton не даст
+    // восстановить цвет без смены состояния).
+    if (button.classList.contains(OWN.muteButton) && button.dataset.pnMuteState === "muted") {
+      return;
+    }
     const color = this.getStatsThemeColor();
     button.style.setProperty("--stats-button-theme-color", color);
     button.style.color = color;
@@ -1117,6 +1176,101 @@ class PlayerNotesManager {
   private syncHideVideoButton(button: HTMLElement, username: string): void {
     const opacity = this.hiddenVideos.has(username.toLowerCase()) ? "1" : "0.7";
     if (button.style.opacity !== opacity) button.style.opacity = opacity;
+  }
+
+  /** Кнопка локального мьюта: глушит звук игрока только у нас, помнит между играми. */
+  private createMuteButton(username: string, container: Element): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.className = OWN.muteButton;
+    btn.dataset.username = username;
+    btn.style.cssText = BUTTON_PLAIN_CSS;
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const uname = username.toLowerCase();
+      if (this.mutedPlayers.has(uname)) this.mutedPlayers.delete(uname);
+      else this.mutedPlayers.add(uname);
+      this.persistMutedPlayers();
+      this.applyMuteState(container, username);
+      this.syncMuteButton(btn, username);
+    });
+    this.syncMuteButton(btn, username);
+    return btn;
+  }
+
+  /**
+   * Иконка обязана читаться с одного взгляда (просьба владельца): состояние
+   * кодируем ФОРМОЙ (динамик против перечёркнутого) и цветом (красный).
+   * innerHTML трогаем только при реальной смене состояния — кнопки живут в
+   * refresh-цикле onDomChange (инвариант AGENTS.md §4 п.1).
+   */
+  private syncMuteButton(button: HTMLElement, username: string): void {
+    const muted = this.mutedPlayers.has(username.toLowerCase());
+    const state = muted ? "muted" : "live";
+    if (button.dataset.pnMuteState === state) return;
+    button.dataset.pnMuteState = state;
+    button.title = muted
+      ? `Включить звук ${username}`
+      : `Выключить звук ${username} у себя (запомнится на следующие игры)`;
+    button.innerHTML = muted
+      ? `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="color:#ef4444;">
+        <path d="M11 5L6 9H2v6h4l5 4V5z" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M22 9l-6 6M16 9l6 6" stroke="#ef4444" stroke-width="2" stroke-linecap="round"/>
+      </svg>`
+      : `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="color: rgba(66, 103, 178, 0.9);">
+        <path d="M11 5L6 9H2v6h4l5 4V5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>`;
+    if (muted) {
+      // Красный не перекрашиваем темой (гейт в applyButtonTheme).
+      button.style.opacity = "1";
+    } else {
+      button.style.opacity = "0.7";
+      this.applyButtonTheme(button);
+    }
+  }
+
+  /**
+   * Применить/снять мьют на ВСЕХ media-элементах плитки игрока (не «на video» —
+   * см. комментарий внутри). Идемпотентно: пишем только при отличии.
+   * dataset.pnMuted отмечает, что нулевую громкость поставили МЫ — без метки
+   * снятие мьюта трогало бы громкость, которую пользователь выкрутил в ноль
+   * сам средствами сайта.
+   */
+  private applyMuteState(container: Element, username: string): void {
+    // ВСЕ media-элементы плитки, а не video.player__video: при включённом
+    // useAudioAmplification (дефолт сайта) video чужого игрока hard-muted
+    // всегда, а звук идёт через ОТДЕЛЬНЫЙ <audio ref="audioOutput"> без
+    // класса (room-бандл, сверено 27.07.2026). Мьют только по video был
+    // плацебо — иконка краснела, игрок продолжал звучать.
+    const media = container.querySelectorAll<HTMLMediaElement>("video, audio");
+    if (media.length === 0) return;
+    // Выключенная настройка ведёт себя как «никто не замьючен»: звук
+    // возвращается живьём, список в storage при этом не трогаем.
+    const muteActive = this.settings.player_mute_enabled !== false;
+    const wantMute = muteActive && this.mutedPlayers.has(username.toLowerCase());
+    media.forEach((el) => {
+      if (wantMute) {
+        if (el.volume !== 0) el.volume = 0;
+        if (el.dataset.pnMuted !== "true") el.dataset.pnMuted = "true";
+      } else if (el.dataset.pnMuted === "true") {
+        if (el.volume === 0) el.volume = 1;
+        delete el.dataset.pnMuted;
+      }
+    });
+  }
+
+  /** Добавить/убрать кнопку мьюта по настройке player_mute_enabled. */
+  private ensureMuteButton(iconsGroup: Element, container: Element, username: string): void {
+    const existing = iconsGroup.querySelector<HTMLElement>(`.${OWN.muteButton}`);
+    if (this.settings.player_mute_enabled !== false) {
+      if (!existing) iconsGroup.appendChild(this.createMuteButton(username, container));
+      else this.syncMuteButton(existing, username);
+    } else if (existing) {
+      existing.remove();
+    }
   }
 
   private createLastGamesButton(username: string): HTMLButtonElement {
@@ -1643,9 +1797,12 @@ class PlayerNotesManager {
       const grp = infoContainer.querySelector(`.${OWN.playerIcons}`);
       if (grp) {
         this.ensureRotateButton(grp, container, username);
+        this.ensureMuteButton(grp, container, username);
         const hideButton = grp.querySelector<HTMLElement>(`.${OWN.hideVideoButton}`);
         if (hideButton) this.syncHideVideoButton(hideButton, username);
       }
+      // Пересоздание video-элемента сайтом сбрасывает volume — возвращаем мьют.
+      this.applyMuteState(container, username);
       return;
     }
 
@@ -1665,6 +1822,8 @@ class PlayerNotesManager {
     iconsGroup.appendChild(this.createLastGamesButton(username));
     iconsGroup.appendChild(this.createHideVideoButton(username, container));
     this.ensureRotateButton(iconsGroup, container, username);
+    this.ensureMuteButton(iconsGroup, container, username);
+    this.applyMuteState(container, username);
 
     if (this.hiddenVideos.has(username.toLowerCase())) {
       const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
