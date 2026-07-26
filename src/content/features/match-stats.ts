@@ -477,9 +477,11 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           thirdVotes,
           players,
           "margin-top: 4px;",
-          `Голосование за подъём (№${player.position})`,
-          labeled ? "подъём" : "",
-          "Голосование за подъём всех",
+          `Повторное голосование за №${player.position}`,
+          // Термины владельца (26.07.2026): num 2 — «повторное голосование»
+          // (перестрелка ничейных кандидатов), а «подъём» — это БЮЛЛЕТЕНЬ ниже.
+          labeled ? "перегол." : "",
+          "Повторное голосование",
         );
       }
       if (liftBallot.length > 0) {
@@ -487,9 +489,9 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
           liftBallot,
           players,
           "margin-top: 4px;",
-          "Кто голосовал «поднимаем всех» (попил)",
-          "попил",
-          "Бюллетень «поднимаем всех?»: чипы — кто проголосовал «за»",
+          "Кто голосовал за подъём всех",
+          "подъём",
+          "Голосование за подъём всех: чипы — кто «за»",
         );
       }
 
@@ -581,7 +583,7 @@ function buildPhaseTimeline(
       gameDetails.votes || [],
       n,
     );
-    const tourName = finalNum === 0 ? "" : finalNum === 1 ? " (голос.)" : " (подъём)";
+    const tourName = finalNum === 0 ? "" : finalNum === 1 ? " (голос.)" : " (перегол.)";
     // Гард по finalNum, а не по номеру дня: день из одних выставлений — это не
     // ничья (голосования не было), а настоящая ничья в первом дне существует,
     // если у стола включён zeroVoting. Прежний `n > 1` врал в обе стороны.
