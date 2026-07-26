@@ -51,6 +51,24 @@ JSON-эндпоинта данных матча НЕТ (перебор канд�
 только SSR-HTML с `data-game='...'`; регэксп-парсинг в match-data.ts —
 единственный путь, это подтверждённая необходимость, а не костыль.
 
+## Матчмейкинг и лобби: socket.io, не REST
+
+Постановка в очередь / поиск игры не делает НИ ОДНОГО HTTP-запроса —
+всё через socket.io (`/socket.io` в бандле). По HTTP страница поиска лишь
+поллит `get-current-games` раз в несколько секунд. События из бандла:
+
+- сервер→клиент: `on_game_found` (push «игра найдена» — мгновенный),
+  `on_connected_to_lobby`, `on_lobby_created`, `on_lobby_destroyed`,
+  `on_error_connecting_to_lobby`, `redirect_to_game`, `session_initialized`;
+- клиент→сервер: `set_readiness` (кнопка «Готов»), `stop_game_search`,
+  `connect_to_lobby`, `create_lobby_in_media_room`, `quit_lobby`,
+  `quit_game`, `set_lobby_name/password`, `set_judge`, `set_lobby_leader`,
+  `kick_out_player`, `update_lobby_data`.
+
+Решение (2026-07-26): автопринятие ОСТАЁТСЯ DOM-кликом. Слать
+`set_readiness` в сокет из page-world можно, но это хрупко (ломается любым
+обновлением сайта) и отличимо от человека на сервере; DOM-клик — нет.
+
 ## Прочие маршруты из бандла (не проверялись, для справки)
 
 auth: `/auth/login|logout|register|social-login`; кабинет:
