@@ -39,6 +39,14 @@ let routeReadyInterval: ReturnType<typeof setInterval> | null = null;
 let routeDomUnsub: (() => void) | null = null;
 let pendingGameData: any = null;
 let lastPendingRetryAt = 0;
+/**
+ * Ожидание таблицы от ПРЕДЫДУЩЕГО enhance(). Обязано быть модульным: два
+ * enhance() подряд быстрее 500мс (пользователь листает виды в select'е
+ * стрелками) оставляли два живых интервала, и оба дорисовывали фазы — таблица
+ * удваивалась. removeEnhancements() не спасал: он отрабатывает ДО того, как
+ * отложенный рендер выстрелит.
+ */
+let tableCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 function trackInterval(id: ReturnType<typeof setInterval>): ReturnType<typeof setInterval> {
   intervals.add(id);
@@ -183,16 +191,20 @@ function enhance(gameData: any): void {
 
   log.debug(SCOPE, "Starting page enhancement");
   // Ждём появления таблицы.
+  // Гасим ожидание от предыдущего enhance(), иначе оба дорисуют фазы.
+  if (tableCheckInterval !== null) clearTrackedInterval(tableCheckInterval);
   const checkTable = trackInterval(
     setInterval(() => {
       // SPA-переход на другой матч — данные этого больше не актуальны.
       if ((getMatchId() || "") !== matchIdAtStart) {
         clearTrackedInterval(checkTable);
+        if (tableCheckInterval === checkTable) tableCheckInterval = null;
         return;
       }
       const table = document.querySelector<HTMLElement>(SITE.statsTable);
       if (table) {
         clearTrackedInterval(checkTable);
+        if (tableCheckInterval === checkTable) tableCheckInterval = null;
         enhanceTable(table, gameData);
         // Небольшая задержка для гарантированного добавления точек.
         trackTimeout(() => {
@@ -203,9 +215,13 @@ function enhance(gameData: any): void {
       }
     }, 500),
   );
+  tableCheckInterval = checkTable;
 
   // Прекращаем поиск через 10 секунд.
-  trackTimeout(() => clearTrackedInterval(checkTable), 10000);
+  trackTimeout(() => {
+    clearTrackedInterval(checkTable);
+    if (tableCheckInterval === checkTable) tableCheckInterval = null;
+  }, 10000);
 }
 
 function removeEnhancements(): void {
@@ -295,6 +311,8 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
   const gameDetails = gameData.data || {};
   const players = gameDetails.players || [];
   const phases = processGamePhases(gameDetails);
+  // Один раз на перерисовку: enhanceTable синхронна, вид посреди неё не меняется.
+  const classic = viewMode() === "classic";
 
   const rows = Array.from(table.querySelectorAll<HTMLElement>(SITE.statsRow));
   const roleRow = rows.find(
@@ -327,20 +345,32 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
       cell.setAttribute("data-player", String(player.position));
 
       const votes = phase.day.filter((a: any) => a.to === player.position);
-      const firstVotes = votes.filter((v: any) => !v.num);
-      const secondVotes = votes.filter((v: any) => v.num === 1);
+      // «Как в старой версии» = выставления (num 0) не показываются вовсе.
+      // Это не упрощение, а точное поведение legacy: processGamePhases там
+      // (legacy/match-enhancer.js:651-694) клал в phase.day ТОЛЬКО num 1 и 2,
+      // поэтому `!v.num` в его фильтре на строке 140 был мёртвым кодом.
+      // Следствие, которое надо знать: день без голосования (в
+      // legacy/match_314446.json это день 1 — одни выставления) в этом режиме
+      // пустой — и это НЕ баг рендера. Так было в старой версии; наш classic
+      // в 8.1.34-8.1.35 ошибочно показывал выставления, с 8.1.36 не показывает.
+      // Кому нужны выставления — два других вида.
+      const firstVotes = votes.filter((v: any) => (classic ? v.num === 1 : !v.num));
+      const secondVotes = classic ? [] : votes.filter((v: any) => v.num === 1);
       const thirdVotes = votes.filter((v: any) => v.num === 2);
 
       let html = "";
-      const labeled = viewMode() !== "classic";
+      const labeled = !classic;
       if (firstVotes.length > 0) {
         html += renderVotesBlock(
           firstVotes,
           players,
           "",
-          `Выставление №${player.position}`,
+          classic ? `Голосование за №${player.position}` : `Выставление №${player.position}`,
+          // В classic этот блок несёт ГОЛОСОВАНИЕ, а не выставление: подписи
+          // тоже условны, иначе включение labeled в classic напишет «Выс» над
+          // чипами голосов.
           labeled ? "Выс" : "",
-          "Выставление",
+          classic ? "Голосование" : "Выставление",
         );
       }
       if (secondVotes.length > 0) {
@@ -689,8 +719,12 @@ function findVotedDay(playerPosition: number, gameData: any): number | null {
 
   const dayVotes: Record<number, number> = {};
   votes.forEach((vote: any) => {
-    // !num: основной тур — это num=0 (см. processGamePhases); здесь оставалась
-    // старая семантика num===1, т.е. день искался по переголосовке.
+    // ВНИМАНИЕ, здесь известная неточность (техдолг AGENTS.md §6 п.12):
+    // num=0 — это ВЫСТАВЛЕНИЕ (AGENTS.md §4 п.8), а не «основной тур», как
+    // утверждал прежний комментарий. День ухода игрока считается по
+    // выставлениям, а не по голосам, поэтому дот ЛХ может сесть не на тот день
+    // (в режиме classic — вплоть до пустой ячейки дня без голосования).
+    // Чинить нужно вместе с определением исхода дня, а не заменой одной цифры.
     if (vote.candidate === playerPosition && !vote.num) {
       dayVotes[vote.day] = (dayVotes[vote.day] || 0) + 1;
     }
