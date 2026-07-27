@@ -64,6 +64,11 @@ export const SITE = {
   roleMenuClickable: 'button, [role="button"], li, a, span, div',
   // Профиль / поиск игры
   // (profileImg/profileAvatar/profileAvatarIcons удалены вместе с мёртвой фичей аватара)
+  /**
+   * Игра уже собрана: блок с таймером и «Принять игру» → «Готовы: N/10».
+   * В шаблоне сайта это ветка `searchState.group` внутри `.p-play-profile__wr`,
+   * то есть секундомера поиска в этот момент на странице НЕТ.
+   */
   profileAccept: ".p-play__profile-accept",
   profileSearchButton: ".p-play__profile-button",
   profileSearchClose: ".p-play__profile-game-search-close",

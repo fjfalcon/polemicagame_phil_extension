@@ -126,6 +126,45 @@ function siteSearchActive(): boolean {
   return !!document.querySelector(SITE.searchInProgress);
 }
 
+/**
+ * Проверки ниже — по НАЛИЧИЮ узла, без getClientRects: панель поиска у сайта
+ * собрана на `v-if` (в render-функции это цепочка тернарников), состояния
+ * взаимоисключающие и лишних скрытых копий не рендерится. Замер видимости
+ * форсировал бы layout на каждое изменение DOM — см. syncButtonVisibility.
+ *
+ * Игра уже собрана: панель принятия («Принять игру», затем обратный отсчёт с
+ * «Готовы: N/10»). Секундомер поиска в этот момент со страницы уходит, поэтому
+ * одного siteSearchActive() мало — раньше кнопка оставалась висеть ровно там,
+ * где разведка опаснее всего: сервер держит для игрока найденное лобби.
+ */
+function siteAcceptActive(): boolean {
+  return !!document.querySelector(SITE.profileAccept);
+}
+
+/**
+ * Разведка уместна ровно в одном состоянии — когда игрок МОЖЕТ начать поиск,
+ * то есть на месте кнопка «Играть». Проверка намеренно fail-closed: незнакомое
+ * состояние панели («Игра запускается», скелетон загрузки, собранная игра)
+ * прячет кнопку, а не показывает её «на всякий случай».
+ */
+function canStartSearch(): boolean {
+  return !!document.querySelector(SITE.profileSearchButton);
+}
+
+/** Почему разведка сейчас запрещена; null — можно. */
+function blockedReason(): string | null {
+  if (siteSearchActive()) {
+    return "Вы уже в поиске — разведка отключена, чтобы не порвать вашу очередь.";
+  }
+  if (siteAcceptActive()) {
+    return "Игра уже собрана — разведка отключена, чтобы не мешать принятию.";
+  }
+  if (!canStartSearch()) {
+    return "Кнопка «Играть» сейчас недоступна — разведка отключена.";
+  }
+  return null;
+}
+
 function enabledModes(): string[] {
   const s = settings;
   const list: string[] = [];
@@ -505,12 +544,11 @@ async function runPeek(auto = false): Promise<void> {
   if (running) return;
   // Кнопка могла пережить SPA-переход — на чужой странице не работаем.
   if (!isSearchPage()) return;
-  if (siteSearchActive()) {
+  const blocked = blockedReason();
+  if (blocked) {
     // Автозаход молчит: незапрошенная всплывашка в момент старта поиска
     // только пугает.
-    if (!auto) {
-      renderPanel({}, "Вы уже в поиске — разведка отключена, чтобы не порвать вашу очередь.");
-    }
+    if (!auto) renderPanel({}, blocked);
     return;
   }
   const modes = enabledModes();
@@ -566,8 +604,8 @@ async function runPeek(auto = false): Promise<void> {
       // вторая попытка входила по данным десятисекундной давности и без
       // подтверждения — могла молча зайти в почти полную очередь.
       if (peekCancelled) return;
-      if (siteSearchActive()) {
-        renderPanel({}, "Вы начали поиск сами — разведка отменена.");
+      if (blockedReason()) {
+        renderPanel({}, "Состояние поиска изменилось — разведка отменена.");
         return;
       }
 
@@ -609,7 +647,7 @@ async function runPeek(auto = false): Promise<void> {
           return;
         }
       }
-      if (peekCancelled || siteSearchActive()) return;
+      if (peekCancelled || blockedReason()) return;
 
       // Стоп-кран взводим ВПЛОТНУЮ к сетевой части: раньше он висел на всё
       // время диалогов и успевал истечь по сторожевому таймеру.
@@ -679,7 +717,7 @@ function scheduleAutoPeek(): void {
     }
     autoPeekDone = true;
     // Ещё раз сверяемся: за паузу игрок мог сам встать в очередь или уйти.
-    if (!isSearchPage() || siteSearchActive()) return;
+    if (!isSearchPage() || blockedReason()) return;
     void runPeek(true);
   };
 
@@ -763,9 +801,9 @@ function ensureButton(): void {
 }
 
 /**
- * Пока игрок сам стоит в очереди, кнопка бесполезна: разведка в этом
- * состоянии запрещена (её выход снял бы игрока с поиска), нажатие может
- * только показать отказ. Прячем.
+ * Кнопка видна только там, где разведка вообще разрешена (blockedReason):
+ * свой поиск, собранная игра, отсутствие «Играть» — всё это состояния, где
+ * нажатие может лишь показать отказ, а вид кнопки сбивает с толку.
  *
  * Запись строго идемпотентна — функция вызывается из общего наблюдателя
  * DOM, а безусловная правка style стала бы самоподдерживающимся циклом
@@ -773,8 +811,7 @@ function ensureButton(): void {
  */
 function syncButtonVisibility(): void {
   if (!button) return;
-  const hide = siteSearchActive();
-  const want = hide ? "none" : "";
+  const want = blockedReason() ? "none" : "";
   if (button.style.display !== want) button.style.display = want;
 }
 
