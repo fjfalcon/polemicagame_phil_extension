@@ -5,6 +5,7 @@
  */
 import { sendRuntime } from "@core/messaging";
 import { SITE } from "@core/selectors";
+import { releaseForUserAction } from "../auto-accept-gate";
 import type { Feature } from "@core/feature";
 
 let onClick: ((e: MouseEvent) => void) | null = null;
@@ -16,6 +17,9 @@ export const searchFeature: Feature = {
     onClick = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
       if (t.matches?.(SITE.profileSearchButton)) {
+        // Игрок сам начал поиск — его действие важнее нашей разведки очереди:
+        // если стоп-кран ещё стоял, снимаем и работаем как обычно.
+        releaseForUserAction();
         // players/gameFound из старого протокола никто не читал — не собираем.
         void sendRuntime({ action: "startSearch" });
       } else if (t.matches?.(SITE.profileSearchClose)) {

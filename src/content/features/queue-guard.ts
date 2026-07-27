@@ -17,17 +17,13 @@
  */
 import { sendRuntime, onMessage } from "@core/messaging";
 import { log } from "@core/log";
+import { SITE } from "@core/selectors";
 import type { Feature } from "@core/feature";
 
 const SCOPE = "queue-guard";
 
-/**
- * Блок секундомера идущего поиска. Гейт именно по СЕКУНДОМЕРУ: класс
- * `--search` сайт вешает и на скелетон загрузки кнопки (ветка
- * `isSearchBtnLoading`), где очереди ещё нет, — по одному классу гард
- * взводился бы впустую.
- */
-const SEARCH_ACTIVE_SELECTOR = ".p-play__profile-game--search .p-play__profile-game-search-time";
+/** Секундомер идущего поиска — см. SITE.searchInProgress (общий с queue-peek). */
+const SEARCH_ACTIVE_SELECTOR = SITE.searchInProgress;
 
 let visibilityListener: (() => void) | null = null;
 let pageHideListener: (() => void) | null = null;

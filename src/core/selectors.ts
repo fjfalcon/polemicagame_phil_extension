@@ -46,6 +46,17 @@ export const SITE = {
   welcomeModal: ".common-room-modal",
   lobbyStageName: ".new-stage__name",
   invitationLink: ".invitation-link",
+  /**
+   * Секундомер идущего поиска — единственный надёжный признак «игрок в
+   * очереди». Гейт именно по нему: класс `--search` сайт вешает и на
+   * скелетон загрузки кнопки, где очереди ещё нет. Общий для queue-guard и
+   * queue-peek, чтобы при смене разметки чинить одно место.
+   */
+  searchInProgress: ".p-play__profile-game--search .p-play__profile-game-search-time",
+  /** Блок с галочками очередей и кнопкой «Играть» — якорь для наших кнопок. */
+  searchPanel: ".p-play__profile-panel",
+  /** Обёртка кнопки «Играть» внутри панели: вставляемся сразу после неё. */
+  searchPlayWrap: ".p-play-profile__wr",
   webcamButton: "div.button.preset-1.small.desktop-version",
   webcamButtonStartIcon: ".button.preset-1.small.desktop-version",
   webcamButtonOffClass: "off",

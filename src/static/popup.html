@@ -224,6 +224,14 @@
             <div class="row"><span>Предупреждать о вылете из очереди<span class="hint">свёрнутую вкладку сервер выкидывает из поиска примерно через 100 секунд — уведомление приходит заранее</span></span>
                 <label class="switch"><input type="checkbox" id="queue_background_warning_enabled" checked><span class="slider"></span></label>
             </div>
+            <div class="row"><span>Кнопка «Кто в очереди»<span class="hint">на странице поиска: на секунду заходит в самую пустую очередь, показывает состав и выходит. Нужна Pro-подписка, иначе только счётчики</span></span>
+                <label class="switch"><input type="checkbox" id="queue_peek_enabled"><span class="slider"></span></label>
+            </div>
+            <div class="row" style="flex-wrap:wrap;gap:6px"><span style="flex:1 0 100%">Очереди для разведки<span class="hint">берётся самая пустая из отмеченных; при 6+ игроках спросим подтверждение — игра может собраться</span></span>
+                <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="queue_peek_standard" checked> Обычный</label>
+                <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="queue_peek_polite" checked> Рейтинг</label>
+                <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="queue_peek_prime" checked> Prime</label>
+            </div>
             <div class="row"><span>Быстрая пауза</span>
                 <label class="switch"><input type="checkbox" id="pause_hotkey_enabled" checked><span class="slider"></span></label>
             </div>

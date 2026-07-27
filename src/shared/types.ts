@@ -49,6 +49,12 @@ export interface Settings {
   connection_diag_enabled: boolean;
   /** Предупреждать, что свёрнутая вкладка вот-вот выпадет из очереди поиска. */
   queue_background_warning_enabled: boolean;
+  /** Кнопка «Кто в очереди» на странице поиска (разведка состава очередей). */
+  queue_peek_enabled: boolean;
+  /** Какие очереди разрешено использовать для разведки. */
+  queue_peek_standard: boolean;
+  queue_peek_polite: boolean;
+  queue_peek_prime: boolean;
   // OBS
   obs_enabled: boolean;
   obs_host: string;

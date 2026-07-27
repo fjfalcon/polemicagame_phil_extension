@@ -456,6 +456,10 @@ document.addEventListener("DOMContentLoaded", () => {
     set("enable_role_faker", items.enable_role_faker);
     set("skip_start_screen_enabled", items.skip_start_screen_enabled);
     set("queue_background_warning_enabled", items.queue_background_warning_enabled);
+    set("queue_peek_enabled", items.queue_peek_enabled);
+    set("queue_peek_standard", items.queue_peek_standard);
+    set("queue_peek_polite", items.queue_peek_polite);
+    set("queue_peek_prime", items.queue_peek_prime);
     set("pause_hotkey_enabled", items.pause_hotkey_enabled);
     set("statistics_enabled", items.statistics_enabled);
     set("match_page_stats_enabled", items.match_page_stats_enabled);
@@ -560,6 +564,10 @@ document.addEventListener("DOMContentLoaded", () => {
       connection_diag_enabled: cb("connection_diag_enabled", false),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       queue_background_warning_enabled: cb("queue_background_warning_enabled", true),
+      queue_peek_enabled: cb("queue_peek_enabled", false),
+      queue_peek_standard: cb("queue_peek_standard", true),
+      queue_peek_polite: cb("queue_peek_polite", true),
+      queue_peek_prime: cb("queue_peek_prime", true),
       pause_hotkey_enabled: cb("pause_hotkey_enabled", true),
       pause_hotkey_code: pauseHotkeyCode,
       hotkey_role_fake: roleFakeCode,
@@ -630,6 +638,10 @@ document.addEventListener("DOMContentLoaded", () => {
     "enable_role_faker",
     "skip_start_screen_enabled",
     "queue_background_warning_enabled",
+    "queue_peek_enabled",
+    "queue_peek_standard",
+    "queue_peek_polite",
+    "queue_peek_prime",
     "pause_hotkey_enabled",
     "statistics_enabled",
     "match_page_stats_enabled",

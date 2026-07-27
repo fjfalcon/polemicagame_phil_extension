@@ -19,6 +19,7 @@ import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { keyboard } from "@core/keyboard";
 import { log } from "@core/log";
 import { SITE, TEXT, OWN } from "@core/selectors";
+import { isAutoAcceptSuppressed } from "../auto-accept-gate";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const SCOPE = "auto-start";
@@ -118,6 +119,9 @@ function consumeClickBudget(el: Element): boolean {
 }
 
 function clickAcceptButtons() {
+  // Идёт разведка очереди — принимать игру нельзя ни в коем случае
+  // (см. content/auto-accept-gate.ts).
+  if (isAutoAcceptSuppressed()) return;
   // Игрок только что кликал сам — не вмешиваемся, он пользуется интерфейсом.
   if (Date.now() - lastUserClickAt < USER_ACTION_BACKOFF_MS) return;
 

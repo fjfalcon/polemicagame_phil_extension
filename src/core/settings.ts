@@ -43,6 +43,12 @@ export const DEFAULT_SETTINGS: Settings = {
   debug_logging_enabled: true,
   connection_diag_enabled: false,
   queue_background_warning_enabled: true,
+  // Выключено по умолчанию: фича заходит в реальную очередь, включать её
+  // должен осознанно сам игрок.
+  queue_peek_enabled: false,
+  queue_peek_standard: true,
+  queue_peek_polite: true,
+  queue_peek_prime: true,
   obs_enabled: false,
   obs_host: "ws://localhost:4455",
   obs_password: "",

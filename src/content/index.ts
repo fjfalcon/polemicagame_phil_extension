@@ -23,6 +23,7 @@ import { roleMarkerFeature } from "./features/role-marker";
 import { updateNotifyFeature } from "./features/update-notify";
 import { connectionDiagFeature } from "./features/connection-diag";
 import { queueGuardFeature } from "./features/queue-guard";
+import { queuePeekFeature } from "./features/queue-peek";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -39,6 +40,7 @@ const manager = new FeatureManager().register(
   updateNotifyFeature,
   connectionDiagFeature,
   queueGuardFeature,
+  queuePeekFeature,
   obsPanelFeature,
   twitchPanelFeature,
 );
