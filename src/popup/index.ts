@@ -457,6 +457,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("skip_start_screen_enabled", items.skip_start_screen_enabled);
     set("queue_background_warning_enabled", items.queue_background_warning_enabled);
     set("queue_peek_enabled", items.queue_peek_enabled);
+    set("queue_peek_auto", items.queue_peek_auto);
     set("queue_peek_standard", items.queue_peek_standard);
     set("queue_peek_polite", items.queue_peek_polite);
     set("queue_peek_prime", items.queue_peek_prime);
@@ -565,6 +566,7 @@ document.addEventListener("DOMContentLoaded", () => {
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       queue_background_warning_enabled: cb("queue_background_warning_enabled", true),
       queue_peek_enabled: cb("queue_peek_enabled", false),
+      queue_peek_auto: cb("queue_peek_auto", false),
       queue_peek_standard: cb("queue_peek_standard", true),
       queue_peek_polite: cb("queue_peek_polite", true),
       queue_peek_prime: cb("queue_peek_prime", true),
@@ -639,6 +641,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "skip_start_screen_enabled",
     "queue_background_warning_enabled",
     "queue_peek_enabled",
+    "queue_peek_auto",
     "queue_peek_standard",
     "queue_peek_polite",
     "queue_peek_prime",

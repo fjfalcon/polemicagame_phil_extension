@@ -51,6 +51,8 @@ export interface Settings {
   queue_background_warning_enabled: boolean;
   /** Кнопка «Кто в очереди» на странице поиска (разведка состава очередей). */
   queue_peek_enabled: boolean;
+  /** Сразу смотреть состав очередей при открытии страницы поиска. */
+  queue_peek_auto: boolean;
   /** Какие очереди разрешено использовать для разведки. */
   queue_peek_standard: boolean;
   queue_peek_polite: boolean;

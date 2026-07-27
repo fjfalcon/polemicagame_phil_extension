@@ -493,12 +493,24 @@ function renderPanel(
   panel.style.top = `${Math.round(top)}px`;
 }
 
-async function runPeek(): Promise<void> {
+/**
+ * @param auto запуск НЕ по клику игрока (автозаход при открытии страницы).
+ *   Автозаход строго осторожнее ручного: игрока может не быть у экрана, а в
+ *   фоновой вкладке браузер душит таймеры — там наш выход из очереди
+ *   задержался бы (тот же механизм, что описан в
+ *   docs/queue-timeout-report.md). Поэтому вместо вопроса «всё равно зайти?»
+ *   мы просто НЕ заходим в занятую очередь.
+ */
+async function runPeek(auto = false): Promise<void> {
   if (running) return;
   // Кнопка могла пережить SPA-переход — на чужой странице не работаем.
   if (!isSearchPage()) return;
   if (siteSearchActive()) {
-    renderPanel({}, "Вы уже в поиске — разведка отключена, чтобы не порвать вашу очередь.");
+    // Автозаход молчит: незапрошенная всплывашка в момент старта поиска
+    // только пугает.
+    if (!auto) {
+      renderPanel({}, "Вы уже в поиске — разведка отключена, чтобы не порвать вашу очередь.");
+    }
     return;
   }
   const modes = enabledModes();
@@ -568,6 +580,15 @@ async function runPeek(): Promise<void> {
         return;
       }
       const freshCount = countOf(fresh[mode]);
+      if (freshCount > WARN_AT && auto) {
+        // Автозаход не спрашивает — он отступает: диалог на загрузке страницы
+        // и так неуместен, а «согласие» некому дать, если игрок отошёл.
+        renderPanel(
+          fresh,
+          `В самой свободной очереди уже ${freshCount} игроков — автопросмотр не заходил, показаны счётчики.`,
+        );
+        return;
+      }
       if (freshCount > WARN_AT) {
         const ok = window.confirm(
           `В очереди «${MODE_TITLES[mode] || mode}» уже ${freshCount} игроков из 10.\n\n` +
@@ -625,6 +646,66 @@ async function runPeek(): Promise<void> {
       button.disabled = false;
       button.textContent = BUTTON_LABEL;
     }
+  }
+}
+
+/**
+ * Автозаход при открытии страницы поиска.
+ *
+ * Три условия, которых нет у ручного запуска:
+ *  • один раз на загрузку страницы (никаких повторов по таймеру);
+ *  • только когда вкладка ВИДНА — в скрытой браузер душит таймеры, и наш
+ *    выход из очереди может задержаться на десятки секунд (тот же механизм,
+ *    что в docs/queue-timeout-report.md); открыли в фоне — ждём показа;
+ *  • пауза перед стартом: даём странице отрисоваться, а игроку — шанс сразу
+ *    нажать «Играть» (тогда автозаход отменится сам).
+ */
+const AUTO_PEEK_DELAY_MS = 1500;
+let autoPeekDone = false;
+let autoPeekTimer: ReturnType<typeof setTimeout> | null = null;
+let autoVisibilityListener: (() => void) | null = null;
+
+function scheduleAutoPeek(): void {
+  if (autoPeekDone || autoPeekTimer || autoVisibilityListener) return;
+
+  const start = () => {
+    autoPeekTimer = null;
+    if (autoPeekDone) return;
+    // Вкладку спрятали внутри паузы — не сжигаем попытку, а ждём показа
+    // (иначе автозаход тихо терялся, хотя обещали «дождёмся видимой»).
+    if (document.hidden) {
+      scheduleAutoPeek();
+      return;
+    }
+    autoPeekDone = true;
+    // Ещё раз сверяемся: за паузу игрок мог сам встать в очередь или уйти.
+    if (!isSearchPage() || siteSearchActive()) return;
+    void runPeek(true);
+  };
+
+  if (document.hidden) {
+    autoVisibilityListener = () => {
+      if (document.hidden || autoPeekDone) return;
+      if (autoVisibilityListener) {
+        document.removeEventListener("visibilitychange", autoVisibilityListener);
+        autoVisibilityListener = null;
+      }
+      autoPeekTimer = setTimeout(start, AUTO_PEEK_DELAY_MS);
+    };
+    document.addEventListener("visibilitychange", autoVisibilityListener);
+    return;
+  }
+  autoPeekTimer = setTimeout(start, AUTO_PEEK_DELAY_MS);
+}
+
+function cancelAutoPeek(): void {
+  if (autoPeekTimer) {
+    clearTimeout(autoPeekTimer);
+    autoPeekTimer = null;
+  }
+  if (autoVisibilityListener) {
+    document.removeEventListener("visibilitychange", autoVisibilityListener);
+    autoVisibilityListener = null;
   }
 }
 
@@ -702,14 +783,24 @@ export const queuePeekFeature: Feature = {
   settingKey: "queue_peek_enabled",
   enable(ctx: FeatureContext) {
     settings = ctx.settings;
-    if (!isSearchPage()) return;
+    // Слушатели вешаем ВСЕГДА, даже вне страницы поиска: FeatureManager
+    // повторно enable() не зовёт, а на страницу поиска можно прийти
+    // SPA-переходом (это и есть типичный путь). Раньше в таком случае не было
+    // ни кнопки, ни автозахода — фича работала только по F5.
     ensureButton();
-    // Панель поиска перерисовывается Vue (смена галочек, старт/стоп поиска) —
-    // возвращаем кнопку на место. Вставка идемпотентна, цикла не будет.
-    unsubscribeDom = onDomChange(() => ensureButton());
+    unsubscribeDom = onDomChange(() => {
+      // Панель поиска перерисовывается Vue (смена галочек, старт/стоп поиска)
+      // — возвращаем кнопку на место. Вставка идемпотентна, цикла не будет.
+      ensureButton();
+      if (settings?.queue_peek_auto && isSearchPage()) scheduleAutoPeek();
+    });
     // Уход со страницы посреди разведки: выходим из очереди явно, не полагаясь
     // на то, что сервер заметит обрыв (по замеру он держит сессию до 45с).
-    pageHideListener = () => cancelPeek("уход со страницы");
+    pageHideListener = () => {
+      cancelAutoPeek();
+      autoPeekDone = true;
+      cancelPeek("уход со страницы");
+    };
     window.addEventListener("pagehide", pageHideListener);
 
     /**
@@ -721,9 +812,18 @@ export const queuePeekFeature: Feature = {
      */
     playClickListener = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
-      if (target?.closest?.(SITE.profileSearchButton)) cancelPeek("игрок начал поиск сам");
+      if (!target?.closest?.(SITE.profileSearchButton)) return;
+      // Отменяем И запланированный автозаход: cancelPeek выходит рано, пока
+      // разведка ещё не запущена, и без этих двух строк клик в течение паузы
+      // не оставлял следа — таймер срабатывал и лез в очередь поверх поиска,
+      // который игрок только что начал.
+      cancelAutoPeek();
+      autoPeekDone = true;
+      cancelPeek("игрок начал поиск сам");
     };
     document.addEventListener("click", playClickListener, true);
+
+    if (settings?.queue_peek_auto && isSearchPage()) scheduleAutoPeek();
   },
   update(ctx: FeatureContext) {
     settings = ctx.settings;
@@ -731,6 +831,8 @@ export const queuePeekFeature: Feature = {
   disable() {
     // Сначала выйти из очереди, потом всё остальное.
     cancelPeek("фича выключена");
+    cancelAutoPeek();
+    autoPeekDone = false;
     registerPeekAbort(null);
     if (playClickListener) {
       document.removeEventListener("click", playClickListener, true);

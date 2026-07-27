@@ -46,6 +46,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // Выключено по умолчанию: фича заходит в реальную очередь, включать её
   // должен осознанно сам игрок.
   queue_peek_enabled: false,
+  // Автозаход рискованнее ручного (игрока может не быть у экрана), поэтому
+  // отдельная галочка и тоже выключено по умолчанию.
+  queue_peek_auto: false,
   queue_peek_standard: true,
   queue_peek_polite: true,
   queue_peek_prime: true,
