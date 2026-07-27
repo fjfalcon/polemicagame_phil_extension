@@ -37,7 +37,8 @@
             border-bottom: 1px solid var(--border);
         }
         .hdr-title { font-size: 15px; font-weight: 700; }
-        .hdr-ver { font-size: 11px; color: var(--muted); }
+        .hdr-ver { font-size: 11px; color: var(--muted); text-decoration: none; }
+        a.hdr-ver:hover { color: var(--text); text-decoration: underline; }
         .hdr .switch { margin-left: auto; align-self: center; }
 
         /* Мастер-выключатель: расширение выключено — всё, кроме шапки, притушено. */
@@ -196,7 +197,7 @@
 <body>
     <div class="hdr">
         <span class="hdr-title">Polemica Notes</span>
-        <span class="hdr-ver" id="popup_version"></span>
+        <a class="hdr-ver" id="popup_version" href="https://github.com/fjfalcon/polemicagame_phil_extension/releases/latest" target="_blank" rel="noopener" title="Открыть страницу последнего релиза на GitHub"></a>
         <label class="switch" title="Выключить всё расширение разом (заметки не пропадут)">
             <input type="checkbox" id="extension_enabled" checked><span class="slider"></span>
         </label>
@@ -399,8 +400,14 @@
 
         <!-- ── Ещё ── -->
         <div class="panel" data-panel="misc">
-            <div class="row"><span>Уведомлять о новой версии<span class="hint">проверка релизов на GitHub</span></span>
+            <div class="row"><span>Уведомлять о новой версии<span class="hint">проверка релизов на GitHub раз в час</span></span>
                 <label class="switch"><input type="checkbox" id="update_check_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Проверить обновление<span class="hint">сейчас, не дожидаясь плановой проверки</span></span>
+                <span class="btn-row">
+                    <button id="check_update_now" class="btn btn-primary">Проверить</button>
+                    <a class="btn btn-ghost" href="https://github.com/fjfalcon/polemicagame_phil_extension/releases/latest" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center;">GitHub</a>
+                </span>
             </div>
             <div class="row"><span>Бэкап заметок</span>
                 <span class="btn-row">

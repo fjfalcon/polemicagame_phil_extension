@@ -159,11 +159,12 @@ src/
 | local | obs_password | settings.ts (LOCAL_KEYS) |
 | local | roleMarks | role-marker (метки «мой read», ключи g:<id> / l:<состав>) |
 | local | pn_muted_players | player-notes: ники (lowercase) с локально выключенным звуком (8.1.41, глушение через video.volume=0 + маркер data-pn-muted) |
+| local | pn_update_last_check, pn_update_latest, pn_update_dismissed | update-notify (8.1.44). Переехали из localStorage страницы: тот принадлежит сайту (недоверенный) и не виден попапу с кнопкой ручной проверки |
 | local | polemica:logs:{content-<session>,bg,popup,ext} | log.ts (CAP 600/контекст; content-сессии старше 24ч чистятся) |
 | local | obs_connection_state, obs_auto_scene_state | obs-client/obs-panel |
 | local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |
-| localStorage страницы | fp:*, polemica:update*, polemica:loglevel/buflevel | панели/update-notify/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник |
+| localStorage страницы | fp:*, polemica:loglevel/buflevel | панели/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник. `polemica:update*` больше НЕ используются (переехали в local, 8.1.44) |
 
 ## 6. Техдолг (актуален на v8.1.28)
 

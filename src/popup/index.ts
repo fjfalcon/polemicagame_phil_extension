@@ -71,6 +71,58 @@ document.addEventListener("DOMContentLoaded", () => {
     showPopupToast("Логи очищены");
   });
 
+  // ───────────────────────── Проверка обновления вручную ─────────────────────────
+  // Плановая проверка ходит на GitHub раз в час и между запросами отвечает из
+  // кэша — сразу после выхода релиза баннера на странице ещё нет. Кнопка
+  // спрашивает GitHub немедленно и заодно сбрасывает кэш, чтобы контент-скрипт
+  // показал баннер на следующей же странице.
+  const checkUpdateBtn = $<HTMLButtonElement>("check_update_now");
+  if (checkUpdateBtn) {
+    checkUpdateBtn.addEventListener("click", async () => {
+      const current = browser.runtime.getManifest().version;
+      checkUpdateBtn.disabled = true;
+      checkUpdateBtn.textContent = "Проверяю…";
+      try {
+        const res = await fetch(
+          "https://api.github.com/repos/fjfalcon/polemicagame_phil_extension/releases/latest",
+          { headers: { Accept: "application/vnd.github+json" } },
+        );
+        if (!res.ok) throw new Error(`GitHub ${res.status}`);
+        const data = (await res.json()) as { tag_name?: string; html_url?: string };
+        const latest = String(data.tag_name || "").replace(/^v/, "");
+        if (!latest) throw new Error("пустой тег");
+
+        // Свежий ответ кладём в общий кэш: баннер на странице появится сразу,
+        // а «не напоминать» для новой версии сбрасываем — она ещё не показана.
+        await browser.storage.local.set({
+          pn_update_last_check: Date.now(),
+          pn_update_latest: latest,
+        });
+
+        const cmp = (a: string, b: string): number => {
+          const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
+          const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+          for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+            if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+          }
+          return 0;
+        };
+        if (cmp(latest, current) > 0) {
+          showPopupToast(`Доступна версия ${latest} (у вас ${current}) — открываю страницу релиза`);
+          void browser.tabs.create({ url: data.html_url || `https://github.com/fjfalcon/polemicagame_phil_extension/releases/latest` });
+        } else {
+          showPopupToast(`У вас последняя версия (${current})`);
+        }
+      } catch (e) {
+        log.error(SCOPE, "manual update check failed", e);
+        showPopupToast("Не удалось проверить обновление", "error");
+      } finally {
+        checkUpdateBtn.disabled = false;
+        checkUpdateBtn.textContent = "Проверить";
+      }
+    });
+  }
+
   // ───────────────────────── Вкладки ─────────────────────────
   const tabs = Array.from(document.querySelectorAll<HTMLElement>(".tab"));
   const panels = Array.from(document.querySelectorAll<HTMLElement>(".panel"));

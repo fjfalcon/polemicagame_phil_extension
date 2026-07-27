@@ -10,10 +10,24 @@ import type { Feature } from "@core/feature";
 const REPO = "fjfalcon/polemicagame_phil_extension";
 const RELEASES_URL = `https://github.com/${REPO}/releases/latest`;
 const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
-const CHECK_INTERVAL = 6 * 60 * 60 * 1000; // 6 часов
-const LS_LAST_CHECK = "polemica:updateLastCheck";
-const LS_LATEST = "polemica:updateLatest";
-const LS_DISMISSED = "polemica:updateDismissed";
+/**
+ * Час, а не шесть: расширение раздаётся зипами через GitHub, и баннер —
+ * единственный канал доставки новостей о релизе. С шестичасовым окном
+ * пользователь узнавал о версии почти через сутки (жалоба 27.07.2026:
+ * «уведомление не прилетает, версия вышла 5 минут назад» — на самом деле
+ * работал кэш). Один запрос в час на браузер лимитам GitHub не мешает.
+ */
+const CHECK_INTERVAL = 60 * 60 * 1000;
+
+/**
+ * Состояние проверки — в storage.local, НЕ в localStorage страницы:
+ * localStorage принадлежит сайту (AGENTS.md §5 — недоверенный источник, сайт
+ * может подделать «последнюю версию» или проставить dismissed), и он не виден
+ * попапу, которому нужна кнопка ручной проверки.
+ */
+const KEY_LAST_CHECK = "pn_update_last_check";
+const KEY_LATEST = "pn_update_latest";
+const KEY_DISMISSED = "pn_update_dismissed";
 
 let banner: HTMLElement | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -30,18 +44,20 @@ function isNewer(a: string, b: string): boolean {
   return false;
 }
 
-function lsGet(key: string): string | null {
+async function stateGet(): Promise<{ last: number; latest: string; dismissed: string }> {
   try {
-    return localStorage.getItem(key);
+    const res = await browser.storage.local.get({
+      [KEY_LAST_CHECK]: 0,
+      [KEY_LATEST]: "",
+      [KEY_DISMISSED]: "",
+    });
+    return {
+      last: Number(res[KEY_LAST_CHECK]) || 0,
+      latest: String(res[KEY_LATEST] || ""),
+      dismissed: String(res[KEY_DISMISSED] || ""),
+    };
   } catch {
-    return null;
-  }
-}
-function lsSet(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* приватный режим */
+    return { last: 0, latest: "", dismissed: "" };
   }
 }
 
@@ -49,9 +65,9 @@ function currentVersion(): string {
   return browser.runtime.getManifest().version;
 }
 
-function showBanner(latest: string): void {
+function showBanner(latest: string, dismissed: string): void {
   if (banner) return;
-  if (lsGet(LS_DISMISSED) === latest) return;
+  if (dismissed === latest) return;
 
   banner = document.createElement("div");
   banner.style.cssText = `
@@ -79,7 +95,7 @@ function showBanner(latest: string): void {
   close.style.cssText =
     "background:transparent;border:none;color:#fff;cursor:pointer;font-size:14px;line-height:1;";
   close.addEventListener("click", () => {
-    lsSet(LS_DISMISSED, latest);
+    void browser.storage.local.set({ [KEY_DISMISSED]: latest });
     banner?.remove();
     banner = null;
   });
@@ -89,25 +105,35 @@ function showBanner(latest: string): void {
 }
 
 async function check(): Promise<void> {
-  const last = parseInt(lsGet(LS_LAST_CHECK) || "0", 10);
-  const cachedLatest = lsGet(LS_LATEST);
+  const { last, latest: cachedLatest, dismissed } = await stateGet();
 
   // Если недавно проверяли — используем кэш, не дёргаем API.
   if (cachedLatest && Date.now() - last < CHECK_INTERVAL) {
-    if (isNewer(cachedLatest, currentVersion())) showBanner(cachedLatest);
+    // Раньше эта ветка молчала, и «баннер не появляется» выглядело как
+    // поломка сети/API, хотя запроса просто не было.
+    log.debug(
+      "update-notify",
+      "кэш свеж, запрос не нужен: latest",
+      cachedLatest,
+      "current",
+      currentVersion(),
+    );
+    if (isNewer(cachedLatest, currentVersion())) showBanner(cachedLatest, dismissed);
     return;
   }
 
   try {
     const res = await fetch(API_URL, { headers: { Accept: "application/vnd.github+json" } });
-    if (!res.ok) return;
+    if (!res.ok) {
+      log.debug("update-notify", "GitHub ответил", res.status);
+      return;
+    }
     const data = await res.json();
     const tag = String(data.tag_name || "").replace(/^v/, "");
     if (!tag) return;
-    lsSet(LS_LAST_CHECK, String(Date.now()));
-    lsSet(LS_LATEST, tag);
+    await browser.storage.local.set({ [KEY_LAST_CHECK]: Date.now(), [KEY_LATEST]: tag });
     log.debug("update-notify", "latest", tag, "current", currentVersion());
-    if (isNewer(tag, currentVersion())) showBanner(tag);
+    if (isNewer(tag, currentVersion())) showBanner(tag, dismissed);
   } catch (e) {
     log.debug("update-notify", "check failed", e);
   }
