@@ -403,6 +403,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("show_roles", items.show_roles);
     set("enable_role_faker", items.enable_role_faker);
     set("skip_start_screen_enabled", items.skip_start_screen_enabled);
+    set("queue_background_warning_enabled", items.queue_background_warning_enabled);
     set("pause_hotkey_enabled", items.pause_hotkey_enabled);
     set("statistics_enabled", items.statistics_enabled);
     set("match_page_stats_enabled", items.match_page_stats_enabled);
@@ -500,12 +501,13 @@ document.addEventListener("DOMContentLoaded", () => {
       auto_accept_enabled: cb("auto_accept_enabled", true),
       camera_rotate_enabled: cb("camera_rotate_enabled", true),
       player_mute_enabled: cb("player_mute_enabled", true),
-      role_marker_enabled: cb("role_marker_enabled", true),
+      role_marker_enabled: cb("role_marker_enabled", false),
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
       debug_logging_enabled: cb("debug_logging_enabled", true),
       connection_diag_enabled: cb("connection_diag_enabled", false),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
+      queue_background_warning_enabled: cb("queue_background_warning_enabled", true),
       pause_hotkey_enabled: cb("pause_hotkey_enabled", true),
       pause_hotkey_code: pauseHotkeyCode,
       hotkey_role_fake: roleFakeCode,
@@ -575,6 +577,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "show_roles",
     "enable_role_faker",
     "skip_start_screen_enabled",
+    "queue_background_warning_enabled",
     "pause_hotkey_enabled",
     "statistics_enabled",
     "match_page_stats_enabled",

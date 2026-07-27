@@ -14,6 +14,15 @@ import type { ExtMessage, ObsCommandMsg } from "@shared/types";
 
 const obs = new ObsClient();
 const OBS_WATCHDOG_ALARM = "polemica:obs-watchdog";
+/**
+ * Будильник «вкладка поиска в фоне». Живёт в background осознанно: setTimeout
+ * в самой скрытой вкладке душится тем же троттлингом, что и ping сайта
+ * (docs/queue-timeout-report.md), и предупреждение опоздало бы к разрыву.
+ * Минимум chrome.alarms — 0.5 минуты; берём 1 минуту: разрыв наступает
+ * примерно на 100-й секунде, значит у игрока остаётся ~40 секунд на реакцию.
+ */
+const QUEUE_GUARD_ALARM = "polemica:queue-guard";
+const QUEUE_GUARD_DELAY_MIN = 1;
 const OBS_MANUAL_DISCONNECT_KEY = "obs_manual_disconnect";
 let obsQueue: Promise<void> = Promise.resolve();
 
@@ -130,8 +139,116 @@ onMessage((msg: ExtMessage, sender) => {
     void handleStopSearch(sender.tab?.id);
     return Promise.resolve({ ok: true });
   }
+  // Возвращаем ПРОМИС операции, а не void: иначе service worker может уснуть
+  // раньше, чем будильник реально создан/снят.
+  if ("action" in msg && msg.action === "queueGuardArm") {
+    return armQueueGuard(sender.tab?.id).then(() => ({ ok: true }));
+  }
+  if ("action" in msg && msg.action === "queueGuardCancel") {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) return Promise.resolve({ ok: false });
+    const name = queueGuardAlarmName(tabId);
+    // Гасим и уже показанную карточку: игрок вернулся сам, висящее
+    // уведомление только мешает (и по клику потом дёрнет фокус вкладки).
+    return Promise.all([
+      browser.alarms.clear(name),
+      browser.notifications?.clear?.(name)?.catch?.(() => undefined),
+    ]).then(() => ({ ok: true }));
+  }
   return undefined;
 });
+
+/**
+ * id вкладки кодируется В ИМЕНИ будильника и уведомления, а не в модульной
+ * переменной: service worker умирает через ~30с бездействия, то есть ЗАДОЛГО
+ * до срабатывания на 60-й секунде, и любое состояние в памяти к этому моменту
+ * потеряно. Имя будильника выгрузку переживает.
+ */
+function queueGuardAlarmName(tabId: number): string {
+  return `${QUEUE_GUARD_ALARM}:${tabId}`;
+}
+
+function tabIdFromAlarmName(name: string): number | null {
+  if (!name.startsWith(`${QUEUE_GUARD_ALARM}:`)) return null;
+  const id = Number.parseInt(name.slice(QUEUE_GUARD_ALARM.length + 1), 10);
+  return Number.isFinite(id) ? id : null;
+}
+
+async function armQueueGuard(tabId: number | undefined): Promise<void> {
+  // Без id вкладки предупреждение некому адресовать и нечем проверить.
+  if (tabId === undefined) return;
+  const name = queueGuardAlarmName(tabId);
+  await browser.alarms.clear(name);
+  await browser.alarms.create(name, { delayInMinutes: QUEUE_GUARD_DELAY_MIN });
+}
+
+async function fireQueueGuardNotification(alarmName: string): Promise<void> {
+  const tabId = tabIdFromAlarmName(alarmName);
+  if (tabId === null) return;
+  // Настройки перечитываем на момент срабатывания: их могли выключить, пока
+  // будильник тикал (в т.ч. мастер-выключатель).
+  const [enabled, extensionOn] = await Promise.all([
+    getSetting("queue_background_warning_enabled"),
+    getSetting("extension_enabled"),
+  ]);
+  if (!enabled || !extensionOn) return;
+
+  // Спрашиваем саму вкладку. tab.active тут врёт: у свёрнутого ОКНА вкладка
+  // остаётся active, и проверка глушила бы предупреждение ровно в главном
+  // сценарии. Нет ответа (вкладку закрыли, страница ушла, расширение
+  // выключено) — молчим.
+  let reply: { hidden?: boolean; searching?: boolean } | undefined;
+  try {
+    reply = await browser.tabs.sendMessage(tabId, { action: "queueGuardPing" });
+  } catch {
+    return;
+  }
+  if (!reply?.hidden || !reply.searching) return;
+
+  try {
+    await browser.notifications.create(queueGuardAlarmName(tabId), {
+      type: "basic",
+      iconUrl: browser.runtime.getURL("icon128.png"),
+      title: "Очередь поиска вот-вот оборвётся",
+      message:
+        "Вкладка Polemica скрыта — примерно через полминуты сервер выкинет вас из очереди. " +
+        "Верните вкладку на экран, чтобы остаться в поиске.",
+    });
+  } catch (e) {
+    log.error("background", "queue guard notification failed", e);
+  }
+}
+
+browser.notifications?.onClicked?.addListener?.((id) => {
+  const tabId = tabIdFromAlarmName(id);
+  if (tabId === null) return;
+  void browser.notifications.clear(id);
+  // Клик = «верни меня в очередь»: показываем вкладку и поднимаем её окно.
+  void browser.tabs
+    .update(tabId, { active: true })
+    .then((tab) =>
+      tab?.windowId != null ? browser.windows.update(tab.windowId, { focused: true }) : undefined,
+    )
+    .catch((e) => log.debug("background", "focus queue tab failed", e));
+});
+
+/**
+ * Просроченные будильники гарда переживают перезапуск браузера и выстрелили бы
+ * уведомлением про очередь, которой давно нет (закрыли крышку ноутбука —
+ * проснулись через два часа).
+ */
+async function clearStaleQueueGuards(): Promise<void> {
+  try {
+    const alarms = await browser.alarms.getAll();
+    await Promise.all(
+      alarms
+        .filter((a) => tabIdFromAlarmName(a.name) !== null)
+        .map((a) => browser.alarms.clear(a.name)),
+    );
+  } catch (e) {
+    log.debug("background", "clear stale queue guards failed", e);
+  }
+}
 
 function restoreObsConnection(probe = false): void {
   void enqueueObs(() => reconcileObsConnection(probe)).catch((e) =>
@@ -176,6 +293,17 @@ async function runUpgradeMigrations(): Promise<void> {
 
 browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === OBS_WATCHDOG_ALARM) restoreObsConnection(true);
+  if (tabIdFromAlarmName(alarm.name) !== null) {
+    // Просроченный будильник (крышку ноутбука закрыли на два часа) стреляет
+    // сразу на пробуждении, когда WS-close ещё не долетел и на странице пока
+    // виден секундомер — вкладка честно ответит «ищу», и мы соврали бы про
+    // очередь, которой давно нет. Опаздавшие срабатывания игнорируем.
+    if (Date.now() - alarm.scheduledTime > 15_000) {
+      void browser.alarms.clear(alarm.name);
+      return;
+    }
+    void fireQueueGuardNotification(alarm.name);
+  }
 });
 browser.runtime.onStartup.addListener(() => {
   // Старт браузера сбрасывает persisted-блоки: пользователь мог исправить
@@ -188,10 +316,12 @@ browser.runtime.onStartup.addListener(() => {
     await obs.allowAutoReconnect();
     await reconcileObsConnection();
   }).catch((e) => log.error("background", "startup OBS restore failed", e));
+  void clearStaleQueueGuards();
 });
 browser.runtime.onInstalled.addListener(() => {
   void runUpgradeMigrations();
   restoreObsConnection();
+  void clearStaleQueueGuards();
 });
 
 // Диагностика: перехват ошибок + гейт персиста логов по настройке.

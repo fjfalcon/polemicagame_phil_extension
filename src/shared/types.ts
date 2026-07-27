@@ -47,6 +47,8 @@ export interface Settings {
   debug_logging_enabled: boolean;
   /** Диагностика подключения очереди поиска (WS-события, дрейф таймеров). */
   connection_diag_enabled: boolean;
+  /** Предупреждать, что свёрнутая вкладка вот-вот выпадет из очереди поиска. */
+  queue_background_warning_enabled: boolean;
   // OBS
   obs_enabled: boolean;
   obs_host: string;
@@ -145,6 +147,21 @@ export interface StopSearchMsg {
   action: "stopSearch";
 }
 
+/** content → background: вкладка с активным поиском ушла в фон / вернулась. */
+export interface QueueGuardMsg {
+  action: "queueGuardArm" | "queueGuardCancel";
+}
+
+/** background → content: «ты ещё скрыт и всё ещё в очереди?» */
+export interface QueueGuardPingMsg {
+  action: "queueGuardPing";
+}
+
+export interface QueueGuardPingReply {
+  hidden: boolean;
+  searching: boolean;
+}
+
 export type ExtMessage =
   | ObsCommandMsg
   | ObsEventMsg
@@ -153,4 +170,6 @@ export type ExtMessage =
   | TwitchStatusMsg
   | GetNicknameLengthsMsg
   | StartSearchMsg
-  | StopSearchMsg;
+  | StopSearchMsg
+  | QueueGuardMsg
+  | QueueGuardPingMsg;

@@ -31,7 +31,10 @@ export const DEFAULT_SETTINGS: Settings = {
   role_phase_auto_switch_enabled: false,
   camera_rotate_enabled: true,
   player_mute_enabled: true,
-  role_marker_enabled: true,
+  // Выключено по умолчанию (8.1.43, решение владельца): метка «мой read» —
+  // нишевая фича, новичку она мешает. Уже включившим её пользователям
+  // значение из storage сохранит прежнее поведение.
+  role_marker_enabled: false,
   f5_refresh_fix_enabled: true,
   hotkey_role_fake: "KeyF",
   hotkey_role_reset: "KeyE",
@@ -39,6 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
   update_check_enabled: true,
   debug_logging_enabled: true,
   connection_diag_enabled: false,
+  queue_background_warning_enabled: true,
   obs_enabled: false,
   obs_host: "ws://localhost:4455",
   obs_password: "",
