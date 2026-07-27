@@ -26,17 +26,24 @@
     top: -28px !important;
     left: 0 !important;
     display: flex !important;
-    gap: 0px !important; /* фиксированное расстояние между иконками */
+    /* 2px вместо 0: при шести кнопках иконки слипались («звук прям впритык»,
+       багрепорт 27.07.2026). Больше не берём — ряд абсолютный и на узких
+       плитках вылезет за границу. */
+    gap: 2px !important;
     align-items: center !important;
     z-index: 10000 !important;
     pointer-events: auto !important;
 }
 
 /* Стили для иконок статистики */
+/* Список поимённый: кнопка, забытая здесь, теряет фиксированный размер и
+   съезжает относительно соседей — так и случилось с поворотом и мьютом. */
 .stats-button,
 .note-button,
 .last-games-button,
-.hide-video-button {
+.hide-video-button,
+.rotate-button,
+.mute-button {
     background: none !important;
     border: none !important;
     cursor: pointer !important;
@@ -45,13 +52,16 @@
     justify-content: center !important;
     width: 24px !important;   /* фиксированный размер */
     height: 24px !important;  /* фиксированный размер */
+    flex: 0 0 auto !important;
 }
 
 /* Внутри .player-icons кнопки размещаются потоком (flex) */
 .player-icons > .stats-button,
 .player-icons > .note-button,
 .player-icons > .last-games-button,
-.player-icons > .hide-video-button {
+.player-icons > .hide-video-button,
+.player-icons > .rotate-button,
+.player-icons > .mute-button {
     position: static !important;
     margin: 0 !important; /* убираем любые внешние отступы у кнопок */
 }
@@ -60,7 +70,9 @@
 .stats-button:hover,
 .note-button:hover,
 .last-games-button:hover,
-.hide-video-button:hover {
+.hide-video-button:hover,
+.rotate-button:hover,
+.mute-button:hover {
     transform: scale(1.1) !important;
 }
 

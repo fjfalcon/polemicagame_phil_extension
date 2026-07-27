@@ -785,40 +785,84 @@ function clickStartGameButton() {
  * расширение открывало/закрывало окно настроек до 10 раз подряд.
  * Различаем по иконке/подписи; если уверенности нет — не кликаем вовсе.
  */
+/**
+ * Иконки кнопок управления (webpack content-hash, снято с живого лобби
+ * 27.07.2026). Хеш детерминирован содержимым файла, поэтому меняется только
+ * при перерисовке иконки — тогда сработает позиционный фолбэк ниже.
+ */
+const CAMERA_ICON_HASHES = ["516810fd6c1e38f17335", "edf479f3365a51e1beca"]; // camera, camera-off
+const NON_CAMERA_ICON_HASHES = [
+  "652f9184e845e10a12e5", // mic
+  "3a2b1603137ca0fb3eeb", // mic-off
+  "e3a7cf4ee64b975985ad", // settings
+];
+
+function iconSrcOf(el: HTMLElement): string {
+  return el.querySelector<HTMLImageElement>("img.button__icon")?.getAttribute("src") || "";
+}
+
+/**
+ * Найти кнопку камеры среди кнопок управления комнатой.
+ *
+ * У камеры, микрофона и настроек ОДИН класс и НИ ОДНОГО текстового признака:
+ * ни title, ни aria-label, а подпись хоткея в шаблоне сайта закомментирована
+ * (`<!-- <span v-if="hotKey" -->` — проверено в живом лобби 27.07.2026).
+ * Поэтому 8.1.41 с детектом по букве «V» не находил ничего, а прежняя версия
+ * искала use[href]/title — их тоже нет. Единственный настоящий признак —
+ * иконка (img.button__icon с хешированным именем).
+ *
+ * Порядок распознавания:
+ *  1. хеш иконки в известном списке камеры → это она;
+ *  2. хеш в списке «точно не камера» → пропускаем кандидата;
+ *  3. иконка незнакома (сайт перерисовал) → позиционный фолбэк по шаблону
+ *     [камера?, микрофон, настройки]: камера есть только когда кнопок ровно
+ *     три, и она первая. Меньше трёх — камеры нет, НЕ кликаем: ошибка тут
+ *     означала бы выключенный микрофон или открытые настройки.
+ */
 function findWebcamButton(): HTMLElement | null {
   const candidates = Array.from(document.querySelectorAll<HTMLElement>(SITE.webcamButton));
   if (candidates.length === 0) return null;
-  const looksLikeCamera = (el: HTMLElement): boolean => {
-    // Главный признак (room-бандл сайта, сверено 26.07.2026): кнопка камеры —
-    // это RoomButton с hotKey «V» → внутри <span class="button__command">V</span>
-    // (или «Alt+V» при включённом модификаторе). У микрофона там «M», у прочих
-    // кнопок — другое/пусто. Иконка теперь img.button__icon с ХЕШИРОВАННЫМ
-    // webpack-именем — по src кнопку не распознать, из-за этого автовыключение
-    // камеры молча умерло: старая эвристика (use[href]/title/aria) не находила
-    // НИ ОДНОГО кандидата.
-    const hotkeyLabel = el.querySelector(".button__command")?.textContent?.trim().toLowerCase() || "";
-    const hotkeyTail = hotkeyLabel.split("+").pop()?.trim() || "";
-    if (hotkeyTail === "v") return true;
-    // Старые признаки — на случай отката разметки сайта.
-    const use = el.querySelector("use");
-    const href = (use?.getAttribute("href") || use?.getAttribute("xlink:href") || "").toLowerCase();
-    const label = `${el.getAttribute("title") || ""} ${el.getAttribute("aria-label") || ""}`.toLowerCase();
-    return /video|camera|cam\b|веб|камер/.test(`${href} ${label}`);
-  };
-  // Эвристика применяется ВСЕГДА: у кнопки камеры и шестерёнки настроек один
-  // CSS-класс, и единственный кандидат раньше возвращался без проверки — если
-  // в DOM была только шестерёнка, расширение жало её до 10 раз подряд.
-  const match = candidates.find(looksLikeCamera);
-  if (!match) log.debug(SCOPE, "no candidate looks like a camera — skip");
-  return match ?? null;
+
+  const known = candidates.find((el) =>
+    CAMERA_ICON_HASHES.some((hash) => iconSrcOf(el).includes(hash)),
+  );
+  if (known) return known;
+
+  const allIconsKnown = candidates.every((el) => {
+    const src = iconSrcOf(el);
+    return NON_CAMERA_ICON_HASHES.some((hash) => src.includes(hash));
+  });
+  if (allIconsKnown) {
+    // Все кнопки опознаны и камеры среди них нет (например, судья без видео).
+    log.debug(SCOPE, "camera button absent among known icons");
+    return null;
+  }
+
+  if (candidates.length === 3) {
+    log.debug(SCOPE, "camera icon unknown — falling back to position 0 of 3");
+    return candidates[0];
+  }
+  log.debug(SCOPE, `camera button not identified (${candidates.length} candidates) — skip`);
+  return null;
 }
 
+/**
+ * Предыгровой экран (в шаблоне сайта — стадия `voting_for_game_start`).
+ *
+ * Раньше требовалось СОВПАДЕНИЕ ТЕКСТА `.new-stage__name` со списком
+ * «идет набор игроков» И наличие ссылки-приглашения. Оба условия протухли
+ * (сверено с живым лобби и room-бандлом 27.07.2026):
+ *  • в этом блоке теперь локализованный текст стадии («Голосование за начало
+ *    игры»), слова «набор игроков» в комнатном бандле нет вообще — совпадение
+ *    не срабатывало НИКОГДА, и камера не выключалась даже при найденной кнопке;
+ *  • `.invitation-link` рендерится только когда у комнаты есть ссылка
+ *    (в лиге её нет), так что требовать его нельзя.
+ * Признак структурный и не зависит от языка: `.new-stage__name` существует
+ * ТОЛЬКО на предыгровом экране (в остальных стадиях там `.stage__name`).
+ */
 function isInLobby(): boolean {
-  const stageName = document.querySelector<HTMLElement>(SITE.lobbyStageName);
-  const invitationLink = document.querySelector(SITE.invitationLink);
-  const isRecruiting =
-    !!stageName && (TEXT.recruiting as readonly string[]).includes(norm(stageName));
-  return isRecruiting && invitationLink !== null;
+  if (document.querySelector(SITE.lobbyStageName)) return true;
+  return document.querySelector(SITE.invitationLink) !== null;
 }
 
 function disableWebcams() {
