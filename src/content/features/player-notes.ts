@@ -257,6 +257,8 @@ class PlayerNotesManager {
    * этого набора переворот приходилось нажимать заново после каждой ночи.
    */
   private flippedPlayers = new Set<string>();
+  /** Тултип → его кнопка: на время показа тултип уезжает в body (портал). */
+  private tooltipAnchors = new WeakMap<HTMLElement, HTMLElement>();
 
   private roleSpriteBaseUrl: string | null = null;
 
@@ -1072,12 +1074,17 @@ class PlayerNotesManager {
     return html;
   }
 
+  /**
+   * Тултипы ищутся по СОБСТВЕННОМУ data-username, а не через кнопку-предка:
+   * пока тултип показан, он живёт в <body> (портал, см. showTooltip), и
+   * селектор `.stats-button .tooltip` его бы не нашёл — открытый тултип
+   * навсегда застревал бы на «Загрузка...».
+   */
   private updateAllTooltips(): void {
     document
-      .querySelectorAll<HTMLElement>(`.${OWN.statsButton} .${OWN.tooltip}`)
+      .querySelectorAll<HTMLElement>(`.${OWN.tooltip}[data-username][data-pn-stats="1"]`)
       .forEach((tooltip) => {
-        const button = tooltip.closest<HTMLElement>(`.${OWN.statsButton}`);
-        const username = button?.dataset.username;
+        const username = tooltip.dataset.username;
         // Без проверки кэша: generateTooltipContent корректно рисует заглушки,
         // а гейт по playerStats.has оставлял в тултипе УДАЛЁННУЮ в другой
         // вкладке заметку, пока статистика не загрузилась.
@@ -1087,7 +1094,9 @@ class PlayerNotesManager {
 
   private updatePlayerTooltips(username: string): void {
     document
-      .querySelectorAll(`.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`)
+      .querySelectorAll(
+        `.${OWN.tooltip}[data-pn-stats="1"][data-username="${cssAttr(username)}"]`,
+      )
       .forEach((tooltip) => {
         tooltip.innerHTML = this.generateTooltipContent(username);
       });
@@ -1099,9 +1108,74 @@ class PlayerNotesManager {
     }
     const tooltip = document.createElement("div");
     tooltip.className = OWN.tooltip;
+    // Метки для поиска тултипа, пока он в портале (см. updateAllTooltips).
+    // pn-stats отделяет тултип статистики от тултипа истории игр.
+    tooltip.dataset.username = username;
+    tooltip.dataset.pnStats = "1";
     tooltip.style.cssText = TOOLTIP_CSS;
     tooltip.innerHTML = this.generateTooltipContent(username);
     return tooltip;
+  }
+
+  /**
+   * Показать тултип, перенеся его в <body>.
+   *
+   * ПОЧЕМУ ПОРТАЛ. У сайтового `.player__info` (наш контейнер кнопок) стоит
+   * `overflow: hidden` И `backdrop-filter: blur(...)` — проверено живьём в
+   * лобби 29.07.2026. backdrop-filter создаёт и stacking context, и
+   * containing block для position:fixed, поэтому тултип внутри info:
+   *  • обрезался по границам info (высота ~28px) — «рамка режет тултип»;
+   *  • не мог всплыть над рамкой плитки никаким z-index — контекст замкнут.
+   * Ни z-index, ни fixed внутри info не помогают (обе версии проверены на
+   * живой странице). Единственное надёжное решение — рисовать в body.
+   *
+   * Тултип возвращается к кнопке в hideTooltip: пока он в body, обход
+   * `.stats-button .tooltip` (обновление содержимого) его не найдёт, а
+   * removeStatisticsElements удаляет по классу и заберёт его из body тоже.
+   */
+  private showTooltip(tooltip: HTMLElement, anchor: HTMLElement): void {
+    if (tooltip.parentElement !== document.body) {
+      tooltip.dataset.pnShown = "1";
+      document.body.appendChild(tooltip);
+    }
+    tooltip.style.position = "fixed";
+    tooltip.style.transform = "none";
+    tooltip.style.visibility = "visible";
+    tooltip.style.opacity = "1";
+    tooltip.style.zIndex = "2147483000";
+
+    const a = anchor.getBoundingClientRect();
+    const w = tooltip.offsetWidth;
+    const h = tooltip.offsetHeight;
+    // Над кнопкой; не влезает — под неё. По горизонтали держим в окне.
+    let top = a.top - h - 8;
+    if (top < 4) top = Math.min(a.bottom + 8, window.innerHeight - h - 4);
+    const left = Math.min(Math.max(4, a.left), Math.max(4, window.innerWidth - w - 4));
+    tooltip.style.top = `${Math.round(top)}px`;
+    tooltip.style.left = `${Math.round(left)}px`;
+    tooltip.style.bottom = "auto";
+    tooltip.style.right = "auto";
+  }
+
+  /** Спрятать тултип и вернуть его к кнопке (см. showTooltip). */
+  private hideTooltip(tooltip: HTMLElement): void {
+    tooltip.style.visibility = "hidden";
+    tooltip.style.opacity = "0";
+    delete tooltip.dataset.pnShown;
+    const anchor = this.tooltipAnchors.get(tooltip);
+    if (anchor?.isConnected && tooltip.parentElement === document.body) {
+      anchor.appendChild(tooltip);
+      // Возвращаем «родные» стили: элемент снова живёт внутри кнопки.
+      tooltip.style.position = "absolute";
+      tooltip.style.top = "auto";
+      tooltip.style.left = "0";
+      tooltip.style.bottom = "100%";
+      tooltip.style.transform = "translateY(10px)";
+      tooltip.style.zIndex = "1001";
+    } else if (tooltip.parentElement === document.body) {
+      // Кнопка исчезла (плитка пересобрана) — не оставляем сироту в body.
+      tooltip.remove();
+    }
   }
 
   // ─────────── Кнопки ───────────
@@ -1146,21 +1220,18 @@ class PlayerNotesManager {
 
     const tooltip = this.createTooltip(username);
     statsButton.appendChild(tooltip);
+    this.tooltipAnchors.set(tooltip, statsButton);
 
     statsButton.addEventListener("mouseenter", () => {
       void this.loadPlayerStats(username);
       const svg = statsButton.querySelector<SVGElement>("svg");
       if (svg) svg.style.stroke = themeColor;
-      tooltip.style.visibility = "visible";
-      tooltip.style.opacity = "1";
-      tooltip.style.transform = "translateY(0)";
+      this.showTooltip(tooltip, statsButton);
     });
     statsButton.addEventListener("mouseleave", () => {
       const svg = statsButton.querySelector<SVGElement>("svg");
       if (svg) svg.style.stroke = themeColor;
-      tooltip.style.visibility = "hidden";
-      tooltip.style.opacity = "0";
-      tooltip.style.transform = "translateY(10px)";
+      this.hideTooltip(tooltip);
     });
 
     this.applyButtonTheme(statsButton);
@@ -1462,20 +1533,21 @@ class PlayerNotesManager {
 
     button.addEventListener("mouseenter", async () => {
       tooltip.innerHTML = "Загрузка...";
-      tooltip.style.visibility = "visible";
-      tooltip.style.opacity = "1";
+      this.showTooltip(tooltip, button);
       const games = await this.getLastGames(username);
       tooltip.innerHTML =
         games.length > 0
           ? this.formatGamesHistory(games)
           : "Нет данных о последних играх";
+      // Содержимое сменилось — размер тоже, пересчитываем позицию.
+      if (tooltip.dataset.pnShown === "1") this.showTooltip(tooltip, button);
     });
     button.addEventListener("mouseleave", () => {
-      tooltip.style.visibility = "hidden";
-      tooltip.style.opacity = "0";
+      this.hideTooltip(tooltip);
     });
 
     button.appendChild(tooltip);
+    this.tooltipAnchors.set(tooltip, button);
     this.applyButtonTheme(button);
     return button;
   }
@@ -1693,12 +1765,8 @@ class PlayerNotesManager {
         }
         return false;
       }
-      // Обе плитки игрока (десктоп/мобайл), не только первая.
-      document
-        .querySelectorAll(`.${OWN.statsButton}[data-username="${cssAttr(username)}"] .${OWN.tooltip}`)
-        .forEach((tooltip) => {
-          tooltip.innerHTML = this.generateTooltipContent(username);
-        });
+      // Обе плитки игрока (десктоп/мобайл) + открытый тултип в портале.
+      this.updatePlayerTooltips(username);
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
       this.refreshNickColors();
@@ -2466,7 +2534,7 @@ class PlayerNotesManager {
 
   private removeStatisticsElements(): void {
     document
-      .querySelectorAll(`${OWN_BUTTON_SELECTOR}, .${OWN.playerStats}`)
+      .querySelectorAll(`${OWN_BUTTON_SELECTOR}, .${OWN.playerStats}, .${OWN.tooltip}`)
       .forEach((el) => el.remove());
     document.querySelectorAll(".pn-tag-ring").forEach((r) => r.remove());
     document
