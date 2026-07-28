@@ -60,6 +60,8 @@ class PauseHotkey {
   private notifications = new Set<HTMLElement>();
   private initialVisibleMenus = new Set<Element>();
   private activeOpener: Element | null = null;
+  /** Корни меню, появившиеся ИМЕННО от нашего клика по «Настройкам». */
+  private openedRoots: Element[] = [];
   private activeMenuObserved = false;
   private closingMenu = false;
 
@@ -369,6 +371,47 @@ class PauseHotkey {
     else if (roots.length > 0) this.dispatchClick(this.activeOpener);
   }
 
+  /** Похоже ли на меню настроек игры (а не на всплывший поверх оверлей). */
+  private looksLikeSettingsMenu(root: Element): boolean {
+    return Array.from(root.querySelectorAll(CLICKABLE_SELECTOR)).some(
+      (node) => this.matchesPause(node) || this.matchesSettings(node),
+    );
+  }
+
+  /**
+   * Закрыть меню, которое мы сами открыли ради паузы.
+   *
+   * Раньше здесь был ОДИН клик по `getCloseButton(menu)`. У меню настроек в
+   * игре нет кнопки с aria-label/title «закрыть», поэтому клик уходил в null
+   * — пауза включалась, а «Настройки» оставались висеть поверх игры. Фолбэк
+   * «кликнуть по opener'у ещё раз» жил только в closeOpenedMenu, куда этот
+   * путь не заходил.
+   *
+   * Меню, открытое самим игроком, по-прежнему закрываем только явной кнопкой
+   * и никогда не кликаем opener: чужие окна не наши (инвариант AGENTS.md §4).
+   */
+  private async closeAfterPause(menu: Element | null): Promise<void> {
+    if (!this.activeOpener) {
+      // Меню игрок открыл сам — прежнее поведение, без самодеятельности.
+      if (menu && isVisible(menu)) this.dispatchClick(this.getCloseButton(menu));
+      return;
+    }
+
+    let ours = this.openedRoots.filter((root) => root.isConnected && isVisible(root));
+    if (ours.length === 0) {
+      // Клик по паузе мог заставить Vue перерисовать меню — тогда сохранённые
+      // узлы отключены от документа, а на экране висит новый. Ищем заново, но
+      // только среди «не бывших изначально» и только настоящие меню настроек.
+      ours = this.getMenuRoots().filter(
+        (root) =>
+          isVisible(root) && !this.initialVisibleMenus.has(root) && this.looksLikeSettingsMenu(root),
+      );
+    }
+    if (ours.length === 0) return; // сайт закрыл меню сам — всё в порядке
+
+    await this.closeOpenedMenu({ opener: this.activeOpener, roots: [...new Set(ours)] });
+  }
+
   private async ensureMenuOpen(): Promise<Element | null> {
     const existing = this.getPauseButton(true);
     if (existing) return existing;
@@ -385,6 +428,10 @@ class PauseHotkey {
       );
       if (roots.length > 0) this.activeMenuObserved = true;
       if (pause) {
+        // Запоминаем ИМЕННО эти корни: закрывать потом будем их, а не всё,
+        // что подойдёт под MENU_SELECTOR (он широкий — `[class*="menu"]`,
+        // под него легко попадёт оверлей, появившийся уже после паузы).
+        this.openedRoots = [...new Set(roots)];
         return pause;
       }
       if (roots.length > 0) {
@@ -405,17 +452,20 @@ class PauseHotkey {
       if (!pause) return this.notify(TEXT.notFound);
       const menu = this.owningMenu(pause);
       if (this.isPauseDisabled(pause)) {
-        this.dispatchClick(menu ? this.getCloseButton(menu) : null);
+        // Тот же путь закрытия, что и после удачной паузы: иначе на недоступной
+        // паузе мы оставляли открытым меню, которое сами же и открыли.
+        await this.closeAfterPause(menu);
         return this.notify(TEXT.unavailable);
       }
       this.dispatchClick(pause);
       if (!(await this.sleep(120))) return;
-      this.dispatchClick(menu && isVisible(menu) ? this.getCloseButton(menu) : null);
+      await this.closeAfterPause(menu);
     } finally {
       if (!this.disposed) await this.sleep(250);
       this.activeOpener = null;
       this.activeMenuObserved = false;
       this.initialVisibleMenus.clear();
+      this.openedRoots = [];
       this.handling = false;
     }
   }
