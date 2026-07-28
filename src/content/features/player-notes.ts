@@ -1847,15 +1847,28 @@ class PlayerNotesManager {
         const resp = await fetch(`https://polemicagame.com/profile/${raw}`);
         if (!resp.ok) return null;
         const text = await resp.text();
-        const m = text.match(/"username":"((?:[^"\\]|\\.)*)"/);
+        // СТРОГО атрибут :profile-user. Первое попавшееся "username" на
+        // странице — это :current-user, то есть САМ пользователь (в браузере
+        // запрос идёт с куками): поиск по любому id находил «себя».
+        const m = text.match(/:profile-user='([^']+)'/);
         if (!m) return null;
-        let nick = m[1];
+        const decoded = m[1]
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .replace(/&amp;/g, "&");
+        let user: { id?: number | string; username?: string } | null = null;
         try {
-          nick = JSON.parse(`"${m[1]}"`) as string; // \u-эскейпы кириллицы
+          user = JSON.parse(m[1]);
         } catch {
-          /* оставляем сырым */
+          try {
+            user = JSON.parse(decoded);
+          } catch {
+            return null;
+          }
         }
-        return { key: idKey(raw), nick, id: raw };
+        // id обязан совпасть с запрошенным — ник чужого объекта не берём.
+        if (!user || String(user.id) !== raw || !user.username) return null;
+        return { key: idKey(raw), nick: user.username, id: raw };
       } catch {
         return null;
       }
