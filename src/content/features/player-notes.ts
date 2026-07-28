@@ -2105,7 +2105,7 @@ class PlayerNotesManager {
       if (e.target === overlay) close();
     });
 
-    modal.append(title, list, hint, closeBtn);
+    modal.append(title, addWrap, list, hint, closeBtn);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
   }
