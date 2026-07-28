@@ -19,6 +19,8 @@ export type NoteRecord = {
   timestamp: number;
   version?: string;
   tag?: string;
+  /** Цвет ника игрока на плитке (CSS-значение из палитры меток). */
+  nickColor?: string;
   /** Последний известный ник — для экспорта/отображения записей с id-ключом. */
   nick?: string;
 };
@@ -107,12 +109,16 @@ export function mergeNotes(
   for (const [key, note] of Object.entries(incoming)) {
     if (!isSafeNoteKey(key)) continue;
     if (!note || (typeof note !== "string" && typeof note.text !== "string")) continue;
-    // Метка из чужого файла может нести произвольный CSS — вычищаем её,
-    // саму заметку при этом сохраняем.
+    // Метка/цвет ника из чужого файла могут нести произвольный CSS —
+    // вычищаем их, саму заметку при этом сохраняем.
     let safe = note;
     if (typeof safe !== "string" && safe.tag && !isSafeTag(safe.tag)) {
       log.warn("notes", "dropped unsafe tag on import", key);
       safe = { ...safe, tag: undefined };
+    }
+    if (typeof safe !== "string" && safe.nickColor && !isSafeTag(safe.nickColor)) {
+      log.warn("notes", "dropped unsafe nickColor on import", key);
+      safe = { ...safe, nickColor: undefined };
     }
     const targetKey = !isIdKey(key) ? (idKeyByNick.get(key.toLowerCase()) ?? key) : key;
     const existing = merged[targetKey];

@@ -33,6 +33,7 @@ import {
   isSafeNoteKey,
   idKey,
   isIdKey,
+  ID_KEY_PREFIX,
   NOTES_KEY,
   TAGS_KEY,
   NOTES_VERSION,
@@ -111,6 +112,9 @@ const STATS_TTL_MS = 5 * 60 * 1000;
 
 /** storage.local: массив ников (lowercase) с выключенным у нас звуком. */
 const MUTED_PLAYERS_KEY = "pn_muted_players";
+
+/** sessionStorage: ники (lowercase) с перевёрнутой камерой в текущей игре. */
+const FLIPPED_PLAYERS_KEY = "pn_flipped_players";
 
 /**
  * Один общий запрос списка активных игр на всех игроков. Раньше in-flight
@@ -246,6 +250,13 @@ class PlayerNotesManager {
   private mutedPlayers = new Set<string>();
   /** Закрытие открытой модалки заметки — нужно, чтобы disable() снял её слушатели. */
   private closeOpenModal: (() => void) | null = null;
+  /**
+   * Игроки (lowercase), чьи камеры пользователь перевернул в ЭТОЙ игре.
+   * sessionStorage: живёт в рамках вкладки и переживает F5, но не тащится в
+   * следующие игры/дни — сайт пересоздаёт video на каждой смене фазы, и без
+   * этого набора переворот приходилось нажимать заново после каждой ночи.
+   */
+  private flippedPlayers = new Set<string>();
 
   private roleSpriteBaseUrl: string | null = null;
 
@@ -267,6 +278,7 @@ class PlayerNotesManager {
   async enable(): Promise<void> {
     await this.loadNotes();
     await this.loadMutedPlayers();
+    this.loadFlippedPlayers();
 
     this.syncMatchPageRoute(getMatchId() !== null);
 
@@ -292,7 +304,9 @@ class PlayerNotesManager {
           return;
         }
         const playersExist = document.querySelectorAll(SITE.player).length > 0;
-        const buttonsExist = document.querySelectorAll(`.${OWN.statsButton}`).length > 0;
+        // Маркер — контейнер иконок, а не кнопка статистики: её теперь можно
+        // выключить галочкой, и проверка по ней зациклила бы восстановитель.
+        const buttonsExist = document.querySelectorAll(`.${OWN.playerIcons}`).length > 0;
         if (playersExist && !buttonsExist) {
           log.debug("player-notes", "buttons missing, reprocessing");
           this.processExistingElements();
@@ -315,9 +329,12 @@ class PlayerNotesManager {
           } else {
             this.applyStatsButtonTheme();
             this.processExistingElements();
+            // Выключение nick_colors_enabled должно снять покраску сразу.
+            this.refreshNickColors();
           }
           this.updateAllTooltips();
         }
+        if (msg.type === "openNickColors") this.openNickColorManager();
       }),
     );
 
@@ -351,6 +368,7 @@ class PlayerNotesManager {
       this.notesReadOnly = false;
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
+      this.refreshNickColors();
       this.updateAllTooltips();
     };
     browser.storage.onChanged.addListener(storageListener);
@@ -575,6 +593,18 @@ class PlayerNotesManager {
     return note && typeof note !== "string" ? note.tag || "" : "";
   }
 
+  /** Сохранённый цвет ника (без учёта настройки — для диалогов). */
+  private getRawNickColor(username: string): string {
+    const note = this.getNote(username);
+    return note && typeof note !== "string" ? note.nickColor || "" : "";
+  }
+
+  /** Цвет ника для отрисовки: пустая строка, если фича выключена. */
+  private getNickColor(username: string): string {
+    if (this.settings.nick_colors_enabled === false) return "";
+    return this.getRawNickColor(username);
+  }
+
   /** Все легаси-ключи-ники этого игрока (точный + отличающиеся регистром). */
   private nickKeysFor(username: string): string[] {
     const lower = username.toLowerCase();
@@ -695,6 +725,54 @@ class PlayerNotesManager {
         const u = btn.dataset.username;
         const container = btn.closest<HTMLElement>(SITE.player);
         if (u && container) this.applyPlayerTag(container, u);
+      });
+  }
+
+  /** Снять нашу покраску с элемента ника. */
+  private clearNickColorEl(el: HTMLElement): void {
+    delete el.dataset.pnNickColor;
+    el.style.removeProperty("color");
+    el.style.removeProperty("background");
+    el.style.removeProperty("-webkit-background-clip");
+    el.style.removeProperty("background-clip");
+  }
+
+  /**
+   * Покрасить ник игрока на плитке (лобби и игра — разметка одна).
+   * Идемпотентно: пишем style только при смене цвета (инвариант §4 п.1),
+   * маркер — data-pn-nick-color. Градиенты — через background-clip: text.
+   */
+  private applyNickColor(container: HTMLElement, username: string): void {
+    const el = container.querySelector<HTMLElement>(SITE.playerName);
+    if (!el) return;
+    const color = this.getNickColor(username);
+    if ((el.dataset.pnNickColor || "") === color) return;
+    if (!color) {
+      this.clearNickColorEl(el);
+      return;
+    }
+    el.dataset.pnNickColor = color;
+    if (color.includes("gradient")) {
+      el.style.background = color;
+      el.style.setProperty("-webkit-background-clip", "text");
+      el.style.setProperty("background-clip", "text");
+      el.style.setProperty("color", "transparent");
+    } else {
+      el.style.removeProperty("background");
+      el.style.removeProperty("-webkit-background-clip");
+      el.style.removeProperty("background-clip");
+      el.style.setProperty("color", color);
+    }
+  }
+
+  /** Обновить цвет ника у всех видимых игроков (после правки в диалогах). */
+  private refreshNickColors(): void {
+    document
+      .querySelectorAll<HTMLElement>(`.${OWN.playerIcons} > [data-username]`)
+      .forEach((btn) => {
+        const u = btn.dataset.username;
+        const container = btn.closest<HTMLElement>(SITE.player);
+        if (u && container) this.applyNickColor(container, u);
       });
   }
 
@@ -1087,7 +1165,15 @@ class PlayerNotesManager {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      toggleFlipForPlayer(container as HTMLElement);
+      const flipped = toggleFlipForPlayer(container as HTMLElement);
+      // Запоминаем НАМЕРЕНИЕ игрока: сайт пересоздаёт video на каждой смене
+      // фазы, и ensureFlipState вернёт переворот сам (просьба владельца).
+      if (flipped !== null) {
+        const uname = username.toLowerCase();
+        if (flipped) this.flippedPlayers.add(uname);
+        else this.flippedPlayers.delete(uname);
+        this.persistFlippedPlayers();
+      }
       sync();
     });
     this.applyButtonTheme(btn);
@@ -1098,6 +1184,52 @@ class PlayerNotesManager {
   private syncRotateButton(button: HTMLElement, container: Element): void {
     const opacity = isPlayerFlipped(container as HTMLElement) ? "1" : "0.7";
     if (button.style.opacity !== opacity) button.style.opacity = opacity;
+  }
+
+  private loadFlippedPlayers(): void {
+    try {
+      const raw = sessionStorage.getItem(FLIPPED_PLAYERS_KEY);
+      if (!raw) return;
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        this.flippedPlayers = new Set(
+          list.filter((u): u is string => typeof u === "string" && u !== ""),
+        );
+      }
+    } catch {
+      /* повреждённый sessionStorage — просто начинаем с пустого набора */
+    }
+  }
+
+  private persistFlippedPlayers(): void {
+    try {
+      sessionStorage.setItem(FLIPPED_PLAYERS_KEY, JSON.stringify([...this.flippedPlayers]));
+    } catch {
+      /* квота/приватный режим — потеряем только память о перевороте */
+    }
+  }
+
+  /**
+   * Восстановить переворот камеры после того, как сайт пересоздал video
+   * (смена дня/ночи, переподключение камеры). Идемпотентно: у перевёрнутого
+   * video стоит dataset.flipped, и повторного захода не будет; у свежего
+   * элемента флага нет — переворачиваем один раз.
+   */
+  private ensureFlipState(container: Element, username: string): void {
+    if (this.settings.camera_rotate_enabled === false) return;
+    if (!this.flippedPlayers.has(username.toLowerCase())) return;
+    const el = container as HTMLElement;
+    if (isPlayerFlipped(el)) return;
+    const video = el.querySelector<HTMLVideoElement>(SITE.playerVideoEl);
+    // ended-гард обязателен: у мёртвого потока draw() тут же выходит через
+    // cleanupFlip, флаг flipped снимается — и без гарда мы бы пересоздавали
+    // canvas на КАЖДОМ тике DOM, пока сайт не заменит video.
+    if (!video || video.ended) return;
+    if (toggleFlipForPlayer(el)) {
+      const btn = el.querySelector<HTMLElement>(`.${OWN.rotateButton}`);
+      if (btn) this.syncRotateButton(btn, el);
+      log.debug("player-notes", "flip restored", username);
+    }
   }
 
   /** Добавить/убрать кнопку переворота в зависимости от настройки camera_rotate_enabled. */
@@ -1348,76 +1480,112 @@ class PlayerNotesManager {
       box-sizing: border-box;
     `;
 
-    // ── выбор цветной метки ──
+    // ── выбор цветной метки и цвета ника (общая палитра) ──
     let selectedTag = this.getNoteTag(username);
-    const tagLabel = document.createElement("div");
-    tagLabel.textContent = "Метка";
-    tagLabel.style.cssText = "color: rgba(255,255,255,.7); font-size: 12px; margin-bottom: 6px;";
-    const tagRow = document.createElement("div");
-    tagRow.style.cssText = "display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap;";
+    // Цвет читаем сырым (мимо nick_colors_enabled): в диалоге видно и
+    // редактируется то, что реально лежит в записи.
+    let selectedNickColor = this.getRawNickColor(username);
 
-    const makeSwatch = (css: string, name: string, custom: boolean): HTMLButtonElement => {
-      const sw = document.createElement("button");
-      sw.dataset.css = css;
-      sw.title = custom ? `${name} (ПКМ — удалить)` : name;
-      sw.style.cssText = `
-        width: 24px; height: 24px; border-radius: 50%; cursor: pointer; padding: 0;
-        border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto;
-        background: ${css || "transparent"};
-        outline: ${css === selectedTag ? "2px solid #fff" : "2px solid transparent"};
-        outline-offset: 2px; display: flex; align-items: center; justify-content: center;
-      `;
-      if (!css) {
-        sw.textContent = "✕"; // «нет метки»
-        sw.style.color = "rgba(255,255,255,.6)";
-      }
-      sw.addEventListener("click", () => {
-        selectedTag = css;
-        rebuild();
-      });
-      if (custom) {
-        sw.addEventListener("contextmenu", (e) => {
-          e.preventDefault();
-          this.customTags = this.customTags.filter((c) => c !== css);
-          void this.saveCustomTags();
-          if (selectedTag === css) selectedTag = "";
-          rebuild();
-        });
-      }
-      return sw;
+    const mkLabel = (text: string): HTMLDivElement => {
+      const label = document.createElement("div");
+      label.textContent = text;
+      label.style.cssText = "color: rgba(255,255,255,.7); font-size: 12px; margin-bottom: 6px;";
+      return label;
     };
+    const tagLabel = mkLabel("Метка (рамка плитки)");
+    const nickColorLabel = mkLabel("Цвет ника");
 
-    const rebuild = () => {
-      tagRow.replaceChildren();
-      for (const { css, name } of TAG_PRESETS) tagRow.appendChild(makeSwatch(css, name, false));
-      for (const css of this.customTags) tagRow.appendChild(makeSwatch(css, "свой цвет", true));
+    // Обе строки делят одну палитру (пресеты + свои цвета): удаление своего
+    // цвета ПКМ обязано перерисовать обе, поэтому rebuild-ы собраны в список.
+    const paletteRebuilds: Array<() => void> = [];
+    const rebuildAll = () => paletteRebuilds.forEach((r) => r());
 
-      // Кнопка «+» — выбрать свой цвет и сохранить в палитру.
-      const add = document.createElement("button");
-      add.textContent = "+";
-      add.title = "Добавить свой цвет";
-      add.style.cssText = `
-        width: 24px; height: 24px; border-radius: 50%; cursor: pointer; padding: 0;
-        border: 1px dashed rgba(255,255,255,.4); background: transparent; color: #fff;
-        font-size: 15px; line-height: 1; flex: 0 0 auto;
-      `;
-      const picker = document.createElement("input");
-      picker.type = "color";
-      picker.value = "#3b82f6";
-      picker.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
-      add.addEventListener("click", () => picker.click());
-      picker.addEventListener("change", () => {
-        const c = picker.value;
-        if (c && !this.customTags.includes(c) && !TAG_PRESETS.some((p) => p.css === c)) {
-          this.customTags.push(c);
-          void this.saveCustomTags();
+    const makePaletteRow = (
+      getSel: () => string,
+      setSel: (css: string) => void,
+    ): HTMLDivElement => {
+      const row = document.createElement("div");
+      row.style.cssText = "display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap;";
+
+      const makeSwatch = (css: string, name: string, custom: boolean): HTMLButtonElement => {
+        const sw = document.createElement("button");
+        sw.dataset.css = css;
+        sw.title = custom ? `${name} (ПКМ — удалить)` : name;
+        sw.style.cssText = `
+          width: 24px; height: 24px; border-radius: 50%; cursor: pointer; padding: 0;
+          border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto;
+          background: ${css || "transparent"};
+          outline: ${css === getSel() ? "2px solid #fff" : "2px solid transparent"};
+          outline-offset: 2px; display: flex; align-items: center; justify-content: center;
+        `;
+        if (!css) {
+          sw.textContent = "✕"; // «нет»
+          sw.style.color = "rgba(255,255,255,.6)";
         }
-        selectedTag = c;
-        rebuild();
-      });
-      tagRow.append(add, picker);
+        sw.addEventListener("click", () => {
+          setSel(css);
+          rebuildAll();
+        });
+        if (custom) {
+          sw.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            this.customTags = this.customTags.filter((c) => c !== css);
+            void this.saveCustomTags();
+            if (selectedTag === css) selectedTag = "";
+            if (selectedNickColor === css) selectedNickColor = "";
+            rebuildAll();
+          });
+        }
+        return sw;
+      };
+
+      const rebuild = () => {
+        row.replaceChildren();
+        for (const { css, name } of TAG_PRESETS) row.appendChild(makeSwatch(css, name, false));
+        for (const css of this.customTags) row.appendChild(makeSwatch(css, "свой цвет", true));
+
+        // Кнопка «+» — выбрать свой цвет и сохранить в палитру.
+        const add = document.createElement("button");
+        add.textContent = "+";
+        add.title = "Добавить свой цвет";
+        add.style.cssText = `
+          width: 24px; height: 24px; border-radius: 50%; cursor: pointer; padding: 0;
+          border: 1px dashed rgba(255,255,255,.4); background: transparent; color: #fff;
+          font-size: 15px; line-height: 1; flex: 0 0 auto;
+        `;
+        const picker = document.createElement("input");
+        picker.type = "color";
+        picker.value = "#3b82f6";
+        picker.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
+        add.addEventListener("click", () => picker.click());
+        picker.addEventListener("change", () => {
+          const c = picker.value;
+          if (c && !this.customTags.includes(c) && !TAG_PRESETS.some((p) => p.css === c)) {
+            this.customTags.push(c);
+            void this.saveCustomTags();
+          }
+          setSel(c);
+          rebuildAll();
+        });
+        row.append(add, picker);
+      };
+      paletteRebuilds.push(rebuild);
+      rebuild();
+      return row;
     };
-    rebuild();
+
+    const tagRow = makePaletteRow(
+      () => selectedTag,
+      (css) => {
+        selectedTag = css;
+      },
+    );
+    const nickColorRow = makePaletteRow(
+      () => selectedNickColor,
+      (css) => {
+        selectedNickColor = css;
+      },
+    );
 
     // ── общие действия ──
     const close = () => {
@@ -1456,14 +1624,16 @@ class PlayerNotesManager {
       for (const nk of staleNickKeys) touched.set(nk, this.notes[nk]);
 
       const unseen = key !== openedKey ? this.notes[key] : undefined;
-      if (value || selectedTag) {
-        // Метка невидённой записи сохраняется, если пользователь свою не ставил.
+      if (value || selectedTag || selectedNickColor) {
+        // Метка/цвет невидённой записи сохраняются, если пользователь свои не ставил.
         const unseenTag = unseen && typeof unseen !== "string" ? unseen.tag : undefined;
+        const unseenColor = unseen && typeof unseen !== "string" ? unseen.nickColor : undefined;
         this.notes[key] = {
           text: value,
           timestamp: Date.now(),
           version: VERSION,
           tag: selectedTag || unseenTag || undefined,
+          nickColor: selectedNickColor || unseenColor || undefined,
           ...(id !== undefined ? { nick: username } : {}),
         };
       } else if (unseen === undefined) {
@@ -1492,6 +1662,7 @@ class PlayerNotesManager {
         });
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
+      this.refreshNickColors();
       // Сохранённый ключ теперь «виден» пользователю — следующие сохранения
       // в этой же модалке работают с ним как со своим.
       openedKey = key;
@@ -1562,13 +1733,221 @@ class PlayerNotesManager {
       if (e.target === overlay) close();
     });
 
-    modal.append(title, textarea, tagLabel, tagRow, buttons);
+    modal.append(title, textarea, tagLabel, tagRow, nickColorLabel, nickColorRow, buttons);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
     // Фокус в поле, курсор в конец текста.
     textarea.focus();
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  }
+
+  // ─────────── Менеджер цветов ников ───────────
+
+  /**
+   * Записать цвет ника в запись заметки (или снять его). Пустой цвет у записи
+   * без текста и метки удаляет запись целиком — не копим пустышки.
+   */
+  private setNickColor(key: string, color: string): Promise<boolean> {
+    return this.enqueueNotesWrite(async (): Promise<boolean> => {
+      const prev = this.notes[key];
+      if (prev === undefined) return true; // запись уже удалили (другая вкладка)
+      if (typeof prev === "string") {
+        // Легаси-строка: повышаем до записи, текст сохраняем.
+        if (!color) return true;
+        this.notes[key] = { text: prev, timestamp: Date.now(), version: VERSION, nickColor: color };
+      } else {
+        const next: NoteRecord = { ...prev, timestamp: Date.now(), nickColor: color || undefined };
+        if (!color && !next.text && !next.tag) delete this.notes[key];
+        else this.notes[key] = next;
+      }
+      if (!(await this.saveNotes())) {
+        this.notes[key] = prev; // откат памяти под состояние диска
+        return false;
+      }
+      this.refreshNickColors();
+      this.refreshNoteIndicators();
+      return true;
+    });
+  }
+
+  /** Все записи с назначенным цветом ника: [ключ, ник, id, цвет]. */
+  private nickColorEntries(): Array<{ key: string; nick: string; id: string; color: string }> {
+    return Object.entries(this.notes)
+      .filter(
+        (pair): pair is [string, NoteRecord] =>
+          typeof pair[1] !== "string" && !!pair[1].nickColor,
+      )
+      .map(([key, rec]) => ({
+        key,
+        nick: rec.nick || (isIdKey(key) ? `игрок ${key.slice(ID_KEY_PREFIX.length)}` : key),
+        id: isIdKey(key) ? key.slice(ID_KEY_PREFIX.length) : "",
+        color: rec.nickColor || "",
+      }))
+      .sort((a, b) => a.nick.localeCompare(b.nick, "ru"));
+  }
+
+  /**
+   * Диалог «Цвета ников»: все сохранённые цвета одним списком — ник, id,
+   * цвет; смена цвета по палитре и удаление. Открывается из попапа.
+   */
+  openNickColorManager(): void {
+    const overlay = document.createElement("div");
+    overlay.className = "polemica-note-modal";
+    overlay.style.cssText = `
+      position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      z-index: 10001; display: flex; align-items: center; justify-content: center;
+    `;
+    const modal = document.createElement("div");
+    modal.style.cssText = `
+      background: rgba(11, 27, 57, 0.97);
+      padding: 20px; border-radius: 8px; min-width: 340px; max-width: 90vw;
+      max-height: 80vh; overflow-y: auto;
+      border: 1px solid rgba(79, 129, 245, 0.3);
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    `;
+
+    const title = document.createElement("h3");
+    title.textContent = "Цвета ников";
+    title.style.cssText = "margin: 0 0 12px 0; color: white; font-size: 16px;";
+
+    const list = document.createElement("div");
+    /** Ключ записи с раскрытой палитрой (одна за раз). */
+    let expandedKey: string | null = null;
+
+    const render = () => {
+      list.replaceChildren();
+      const entries = this.nickColorEntries();
+      if (entries.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent =
+          "Пока нет ни одного цвета. Цвет задаётся в заметке игрока — кнопка ✎ на его плитке.";
+        empty.style.cssText = "color: rgba(255,255,255,.6); font-size: 13px; padding: 8px 0;";
+        list.appendChild(empty);
+        return;
+      }
+      for (const entry of entries) {
+        const row = document.createElement("div");
+        row.style.cssText =
+          "display:flex;align-items:center;gap:10px;padding:6px 0;" +
+          "border-bottom:1px solid rgba(255,255,255,.08);";
+
+        const swatch = document.createElement("button");
+        swatch.title = "Сменить цвет";
+        swatch.style.cssText = `
+          width: 20px; height: 20px; border-radius: 50%; cursor: pointer; padding: 0;
+          border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto; background: ${entry.color};
+        `;
+        const toggle = () => {
+          expandedKey = expandedKey === entry.key ? null : entry.key;
+          render();
+        };
+        swatch.addEventListener("click", toggle);
+
+        const nick = document.createElement("span");
+        nick.textContent = entry.nick;
+        nick.style.cssText =
+          "color:#fff;font-size:13px;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+
+        const idEl = document.createElement("span");
+        idEl.textContent = entry.id ? `id ${entry.id}` : "без id";
+        idEl.title = entry.id
+          ? "Цвет привязан к аккаунту и переживёт смену ника"
+          : "Игрок ещё не резолвился в id — цвет привязан к нику";
+        idEl.style.cssText = "color:rgba(255,255,255,.45);font-size:11px;flex:0 0 auto;";
+
+        const change = document.createElement("button");
+        change.textContent = "Изменить";
+        change.style.cssText =
+          "padding:4px 10px;color:#fff;border:none;border-radius:6px;cursor:pointer;" +
+          "font-size:12px;background:rgba(99,102,241,.3);flex:0 0 auto;";
+        change.addEventListener("click", toggle);
+
+        const del = document.createElement("button");
+        del.textContent = "✕";
+        del.title = "Убрать цвет";
+        del.style.cssText =
+          "padding:4px 8px;color:#fff;border:none;border-radius:6px;cursor:pointer;" +
+          "font-size:12px;background:rgba(239,68,68,.35);flex:0 0 auto;";
+        del.addEventListener("click", () => {
+          void this.setNickColor(entry.key, "").then((ok) => {
+            if (ok) {
+              if (expandedKey === entry.key) expandedKey = null;
+              render();
+            } else del.textContent = "ошибка";
+          });
+        });
+
+        row.append(swatch, nick, idEl, change, del);
+        list.appendChild(row);
+
+        if (expandedKey === entry.key) {
+          const palette = document.createElement("div");
+          palette.style.cssText =
+            "display:flex;gap:8px;padding:8px 0 10px;flex-wrap:wrap;" +
+            "border-bottom:1px solid rgba(255,255,255,.08);";
+          const options = [
+            ...TAG_PRESETS.filter((p) => p.css).map((p) => ({ css: p.css, name: p.name })),
+            ...this.customTags.map((css) => ({ css, name: "свой цвет" })),
+          ];
+          for (const opt of options) {
+            const sw = document.createElement("button");
+            sw.title = opt.name;
+            sw.style.cssText = `
+              width: 22px; height: 22px; border-radius: 50%; cursor: pointer; padding: 0;
+              border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto; background: ${opt.css};
+              outline: ${opt.css === entry.color ? "2px solid #fff" : "2px solid transparent"};
+              outline-offset: 2px;
+            `;
+            sw.addEventListener("click", () => {
+              void this.setNickColor(entry.key, opt.css).then((ok) => {
+                if (ok) {
+                  expandedKey = null;
+                  render();
+                }
+              });
+            });
+            palette.appendChild(sw);
+          }
+          list.appendChild(palette);
+        }
+      }
+    };
+    render();
+
+    const hint = document.createElement("div");
+    hint.textContent = "Новый цвет назначается в заметке игрока (кнопка ✎ на плитке).";
+    hint.style.cssText = "color:rgba(255,255,255,.45);font-size:11px;margin:10px 0 12px;";
+
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "Закрыть";
+    closeBtn.style.cssText =
+      "padding:8px 16px;color:#fff;border:none;border-radius:8px;cursor:pointer;" +
+      "font-size:13px;background:rgba(255,255,255,.12);display:block;margin-left:auto;";
+
+    const close = () => {
+      document.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      if (this.closeOpenModal === close) this.closeOpenModal = null;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+      }
+    };
+    this.closeOpenModal?.();
+    this.closeOpenModal = close;
+    closeBtn.addEventListener("click", close);
+    document.addEventListener("keydown", onKey, true);
+    overlay.addEventListener("mousedown", (e) => {
+      if (e.target === overlay) close();
+    });
+
+    modal.append(title, list, hint, closeBtn);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
   }
 
   // ─────────── История последних игр (с кэшем) ───────────
@@ -1762,6 +2141,24 @@ class PlayerNotesManager {
     this.injectPlayerButtons(element, username);
   }
 
+  /**
+   * Сигнатура набора кнопок плитки: ник + какие кнопки включены настройками.
+   * Смена сигнатуры (другой игрок в плитке после пересадки Vue ИЛИ переключили
+   * галочку кнопки в попапе) — единственный повод пересобрать группу; в
+   * остальном работает быстрый путь синхронизации без пересоздания (иначе
+   * мерцание тултипов и лишние API-запросы на каждом тике DOM).
+   */
+  private buttonsSignature(username: string): string {
+    const s = this.settings;
+    return [
+      username,
+      s.btn_stats_enabled === false ? 0 : 1,
+      s.btn_note_enabled === false ? 0 : 1,
+      s.btn_last_games_enabled === false ? 0 : 1,
+      s.btn_hide_video_enabled === false ? 0 : 1,
+    ].join("|");
+  }
+
   private injectPlayerButtons(container: Element, username: string): void {
     if (this.settings.statistics_enabled === false) {
       this.removeStatisticsElements();
@@ -1772,74 +2169,57 @@ class PlayerNotesManager {
     const infoContainer = container.querySelector<HTMLElement>(SITE.playerInfo);
     if (!videoWrapper || !infoContainer) return;
 
-    // Если кнопки этого игрока уже на месте — ничего не пересоздаём (иначе
-    // мерцание тултипов и лишние API-запросы на каждом тике DOM).
-    const sel = cssAttr(username);
-    const alreadyHas =
-      infoContainer.querySelector(`.${OWN.statsButton}[data-username="${sel}"]`) &&
-      infoContainer.querySelector(`.${OWN.noteButton}[data-username="${sel}"]`) &&
-      infoContainer.querySelector(`.${OWN.lastGamesButton}[data-username="${sel}"]`) &&
-      infoContainer.querySelector(`.${OWN.hideVideoButton}[data-username="${sel}"]`);
-    if (alreadyHas) {
-      const uname = username.toLowerCase();
-      const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
-      if (this.hiddenVideos.has(uname)) {
-        // Только при реальном изменении — иначе будим MutationObserver вхолостую.
-        if (vid) {
-          if (vid.style.display !== "none") vid.style.display = "none";
-          if (vid.dataset.polemicaHidden !== "true") vid.dataset.polemicaHidden = "true";
-        }
-      } else if (vid?.dataset.polemicaHidden === "true") {
-        if (vid.style.display === "none") vid.style.display = "";
-        delete vid.dataset.polemicaHidden;
+    const sig = this.buttonsSignature(username);
+    let iconsGroup = infoContainer.querySelector<HTMLElement>(`.${OWN.playerIcons}`);
+
+    if (!iconsGroup || iconsGroup.dataset.pnSig !== sig) {
+      // Чистим кнопки этого ника ТОЛЬКО в своей плитке и пересобираем её.
+      this.removeOldButtons(username, container as HTMLElement);
+      infoContainer.querySelectorAll(`.${OWN.playerIcons}`).forEach((g) => g.remove());
+
+      iconsGroup = document.createElement("div");
+      iconsGroup.className = OWN.playerIcons;
+      iconsGroup.dataset.pnSig = sig;
+      infoContainer.appendChild(iconsGroup);
+
+      const s = this.settings;
+      if (s.btn_stats_enabled !== false) {
+        const statsButton = this.createStatsButton(username);
+        if (statsButton) iconsGroup.appendChild(statsButton);
       }
-      this.applyPlayerTag(container as HTMLElement, username);
-      const grp = infoContainer.querySelector(`.${OWN.playerIcons}`);
-      if (grp) {
-        this.ensureRotateButton(grp, container, username);
-        this.ensureMuteButton(grp, container, username);
-        const hideButton = grp.querySelector<HTMLElement>(`.${OWN.hideVideoButton}`);
-        if (hideButton) this.syncHideVideoButton(hideButton, username);
+      if (s.btn_note_enabled !== false) iconsGroup.appendChild(this.createNoteButton(username));
+      if (s.btn_last_games_enabled !== false) {
+        iconsGroup.appendChild(this.createLastGamesButton(username));
       }
-      // Пересоздание video-элемента сайтом сбрасывает volume — возвращаем мьют.
-      this.applyMuteState(container, username);
-      return;
+      if (s.btn_hide_video_enabled !== false) {
+        iconsGroup.appendChild(this.createHideVideoButton(username, container));
+      }
     }
 
-    // Чистим кнопки этого ника ТОЛЬКО в своей плитке и пересобираем её.
-    this.removeOldButtons(username, container as HTMLElement);
-    infoContainer
-      .querySelectorAll(`.${OWN.playerIcons}`)
-      .forEach((g) => g.remove());
-
-    const iconsGroup = document.createElement("div");
-    iconsGroup.className = OWN.playerIcons;
-    infoContainer.appendChild(iconsGroup);
-
-    const statsButton = this.createStatsButton(username);
-    if (statsButton) iconsGroup.appendChild(statsButton);
-    iconsGroup.appendChild(this.createNoteButton(username));
-    iconsGroup.appendChild(this.createLastGamesButton(username));
-    iconsGroup.appendChild(this.createHideVideoButton(username, container));
+    // ── единый путь синхронизации (и для свежей группы, и для живой) ──
     this.ensureRotateButton(iconsGroup, container, username);
     this.ensureMuteButton(iconsGroup, container, username);
+    const hideButton = iconsGroup.querySelector<HTMLElement>(`.${OWN.hideVideoButton}`);
+    if (hideButton) this.syncHideVideoButton(hideButton, username);
+    // Пересоздание video-элемента сайтом сбрасывает volume и переворот.
     this.applyMuteState(container, username);
+    this.ensureFlipState(container, username);
 
-    if (this.hiddenVideos.has(username.toLowerCase())) {
-      const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
+    const uname = username.toLowerCase();
+    const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
+    if (this.hiddenVideos.has(uname)) {
+      // Только при реальном изменении — иначе будим MutationObserver вхолостую.
       if (vid) {
         if (vid.style.display !== "none") vid.style.display = "none";
         if (vid.dataset.polemicaHidden !== "true") vid.dataset.polemicaHidden = "true";
       }
-    } else {
-      const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
-      if (vid instanceof HTMLElement && vid.dataset.polemicaHidden === "true") {
-        if (vid.style.display === "none") vid.style.display = "";
-        delete vid.dataset.polemicaHidden;
-      }
+    } else if (vid?.dataset.polemicaHidden === "true") {
+      if (vid.style.display === "none") vid.style.display = "";
+      delete vid.dataset.polemicaHidden;
     }
 
     this.applyPlayerTag(container as HTMLElement, username);
+    this.applyNickColor(container as HTMLElement, username);
   }
 
   /**
@@ -1864,6 +2244,9 @@ class PlayerNotesManager {
       .querySelectorAll(`${OWN_BUTTON_SELECTOR}, .${OWN.playerStats}`)
       .forEach((el) => el.remove());
     document.querySelectorAll(".pn-tag-ring").forEach((r) => r.remove());
+    document
+      .querySelectorAll<HTMLElement>("[data-pn-nick-color]")
+      .forEach((el) => this.clearNickColorEl(el));
     document.querySelectorAll(`.${OWN.playerIcons}`).forEach((group) => {
       if (!group.children.length) group.remove();
     });

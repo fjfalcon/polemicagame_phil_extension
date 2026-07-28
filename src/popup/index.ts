@@ -228,6 +228,25 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
 
+  // ───────────────────────── Кнопка «Цвета ников» ─────────────────────────
+  // Менеджер живёт на странице игры (просьба владельца: настройки цветов —
+  // в игре); попап только просит активную вкладку открыть диалог.
+  const nickColorsBtn = $<HTMLButtonElement>("open_nick_colors");
+  if (nickColorsBtn)
+    nickColorsBtn.addEventListener("click", async () => {
+      try {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id || !tab.url || !tab.url.includes("polemicagame.com")) {
+          showPopupToast("Открой вкладку polemicagame.com", "error");
+          return;
+        }
+        await sendToActiveTab({ type: "openNickColors" });
+        window.close(); // попап закрываем — диалог уже на странице
+      } catch {
+        showPopupToast("Не удалось открыть менеджер на странице", "error");
+      }
+    });
+
   // ───────────────────────── Бэкап заметок (экспорт/импорт) ─────────────────────────
   const exportBtn = $<HTMLButtonElement>("export_notes");
   const importBtn = $<HTMLButtonElement>("import_notes");
@@ -480,6 +499,11 @@ document.addEventListener("DOMContentLoaded", () => {
     set("auto_accept_enabled", items.auto_accept_enabled);
     set("camera_rotate_enabled", items.camera_rotate_enabled);
     set("player_mute_enabled", items.player_mute_enabled);
+    set("nick_colors_enabled", items.nick_colors_enabled);
+    set("btn_stats_enabled", items.btn_stats_enabled);
+    set("btn_note_enabled", items.btn_note_enabled);
+    set("btn_last_games_enabled", items.btn_last_games_enabled);
+    set("btn_hide_video_enabled", items.btn_hide_video_enabled);
     set("role_marker_enabled", items.role_marker_enabled);
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
@@ -558,6 +582,11 @@ document.addEventListener("DOMContentLoaded", () => {
       auto_accept_enabled: cb("auto_accept_enabled", true),
       camera_rotate_enabled: cb("camera_rotate_enabled", true),
       player_mute_enabled: cb("player_mute_enabled", true),
+      nick_colors_enabled: cb("nick_colors_enabled", true),
+      btn_stats_enabled: cb("btn_stats_enabled", true),
+      btn_note_enabled: cb("btn_note_enabled", true),
+      btn_last_games_enabled: cb("btn_last_games_enabled", true),
+      btn_hide_video_enabled: cb("btn_hide_video_enabled", true),
       role_marker_enabled: cb("role_marker_enabled", false),
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
@@ -656,6 +685,11 @@ document.addEventListener("DOMContentLoaded", () => {
     "auto_accept_enabled",
     "camera_rotate_enabled",
     "player_mute_enabled",
+    "nick_colors_enabled",
+    "btn_stats_enabled",
+    "btn_note_enabled",
+    "btn_last_games_enabled",
+    "btn_hide_video_enabled",
     "role_marker_enabled",
     "f5_refresh_fix_enabled",
     "update_check_enabled",

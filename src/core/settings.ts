@@ -31,6 +31,11 @@ export const DEFAULT_SETTINGS: Settings = {
   role_phase_auto_switch_enabled: false,
   camera_rotate_enabled: true,
   player_mute_enabled: true,
+  nick_colors_enabled: true,
+  btn_stats_enabled: true,
+  btn_note_enabled: true,
+  btn_last_games_enabled: true,
+  btn_hide_video_enabled: true,
   // Выключено по умолчанию (8.1.43, решение владельца): метка «мой read» —
   // нишевая фича, новичку она мешает. Уже включившим её пользователям
   // значение из storage сохранит прежнее поведение.

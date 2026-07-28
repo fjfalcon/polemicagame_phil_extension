@@ -250,6 +250,18 @@
             <div class="row"><span>Кнопка мьюта игрока<span class="hint">глушит его звук только у тебя; помнит выбор в следующих играх</span></span>
                 <label class="switch"><input type="checkbox" id="player_mute_enabled" checked><span class="slider"></span></label>
             </div>
+            <div class="row"><span>Цветные ники игроков<span class="hint">цвет задаётся в заметке игрока (кнопка ✎ на плитке); палитра — как у рамок</span></span>
+                <label class="switch"><input type="checkbox" id="nick_colors_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>Управление цветами ников<span class="hint">список всех назначенных цветов: ник, id, цвет. Откроется на активной вкладке полемики</span></span>
+                <button id="open_nick_colors" class="btn btn-primary">Открыть</button>
+            </div>
+            <div class="row" style="flex-wrap:wrap;gap:6px"><span style="flex:1 0 100%">Кнопки на плитке игрока<span class="hint">сними галочку — кнопка исчезнет из ряда под игроком</span></span>
+                <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="btn_stats_enabled" checked> Статистика</label>
+                <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="btn_note_enabled" checked> Заметка</label>
+                <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="btn_last_games_enabled" checked> Последние игры</label>
+                <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="btn_hide_video_enabled" checked> Скрыть камеру</label>
+            </div>
             <div class="row"><span>Метки ролей у игроков<span class="hint">квадратик «мой read», сохраняется на игру (переживает F5)</span></span>
                 <label class="switch"><input type="checkbox" id="role_marker_enabled"><span class="slider"></span></label>
             </div>

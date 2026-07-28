@@ -31,6 +31,13 @@ export interface Settings {
   camera_rotate_enabled: boolean;
   /** Кнопка локального мьюта игрока (глушит его звук только у меня). */
   player_mute_enabled: boolean;
+  /** Цветные ники игроков (цвет задаётся в заметке; палитра — как у рамок). */
+  nick_colors_enabled: boolean;
+  /** Кнопки на плитке игрока — можно убрать любую из ряда. */
+  btn_stats_enabled: boolean;
+  btn_note_enabled: boolean;
+  btn_last_games_enabled: boolean;
+  btn_hide_video_enabled: boolean;
   /** Квадратик-метка роли у игрока (мой read, сбрасывается за игру). */
   role_marker_enabled: boolean;
   /** Возвращать F5 нормальное обновление страницы (сайт перехватывает его под настройки). */
@@ -147,6 +154,11 @@ export interface GetNicknameLengthsMsg {
   type: "getNicknameLengths";
 }
 
+/** popup → content (активная вкладка): открыть менеджер цветов ников. */
+export interface OpenNickColorsMsg {
+  type: "openNickColors";
+}
+
 /** content → background: автопринятие игры. */
 export interface StartSearchMsg {
   action: "startSearch";
@@ -177,6 +189,7 @@ export type ExtMessage =
   | TwitchControlMsg
   | TwitchStatusMsg
   | GetNicknameLengthsMsg
+  | OpenNickColorsMsg
   | StartSearchMsg
   | StopSearchMsg
   | QueueGuardMsg
