@@ -159,3 +159,34 @@ export const domObserver = new SharedDomObserver();
 export function onDomChange(fn: DomSubscriber): () => void {
   return domObserver.subscribe(fn);
 }
+
+/**
+ * Покрасить текст ника (плитка игрока, список «Участники»). Идемпотентно:
+ * style пишется только при смене цвета (маркер data-pn-nick-color), потому
+ * что вызывается из подписчиков onDomChange, а безусловная запись style
+ * будила бы самого наблюдателя (инвариант AGENTS.md §4 п.1).
+ * Пустой color снимает покраску. Градиенты — через background-clip: text.
+ */
+export function paintNickEl(el: HTMLElement, color: string): void {
+  if ((el.dataset.pnNickColor || "") === color) return;
+  if (!color) {
+    delete el.dataset.pnNickColor;
+    el.style.removeProperty("color");
+    el.style.removeProperty("background");
+    el.style.removeProperty("-webkit-background-clip");
+    el.style.removeProperty("background-clip");
+    return;
+  }
+  el.dataset.pnNickColor = color;
+  if (color.includes("gradient")) {
+    el.style.background = color;
+    el.style.setProperty("-webkit-background-clip", "text");
+    el.style.setProperty("background-clip", "text");
+    el.style.setProperty("color", "transparent");
+  } else {
+    el.style.removeProperty("background");
+    el.style.removeProperty("-webkit-background-clip");
+    el.style.removeProperty("background-clip");
+    el.style.setProperty("color", color);
+  }
+}

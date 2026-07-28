@@ -75,6 +75,51 @@ export function isSafeTag(tag: string): boolean {
   return !/url\s*\(|expression|@import/i.test(tag);
 }
 
+/**
+ * Индекс «кто какого цвета» для мест, где игроки приходят списком с id
+ * (панель «Кто в очереди», сайтовый список «Участники»). byId — ключ
+ * String(userId); byNick — lowercase-ник (и легаси-ключи, и rec.nick).
+ */
+export interface NickColorIndex {
+  byId: Map<string, string>;
+  byNick: Map<string, string>;
+}
+
+export function buildNickColorIndex(notes: NotesMap): NickColorIndex {
+  const byId = new Map<string, string>();
+  const byNick = new Map<string, string>();
+  for (const [key, rec] of Object.entries(notes)) {
+    if (!rec || typeof rec === "string" || !rec.nickColor) continue;
+    // Записи со старых версий могли не проходить санитизацию — цвет уходит
+    // в style-атрибут, поэтому фильтр обязателен и на чтении.
+    if (!isSafeTag(rec.nickColor)) continue;
+    if (isIdKey(key)) {
+      byId.set(key.slice(ID_KEY_PREFIX.length), rec.nickColor);
+      if (rec.nick) byNick.set(rec.nick.toLowerCase(), rec.nickColor);
+    } else {
+      byNick.set(key.toLowerCase(), rec.nickColor);
+    }
+  }
+  return { byId, byNick };
+}
+
+/** Цвет игрока по id (приоритет) или нику; пустая строка — цвета нет. */
+export function nickColorFrom(
+  index: NickColorIndex,
+  id?: number | string | null,
+  nick?: string | null,
+): string {
+  if (id !== undefined && id !== null && id !== "") {
+    const c = index.byId.get(String(id));
+    if (c) return c;
+  }
+  if (nick) {
+    const c = index.byNick.get(nick.toLowerCase());
+    if (c) return c;
+  }
+  return "";
+}
+
 export function noteText(note: NoteRecord | string | undefined): string {
   if (!note) return "";
   return typeof note === "string" ? note : note.text || "";

@@ -33,6 +33,8 @@ import { log } from "@core/log";
 import { escapeHtml } from "@core/escape";
 import { onDomChange } from "@core/dom";
 import { SITE } from "@core/selectors";
+import { loadNotes, buildNickColorIndex, nickColorFrom } from "@core/notes-store";
+import type { NickColorIndex } from "@core/notes-store";
 import { setAutoAcceptSuppressed, registerPeekAbort } from "../auto-accept-gate";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
@@ -460,11 +462,37 @@ function peekOnce(creds: Credentials, mode: string): Promise<Record<string, Queu
  *   это просто публичный счётчик, а НЕ признак отсутствия Pro; путать эти
  *   два случая нельзя, иначе панель врёт про подписку.
  */
+/**
+ * Цвета ников из заметок (общее хранилище с player-notes). null — фича
+ * цветов выключена или чтение упало; панель тогда рисуется без покраски.
+ */
+async function loadNickColors(): Promise<NickColorIndex | null> {
+  if (settings?.nick_colors_enabled === false) return null;
+  try {
+    const { notes, loadFailed } = await loadNotes();
+    if (loadFailed) return null;
+    return buildNickColorIndex(notes);
+  } catch {
+    return null;
+  }
+}
+
+/** Инлайн-стиль цвета ника. Значение прошло isSafeTag (см. buildNickColorIndex) —
+ *  кавычек и url() там быть не может, в атрибут подставлять безопасно. */
+function nickColorStyle(color: string): string {
+  if (!color) return "";
+  if (color.includes("gradient")) {
+    return `background:${color};-webkit-background-clip:text;background-clip:text;color:transparent`;
+  }
+  return `color:${color}`;
+}
+
 function renderPanel(
   queues: Record<string, QueueInfo>,
   note?: string,
   exited = false,
   peeked = false,
+  colors: NickColorIndex | null = null,
 ): void {
   panel?.remove();
   panel = document.createElement("div");
@@ -489,7 +517,12 @@ function renderPanel(
       if (players.length === 0) return `<div style="margin:8px 0"><b>${title}</b>: пусто</div>`;
       const list = players
         .map((p) => {
-          const name = escapeHtml(String(p.username || p.id || "?"));
+          const raw = String(p.username || p.id || "?");
+          const color = colors ? nickColorFrom(colors, p.id, p.username) : "";
+          const style = nickColorStyle(color);
+          const name = style
+            ? `<span style="${style}">${escapeHtml(raw)}</span>`
+            : escapeHtml(raw);
           const mmr = p.mmr ? ` <span style="color:#8b93a7">${escapeHtml(String(p.mmr))}</span>` : "";
           return `<div style="padding:2px 0">${name}${mmr}</div>`;
         })
@@ -654,7 +687,7 @@ async function runPeek(auto = false): Promise<void> {
       setAutoAcceptSuppressed(true);
       try {
         const queues = await peekOnce(creds, mode);
-        renderPanel(queues, undefined, true, true);
+        renderPanel(queues, undefined, true, true, await loadNickColors());
         log.info(SCOPE, "снимок очередей получен через", mode);
         return;
       } catch (e) {

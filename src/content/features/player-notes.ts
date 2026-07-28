@@ -20,7 +20,7 @@
  */
 import { browser } from "@core/env";
 import { log } from "@core/log";
-import { onDomChange } from "@core/dom";
+import { onDomChange, paintNickEl } from "@core/dom";
 import { onMessage } from "@core/messaging";
 import { toggleFlipForPlayer, isPlayerFlipped, unflipAll } from "../camera-flip";
 import { getMatchId } from "../match-data";
@@ -728,41 +728,54 @@ class PlayerNotesManager {
       });
   }
 
-  /** Снять нашу покраску с элемента ника. */
-  private clearNickColorEl(el: HTMLElement): void {
-    delete el.dataset.pnNickColor;
-    el.style.removeProperty("color");
-    el.style.removeProperty("background");
-    el.style.removeProperty("-webkit-background-clip");
-    el.style.removeProperty("background-clip");
+  /** Покрасить ник игрока на плитке (лобби и игра — разметка одна). */
+  private applyNickColor(container: HTMLElement, username: string): void {
+    const el = container.querySelector<HTMLElement>(SITE.playerName);
+    if (el) paintNickEl(el, this.getNickColor(username));
   }
 
   /**
-   * Покрасить ник игрока на плитке (лобби и игра — разметка одна).
-   * Идемпотентно: пишем style только при смене цвета (инвариант §4 п.1),
-   * маркер — data-pn-nick-color. Градиенты — через background-clip: text.
+   * Цвет по id (приоритет — вечный) и/или нику. Для мест, где игрок приходит
+   * не плиткой, а строкой сайтового списка с href на профиль.
    */
-  private applyNickColor(container: HTMLElement, username: string): void {
-    const el = container.querySelector<HTMLElement>(SITE.playerName);
-    if (!el) return;
-    const color = this.getNickColor(username);
-    if ((el.dataset.pnNickColor || "") === color) return;
-    if (!color) {
-      this.clearNickColorEl(el);
-      return;
+  private colorForPlayer(id: string | undefined, nick: string | undefined): string {
+    if (this.settings.nick_colors_enabled === false) return "";
+    if (id) {
+      const rec = this.notes[idKey(id)];
+      if (rec && typeof rec !== "string" && rec.nickColor) return rec.nickColor;
     }
-    el.dataset.pnNickColor = color;
-    if (color.includes("gradient")) {
-      el.style.background = color;
-      el.style.setProperty("-webkit-background-clip", "text");
-      el.style.setProperty("background-clip", "text");
-      el.style.setProperty("color", "transparent");
-    } else {
-      el.style.removeProperty("background");
-      el.style.removeProperty("-webkit-background-clip");
-      el.style.removeProperty("background-clip");
-      el.style.setProperty("color", color);
+    if (nick) {
+      for (const k of this.nickKeysFor(nick)) {
+        const rec = this.notes[k];
+        if (rec && typeof rec !== "string" && rec.nickColor) return rec.nickColor;
+      }
+      const lower = nick.toLowerCase();
+      for (const [k, v] of Object.entries(this.notes)) {
+        if (isIdKey(k) && typeof v !== "string" && v.nickColor && v.nick?.toLowerCase() === lower) {
+          return v.nickColor;
+        }
+      }
     }
+    return "";
+  }
+
+  /**
+   * Сайтовый список «Участники» (страница поиска: кто стоит в очереди —
+   * своя разметка, НЕ плитки игроков). Каждая строка — <a href="/profile/id">
+   * с ником внутри .participants-name; красим по id из ссылки, это надёжнее
+   * ника. Идемпотентность обеспечивает paintNickEl.
+   */
+  private applyParticipantColors(): void {
+    const items = document.querySelectorAll<HTMLAnchorElement>(".participants-item");
+    if (items.length === 0) return;
+    items.forEach((item) => {
+      const nameWrap = item.querySelector<HTMLElement>(".participants-name");
+      if (!nameWrap) return;
+      // Ник — в первом span контейнера (рядом лежат иконки twitch/подписки).
+      const el = nameWrap.querySelector<HTMLElement>("span") || nameWrap;
+      const id = (item.getAttribute("href") || "").match(/\/profile\/(\d+)/)?.[1];
+      paintNickEl(el, this.colorForPlayer(id, el.textContent?.trim()));
+    });
   }
 
   /** Обновить цвет ника у всех видимых игроков (после правки в диалогах). */
@@ -774,6 +787,7 @@ class PlayerNotesManager {
         const container = btn.closest<HTMLElement>(SITE.player);
         if (u && container) this.applyNickColor(container, u);
       });
+    this.applyParticipantColors();
   }
 
   // ─────────── Загрузка статистики (с кэшем) ───────────
@@ -2281,6 +2295,8 @@ class PlayerNotesManager {
       document
         .querySelectorAll(SITE.player)
         .forEach((el) => this.processElement(el));
+      // Сайтовый список «Участники» — не плитки, обходится отдельно.
+      this.applyParticipantColors();
     } catch (e) {
       log.error("player-notes", "processExistingElements failed", e);
     }
@@ -2406,7 +2422,7 @@ class PlayerNotesManager {
     document.querySelectorAll(".pn-tag-ring").forEach((r) => r.remove());
     document
       .querySelectorAll<HTMLElement>("[data-pn-nick-color]")
-      .forEach((el) => this.clearNickColorEl(el));
+      .forEach((el) => paintNickEl(el, ""));
     document.querySelectorAll(`.${OWN.playerIcons}`).forEach((group) => {
       if (!group.children.length) group.remove();
     });
