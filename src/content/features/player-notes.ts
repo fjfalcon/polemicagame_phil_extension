@@ -699,10 +699,12 @@ class PlayerNotesManager {
       ring.className = "pn-tag-ring";
       container.appendChild(ring);
     }
-    // Перерисовываем только при смене метки: безусловная запись style будила
-    // общий MutationObserver (он следит за атрибутом style) на каждом проходе.
-    if (ring.dataset.tag === tag) return;
+    // Перерисовываем только при смене метки/владельца: безусловная запись
+    // style будила общий MutationObserver на каждом проходе. Владелец (pnFor)
+    // нужен сторожу пересадки: ночью сайт двигает игроков по плиткам.
+    if (ring.dataset.tag === tag && ring.dataset.pnFor === username) return;
     ring.dataset.tag = tag;
+    ring.dataset.pnFor = username;
     // Градиентная рамка: маской вырезаем середину, остаётся рамка 3px.
     // ВАЖНО: mask-composite ставим ПОСЛЕ shorthand-ов mask/-webkit-mask,
     // иначе shorthand сбрасывает composite в add и градиент заливает всю плитку.
@@ -731,7 +733,29 @@ class PlayerNotesManager {
   /** Покрасить ник игрока на плитке (лобби и игра — разметка одна). */
   private applyNickColor(container: HTMLElement, username: string): void {
     const el = container.querySelector<HTMLElement>(SITE.playerName);
-    if (el) paintNickEl(el, this.getNickColor(username));
+    if (el) paintNickEl(el, this.getNickColor(username), username);
+  }
+
+  /**
+   * Сторож пересадки: сайт двигает игроков между плитками (ночная фаза), и
+   * рамка/цвет прежнего жильца не должны доставаться новому. Сверяем
+   * владельца декорации с ником, который СЕЙЧАС виден в плитке; при
+   * несовпадении декорация снимается (правильная вернётся обычным проходом).
+   * Ник не виден — не трогаем: нет данных для решения.
+   */
+  private sweepStaleDecorations(): void {
+    document.querySelectorAll<HTMLElement>(".pn-tag-ring").forEach((ring) => {
+      const nick = ring.parentElement
+        ?.querySelector(SITE.playerName)
+        ?.textContent?.trim();
+      if (nick && (ring.dataset.pnFor || "") !== nick) ring.remove();
+    });
+    document.querySelectorAll<HTMLElement>("[data-pn-nick-color]").forEach((el) => {
+      const owner = el.dataset.pnNickFor;
+      if (owner === undefined) return; // покраска без владельца (не наша плитка)
+      const nick = el.textContent?.trim() || "";
+      if (nick && owner !== nick) paintNickEl(el, "");
+    });
   }
 
   /**
@@ -774,7 +798,8 @@ class PlayerNotesManager {
       // Ник — в первом span контейнера (рядом лежат иконки twitch/подписки).
       const el = nameWrap.querySelector<HTMLElement>("span") || nameWrap;
       const id = (item.getAttribute("href") || "").match(/\/profile\/(\d+)/)?.[1];
-      paintNickEl(el, this.colorForPlayer(id, el.textContent?.trim()));
+      const nick = el.textContent?.trim();
+      paintNickEl(el, this.colorForPlayer(id, nick), nick || undefined);
     });
   }
 
@@ -2292,6 +2317,8 @@ class PlayerNotesManager {
       return;
     }
     try {
+      // Сначала сторож (снимает чужое), потом обычный проход (вешает своё).
+      this.sweepStaleDecorations();
       document
         .querySelectorAll(SITE.player)
         .forEach((el) => this.processElement(el));
@@ -2341,9 +2368,18 @@ class PlayerNotesManager {
       return;
     }
 
-    const videoWrapper = container.querySelector(SITE.playerVideoWrapper);
     const infoContainer = container.querySelector<HTMLElement>(SITE.playerInfo);
-    if (!videoWrapper || !infoContainer) return;
+    if (!infoContainer) return;
+
+    // Рамка и цвет ника НЕ зависят от видео — обновляем ДО раннего выхода.
+    // Ночью сайт пересаживает игроков по плиткам, а video-wrapper из плитки
+    // пропадает: ранний return оставлял рамку/цвет ПРЕЖНЕГО игрока на чужой
+    // плитке до конца фазы (баг 8.1.52, пойман владельцем в живой игре).
+    this.applyPlayerTag(container as HTMLElement, username);
+    this.applyNickColor(container as HTMLElement, username);
+
+    const videoWrapper = container.querySelector(SITE.playerVideoWrapper);
+    if (!videoWrapper) return;
 
     const sig = this.buttonsSignature(username);
     let iconsGroup = infoContainer.querySelector<HTMLElement>(`.${OWN.playerIcons}`);

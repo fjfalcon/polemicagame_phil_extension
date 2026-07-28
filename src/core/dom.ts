@@ -167,10 +167,16 @@ export function onDomChange(fn: DomSubscriber): () => void {
  * будила бы самого наблюдателя (инвариант AGENTS.md §4 п.1).
  * Пустой color снимает покраску. Градиенты — через background-clip: text.
  */
-export function paintNickEl(el: HTMLElement, color: string): void {
-  if ((el.dataset.pnNickColor || "") === color) return;
+export function paintNickEl(el: HTMLElement, color: string, owner?: string): void {
+  if (
+    (el.dataset.pnNickColor || "") === color &&
+    (owner === undefined || el.dataset.pnNickFor === owner)
+  ) {
+    return;
+  }
   if (!color) {
     delete el.dataset.pnNickColor;
+    delete el.dataset.pnNickFor;
     el.style.removeProperty("color");
     el.style.removeProperty("background");
     el.style.removeProperty("-webkit-background-clip");
@@ -178,6 +184,9 @@ export function paintNickEl(el: HTMLElement, color: string): void {
     return;
   }
   el.dataset.pnNickColor = color;
+  // Владелец покраски — для сторожа пересадки (плитку может занять другой игрок).
+  if (owner !== undefined) el.dataset.pnNickFor = owner;
+  else delete el.dataset.pnNickFor;
   if (color.includes("gradient")) {
     el.style.background = color;
     el.style.setProperty("-webkit-background-clip", "text");
