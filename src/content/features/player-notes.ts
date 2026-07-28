@@ -1747,12 +1747,27 @@ class PlayerNotesManager {
   /**
    * Записать цвет ника в запись заметки (или снять его). Пустой цвет у записи
    * без текста и метки удаляет запись целиком — не копим пустышки.
+   *
+   * @param createNick передан — записи можно НЕ существовать: она создаётся
+   *   пустой с этим ником (ручное добавление игрока в менеджере).
    */
-  private setNickColor(key: string, color: string): Promise<boolean> {
+  private setNickColor(key: string, color: string, createNick?: string): Promise<boolean> {
     return this.enqueueNotesWrite(async (): Promise<boolean> => {
       const prev = this.notes[key];
-      if (prev === undefined) return true; // запись уже удалили (другая вкладка)
-      if (typeof prev === "string") {
+      if (prev === undefined) {
+        // Без createNick несуществующий ключ — гонка с удалением в другой
+        // вкладке: молча выходим, воскрешать запись нельзя.
+        if (!color || createNick === undefined) return true;
+        if (!isSafeNoteKey(key)) return false;
+        this.notes[key] = {
+          text: "",
+          timestamp: Date.now(),
+          version: VERSION,
+          nickColor: color,
+          // Ник храним только у id-ключей (у ник-ключей он и есть ключ).
+          ...(isIdKey(key) ? { nick: createNick } : {}),
+        };
+      } else if (typeof prev === "string") {
         // Легаси-строка: повышаем до записи, текст сохраняем.
         if (!color) return true;
         this.notes[key] = { text: prev, timestamp: Date.now(), version: VERSION, nickColor: color };
@@ -1762,13 +1777,68 @@ class PlayerNotesManager {
         else this.notes[key] = next;
       }
       if (!(await this.saveNotes())) {
-        this.notes[key] = prev; // откат памяти под состояние диска
+        // Откат памяти под состояние диска.
+        if (prev === undefined) delete this.notes[key];
+        else this.notes[key] = prev;
         return false;
       }
       this.refreshNickColors();
       this.refreshNoteIndicators();
       return true;
     });
+  }
+
+  /**
+   * Резолв ручного ввода «ник или id» в ключ записи.
+   *  • Цифры → это id: ник подтверждаем страницей профиля (там username в
+   *    данных Vue-компонента); несуществующий id отклоняем — иначе копили бы
+   *    мусорные записи, которые никогда ни к кому не привяжутся.
+   *  • Ник → сначала ищем среди СВОИХ записей (u:-ключ с этим ником), потом в
+   *    рейтинге (топ-1000); не нашёлся — ключ-ник, мигрирует на id при первой
+   *    встрече игрока в игре (штатная механика заметок).
+   */
+  private async resolvePlayerInput(
+    input: string,
+  ): Promise<{ key: string; nick: string; id?: string } | null> {
+    const raw = input.trim();
+    if (!raw) return null;
+
+    if (/^\d+$/.test(raw)) {
+      try {
+        const resp = await fetch(`https://polemicagame.com/profile/${raw}`);
+        if (!resp.ok) return null;
+        const text = await resp.text();
+        const m = text.match(/"username":"((?:[^"\\]|\\.)*)"/);
+        if (!m) return null;
+        let nick = m[1];
+        try {
+          nick = JSON.parse(`"${m[1]}"`) as string; // \u-эскейпы кириллицы
+        } catch {
+          /* оставляем сырым */
+        }
+        return { key: idKey(raw), nick, id: raw };
+      } catch {
+        return null;
+      }
+    }
+
+    if (!isSafeNoteKey(raw)) return null;
+    const lower = raw.toLowerCase();
+    for (const [k, v] of Object.entries(this.notes)) {
+      if (isIdKey(k) && typeof v !== "string" && v.nick?.toLowerCase() === lower) {
+        return { key: k, nick: v.nick, id: k.slice(ID_KEY_PREFIX.length) };
+      }
+    }
+    try {
+      const player = await findRatingPlayer(raw);
+      if (player) {
+        return { key: idKey(player.user_id), nick: raw, id: String(player.user_id) };
+      }
+    } catch {
+      /* рейтинг недоступен — фолбэк на ник-ключ ниже */
+    }
+    const existingNickKey = this.nickKeysFor(raw)[0];
+    return { key: existingNickKey ?? raw, nick: raw };
   }
 
   /** Все записи с назначенным цветом ника: [ключ, ник, id, цвет]. */
@@ -1810,6 +1880,96 @@ class PlayerNotesManager {
     const title = document.createElement("h3");
     title.textContent = "Цвета ников";
     title.style.cssText = "margin: 0 0 12px 0; color: white; font-size: 16px;";
+
+    // ── добавление игрока вручную (по нику или id) ──
+    const addWrap = document.createElement("div");
+    addWrap.style.cssText =
+      "margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,.12);";
+    const addRow = document.createElement("div");
+    addRow.style.cssText = "display:flex;gap:8px;";
+    const addInput = document.createElement("input");
+    addInput.type = "text";
+    addInput.placeholder = "Ник или id игрока";
+    addInput.style.cssText =
+      "flex:1 1 auto;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);" +
+      "border-radius:6px;color:#fff;padding:6px 10px;font-size:13px;min-width:0;";
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "Найти";
+    addBtn.style.cssText =
+      "padding:6px 14px;color:#fff;border:none;border-radius:6px;cursor:pointer;" +
+      "font-size:13px;background:rgba(99,102,241,.5);flex:0 0 auto;";
+    addRow.append(addInput, addBtn);
+    /** Превью найденного игрока + палитра для выбора его цвета. */
+    const addResult = document.createElement("div");
+    addWrap.append(addRow, addResult);
+
+    const renderAddResult = (found: { key: string; nick: string; id?: string }) => {
+      addResult.replaceChildren();
+      const info = document.createElement("div");
+      info.textContent = found.id
+        ? `${found.nick} (id ${found.id}) — выбери цвет:`
+        : `${found.nick} — id не найден, цвет привяжется к нику. Выбери цвет:`;
+      info.style.cssText = "color:rgba(255,255,255,.75);font-size:12px;margin:10px 0 6px;";
+      const palette = document.createElement("div");
+      palette.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
+      const options = [
+        ...TAG_PRESETS.filter((p) => p.css).map((p) => ({ css: p.css, name: p.name })),
+        ...this.customTags.map((css) => ({ css, name: "свой цвет" })),
+      ];
+      for (const opt of options) {
+        const sw = document.createElement("button");
+        sw.title = opt.name;
+        sw.style.cssText = `
+          width: 22px; height: 22px; border-radius: 50%; cursor: pointer; padding: 0;
+          border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto; background: ${opt.css};
+        `;
+        sw.addEventListener("click", () => {
+          void this.setNickColor(found.key, opt.css, found.nick).then((ok) => {
+            if (ok) {
+              addInput.value = "";
+              addResult.replaceChildren();
+              render();
+            } else showAddError("Не удалось сохранить — попробуй ещё раз.");
+          });
+        });
+        palette.appendChild(sw);
+      }
+      addResult.append(info, palette);
+    };
+
+    const showAddError = (text: string) => {
+      addResult.replaceChildren();
+      const err = document.createElement("div");
+      err.textContent = text;
+      err.style.cssText = "color:#f87171;font-size:12px;margin-top:8px;";
+      addResult.appendChild(err);
+    };
+
+    const doFind = () => {
+      const value = addInput.value.trim();
+      if (!value) return;
+      addBtn.disabled = true;
+      addBtn.textContent = "Ищу…";
+      void this.resolvePlayerInput(value)
+        .then((found) => {
+          if (found) renderAddResult(found);
+          else showAddError("Игрок не найден — проверь ник или id.");
+        })
+        .finally(() => {
+          addBtn.disabled = false;
+          addBtn.textContent = "Найти";
+        });
+    };
+    addBtn.addEventListener("click", doFind);
+    addInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        doFind();
+      }
+      // Диалог живёт поверх страницы игры — хоткеи расширения не должны
+      // срабатывать во время набора ника.
+      e.stopPropagation();
+    });
 
     const list = document.createElement("div");
     /** Ключ записи с раскрытой палитрой (одна за раз). */

@@ -205,6 +205,7 @@
 
     <div class="tabs">
         <button class="tab active" data-tab="game">Игра</button>
+        <button class="tab" data-tab="lobby">Лобби</button>
         <button class="tab" data-tab="stats">Стата</button>
         <button class="tab" data-tab="match">Матч</button>
         <button class="tab" data-tab="roles">Роли</button>
@@ -213,8 +214,8 @@
     </div>
 
     <div class="panels">
-        <!-- ── Игра ── -->
-        <div class="panel active" data-panel="game">
+        <!-- ── Лобби (поиск игры и предигровой экран) ── -->
+        <div class="panel" data-panel="lobby">
             <div class="row"><span>Автопринятие игр</span>
                 <label class="switch"><input type="checkbox" id="auto_accept_enabled" checked><span class="slider"></span></label>
             </div>
@@ -235,6 +236,10 @@
                 <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="queue_peek_polite" checked> Рейтинг</label>
                 <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="queue_peek_prime" checked> Prime</label>
             </div>
+        </div>
+
+        <!-- ── Игра ── -->
+        <div class="panel active" data-panel="game">
             <div class="row"><span>Быстрая пауза</span>
                 <label class="switch"><input type="checkbox" id="pause_hotkey_enabled" checked><span class="slider"></span></label>
             </div>
