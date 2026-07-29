@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Polemica Notes",
-  "version": "8.1.59",
-  "description": "Расширение для Polemica Game с дополнительными функциями:\n• Статистика игроков\n• Подмена роли (F)\n• Быстрая пауза (F8)\n• Автопринятие игры",
+  "version": "8.1.60",
+  "description": "Заметки об игроках, статистика, цветные ники и удобные мелочи для Polemica Game: пауза, мьют, разбор матчей.",
   "permissions": [
     "storage",
     "alarms",
@@ -22,8 +22,12 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["conn-diag-page.js"],
-      "matches": ["https://*.polemicagame.com/*"]
+      "resources": [
+        "conn-diag-page.js"
+      ],
+      "matches": [
+        "https://*.polemicagame.com/*"
+      ]
     }
   ],
   "content_scripts": [

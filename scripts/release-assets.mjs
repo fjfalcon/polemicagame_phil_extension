@@ -41,6 +41,16 @@ async function readVersion() {
       `версии разошлись: package.json ${pkg.version} ≠ manifest.base.json ${manifest.version}`,
     );
   }
+  // Chrome Web Store отклоняет загрузку с description длиннее 132 символов —
+  // причём уже ПОСЛЕ подписи Firefox, то есть версия оказывается сожжённой
+  // (AMO подписывает номер один раз). Ловим на входе.
+  const MAX_DESCRIPTION = 132;
+  if ((manifest.description || "").length > MAX_DESCRIPTION) {
+    throw new Error(
+      `description в manifest.base.json — ${manifest.description.length} символов, ` +
+        `Chrome Web Store принимает не больше ${MAX_DESCRIPTION}`,
+    );
+  }
   return pkg.version;
 }
 
