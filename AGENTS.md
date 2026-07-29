@@ -33,8 +33,17 @@ npx web-ext lint -s dist/firefox   # 0 errors; ~23 warnings (innerHTML) — но
   сборка `scripts/assemble.mjs`).
 - Версию надо поднимать в ДВУХ местах: `package.json` и
   `src/manifest/manifest.base.json` (автосинка нет).
-- Релиз: commit → push → zip обоих dist → `gh release create vX.Y.Z` с
-  русскими release notes и обоими zip. Тегов локально нет — тег создаёт gh.
+- Релиз: бамп версии → commit → push →
+  `source ~/.config/polemica-notes/amo.env && npm run release:assets` →
+  `gh release create vX.Y.Z <три файла> --title … -F -` с русскими release
+  notes. Тегов локально нет — тег создаёт gh.
+  `release:assets` делает typecheck + сборку + оба zip + **подпись .xpi**
+  (обязательна с 8.1.56: без неё Firefox-пользователи получают установку,
+  которая стирает их данные при закрытии браузера). Без ключей в окружении
+  скрипт не молчит: говорит, что .xpi не собран, и выходит с кодом 1.
+  Осознанный пропуск — `npm run release:assets -- --skip-sign`.
+  ВАЖНО: одну версию AMO подписывает ОДИН раз («Version X already exists») —
+  перевыпуск требует бампа.
 - Минимальные версии: Chrome 116 (`minimum_chrome_version`), Firefox 121
   (`strict_min_version`; поднято из-за `:has()` в инжектируемом CSS).
 

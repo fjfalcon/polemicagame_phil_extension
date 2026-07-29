@@ -1138,11 +1138,14 @@ class PlayerNotesManager {
       tooltip.dataset.pnShown = "1";
       document.body.appendChild(tooltip);
     }
+    // ПОРЯДОК ВАЖЕН: сначала ставим геометрию (ещё невидимым), и только
+    // потом показываем. Обратный порядок давал вспышку у левого края экрана
+    // — тултип успевал отрисоваться по старым координатам (регрессия 8.1.55).
     tooltip.style.position = "fixed";
     tooltip.style.transform = "none";
-    tooltip.style.visibility = "visible";
-    tooltip.style.opacity = "1";
     tooltip.style.zIndex = "2147483000";
+    tooltip.style.bottom = "auto";
+    tooltip.style.right = "auto";
 
     const a = anchor.getBoundingClientRect();
     const w = tooltip.offsetWidth;
@@ -1153,8 +1156,9 @@ class PlayerNotesManager {
     const left = Math.min(Math.max(4, a.left), Math.max(4, window.innerWidth - w - 4));
     tooltip.style.top = `${Math.round(top)}px`;
     tooltip.style.left = `${Math.round(left)}px`;
-    tooltip.style.bottom = "auto";
-    tooltip.style.right = "auto";
+
+    tooltip.style.visibility = "visible";
+    tooltip.style.opacity = "1";
   }
 
   /** Спрятать тултип и вернуть его к кнопке (см. showTooltip). */
@@ -1170,7 +1174,9 @@ class PlayerNotesManager {
       tooltip.style.top = "auto";
       tooltip.style.left = "0";
       tooltip.style.bottom = "100%";
-      tooltip.style.transform = "translateY(10px)";
+      // transform больше не анимируется (см. TOOLTIP_CSS) — сбрасываем в none,
+      // иначе вернувшийся тултип был бы смещён на 10px при следующем показе.
+      tooltip.style.transform = "none";
       tooltip.style.zIndex = "1001";
     } else if (tooltip.parentElement === document.body) {
       // Кнопка исчезла (плитка пересобрана) — не оставляем сироту в body.
@@ -2631,7 +2637,10 @@ const TOOLTIP_CSS = `
   font-size: 12px;
   visibility: hidden;
   opacity: 0;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  /* ТОЛЬКО opacity: со значением "all" тултип, уезжая в портал (showTooltip),
+     анимировал ещё и left/top — от левого края экрана к своей позиции: он
+     «влетал» через пол-страницы (регрессия 8.1.55). */
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
   white-space: normal;
   min-width: 120px;
