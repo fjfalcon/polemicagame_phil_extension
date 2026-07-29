@@ -95,6 +95,18 @@ npx web-ext lint -s dist/firefox   # 0 errors; ~23 warnings (innerHTML) — но
   постоянной установкой — подписью XPI через AMO. Для отладки помогает
   `about:config` → `keepStorageOnUninstall` и `keepUuidOnUninstall` = true.
 
+### Chrome Web Store (опубликовано 29.07.2026)
+
+- Ссылка (unlisted, в каталоге и поиске не появляется):
+  <https://chromewebstore.google.com/detail/haacghfiifkhblmebkmdiifenndpofdo>
+- ID расширения в сторе: `haacghfiifkhblmebkmdiifenndpofdo`. Это ДРУГОЙ ID,
+  чем у распакованной сборки (там он считается от пути папки) ⇒ при переходе
+  пользователя данные не мигрируют: только экспорт/импорт бэкапа.
+- Заливка новой версии — вручную через дашборд (zip из `dist/`), либо через
+  Web Store API, если появится `publish:chrome`.
+- Лимит `description` в манифесте — 132 символа, проверяется в
+  `scripts/release-assets.mjs`.
+
 ### Подпись XPI (Firefox, unlisted)
 
 ```bash
