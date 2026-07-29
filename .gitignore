@@ -8,3 +8,9 @@ web-ext-artifacts/
 # stray/pre-existing, not part of project
 2796351392.ts
 tools/
+
+# секреты (ключи AMO лежат в ~/.config/polemica-notes/amo.env, вне репозитория)
+.env
+.env.*
+*.pem
+amo.env

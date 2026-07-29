@@ -83,9 +83,25 @@ npx web-ext lint -s dist/firefox   # 0 errors; ~23 warnings (innerHTML) — но
   владельца и с предупреждением в release notes.
 - **Firefox**: временное дополнение (`about:debugging`) выгружается при
   закрытии браузера, и Firefox **удаляет его storage**. Лечится только
-  постоянной установкой — подписью XPI через AMO (`npx web-ext sign`).
-  Для отладки помогает `about:config` → `keepStorageOnUninstall` и
-  `keepUuidOnUninstall` = true.
+  постоянной установкой — подписью XPI через AMO. Для отладки помогает
+  `about:config` → `keepStorageOnUninstall` и `keepUuidOnUninstall` = true.
+
+### Подпись XPI (Firefox, unlisted)
+
+```bash
+source ~/.config/polemica-notes/amo.env   # ключи AMO, вне репозитория, chmod 600
+npm run build && npm run sign:firefox     # → dist/signed/*.xpi
+```
+
+- Ключи (`WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET`) в репозитории НЕ хранятся
+  и в команды не вписываются — только через этот файл. `.gitignore` закрывает
+  `.env*`, `*.pem`, `amo.env` на случай копии рядом с кодом.
+- Канал `unlisted`: в каталоге AMO не публикуется, модерация автоматическая.
+- Одну и ту же версию манифеста подписать дважды нельзя — сначала бамп.
+- ID `polemica-notes@polemicagame` уже в `manifest.firefox.json` — он и
+  закрепляется за аккаунтом на AMO.
+- У пользователей временной установки данные на подписанную версию НЕ
+  переедут: сначала экспорт бэкапа (8.1.56), потом импорт.
 
 Пока это не решено — единственная страховка пользователя это экспорт/импорт
 бэкапа в попапе (вкладка «Ещё»), и он обязан включать НЕ только заметки.
