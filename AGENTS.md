@@ -102,8 +102,17 @@ npx web-ext lint -s dist/firefox   # 0 errors; ~23 warnings (innerHTML) — но
 - ID расширения в сторе: `haacghfiifkhblmebkmdiifenndpofdo`. Это ДРУГОЙ ID,
   чем у распакованной сборки (там он считается от пути папки) ⇒ при переходе
   пользователя данные не мигрируют: только экспорт/импорт бэкапа.
-- Заливка новой версии — вручную через дашборд (zip из `dist/`), либо через
-  Web Store API, если появится `publish:chrome`.
+- Заливка новой версии:
+  ```bash
+  source ~/.config/polemica-notes/cws.env
+  npm run release:assets && npm run publish:chrome
+  ```
+  Ключи (`CWS_CLIENT_ID/SECRET/REFRESH_TOKEN/EXTENSION_ID`) — в том же файле
+  вне репозитория, что и AMO. Разовое получение refresh-токена:
+  `CWS_CLIENT_ID=… CWS_CLIENT_SECRET=… npm run chrome:auth` (поднимает
+  loopback-сервер на 127.0.0.1:8976 — OOB-поток Google выключил в 2022).
+- Ошибка «version already exists» приходит НЕ в HTTP-коде, а в поле
+  `uploadState: FAILURE` — скрипт это проверяет.
 - Лимит `description` в манифесте — 132 символа, проверяется в
   `scripts/release-assets.mjs`.
 
