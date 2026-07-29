@@ -2073,6 +2073,7 @@ class PlayerNotesManager {
             if (ok) {
               addInput.value = "";
               addResult.replaceChildren();
+              flashSaved(found.key);
               render();
             } else showAddError("Не удалось сохранить — попробуй ещё раз.");
           });
@@ -2119,6 +2120,23 @@ class PlayerNotesManager {
     const list = document.createElement("div");
     /** Ключ записи с раскрытой палитрой (одна за раз). */
     let expandedKey: string | null = null;
+    /**
+     * Ключ записи, которую только что сохранили: рядом с ней на пару секунд
+     * появляется «Сохранено ✓». Кнопки «Сохранить» здесь нет намеренно —
+     * запись уходит на диск сразу по клику, — но без подтверждения это
+     * выглядело как «ничего не произошло», и владелец резонно спросил, где
+     * же сохранение (жалоба 29.07.2026).
+     */
+    let savedKey: string | null = null;
+    let savedTimer: ReturnType<typeof setTimeout> | null = null;
+    const flashSaved = (key: string) => {
+      savedKey = key;
+      if (savedTimer) clearTimeout(savedTimer);
+      savedTimer = setTimeout(() => {
+        savedKey = null;
+        if (overlay.isConnected) render();
+      }, 2000);
+    };
 
     const render = () => {
       list.replaceChildren();
@@ -2183,7 +2201,14 @@ class PlayerNotesManager {
           });
         });
 
-        row.append(swatch, nick, idEl, change, del);
+        row.append(swatch, nick, idEl);
+        if (savedKey === entry.key) {
+          const saved = document.createElement("span");
+          saved.textContent = "Сохранено ✓";
+          saved.style.cssText = "color:#22c55e;font-size:11px;flex:0 0 auto;";
+          row.appendChild(saved);
+        }
+        row.append(change, del);
         list.appendChild(row);
 
         if (expandedKey === entry.key) {
@@ -2208,6 +2233,7 @@ class PlayerNotesManager {
               void this.setNickColor(entry.key, opt.css).then((ok) => {
                 if (ok) {
                   expandedKey = null;
+                  flashSaved(entry.key);
                   render();
                 }
               });
@@ -2221,11 +2247,15 @@ class PlayerNotesManager {
     render();
 
     const hint = document.createElement("div");
-    hint.textContent = "Новый цвет назначается в заметке игрока (кнопка ✎ на плитке).";
+    hint.textContent =
+      "Изменения сохраняются сразу — отдельная кнопка сохранения не нужна. " +
+      "Новый цвет можно назначить и в заметке игрока (кнопка ✎ на плитке).";
     hint.style.cssText = "color:rgba(255,255,255,.45);font-size:11px;margin:10px 0 12px;";
 
     const closeBtn = document.createElement("button");
-    closeBtn.textContent = "Закрыть";
+    // «Готово», а не «Закрыть»: закрытие ничего не отменяет и не сохраняет —
+    // всё уже на диске, кнопка просто убирает окно.
+    closeBtn.textContent = "Готово";
     closeBtn.style.cssText =
       "padding:8px 16px;color:#fff;border:none;border-radius:8px;cursor:pointer;" +
       "font-size:13px;background:rgba(255,255,255,.12);display:block;margin-left:auto;";
