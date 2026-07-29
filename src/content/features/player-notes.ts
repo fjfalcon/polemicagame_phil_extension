@@ -2000,18 +2000,89 @@ class PlayerNotesManager {
     return { key: existingNickKey ?? raw, nick: raw };
   }
 
-  /** Все записи с назначенным цветом ника: [ключ, ник, id, цвет]. */
-  private nickColorEntries(): Array<{ key: string; nick: string; id: string; color: string }> {
+  /**
+   * Записать текст заметки по ключу (правка из менеджера). Пустой текст у
+   * записи без цвета и метки удаляет её целиком — не копим пустышки.
+   */
+  private setNoteTextFor(key: string, text: string, createNick?: string): Promise<boolean> {
+    return this.enqueueNotesWrite(async (): Promise<boolean> => {
+      const prev = this.notes[key];
+      if (prev === undefined) {
+        // Записи нет: создаём только при явном намерении (добавление игрока
+        // через форму). Иначе это гонка с удалением в другой вкладке —
+        // воскрешать запись нельзя.
+        if (!text || createNick === undefined) return true;
+        if (!isSafeNoteKey(key)) return false;
+        this.notes[key] = {
+          text,
+          timestamp: Date.now(),
+          version: VERSION,
+          ...(isIdKey(key) ? { nick: createNick } : {}),
+        };
+        if (!(await this.saveNotes())) {
+          delete this.notes[key];
+          return false;
+        }
+        this.refreshNoteIndicators();
+        this.updateAllTooltips();
+        return true;
+      }
+      const base: NoteRecord =
+        typeof prev === "string" ? { text: prev, timestamp: Date.now(), version: VERSION } : prev;
+      const next: NoteRecord = { ...base, text, timestamp: Date.now(), version: VERSION };
+      if (!text && !next.tag && !next.nickColor) delete this.notes[key];
+      else this.notes[key] = next;
+
+      if (!(await this.saveNotes())) {
+        this.notes[key] = prev; // откат памяти под состояние диска
+        return false;
+      }
+      this.refreshNoteIndicators();
+      this.updateAllTooltips();
+      return true;
+    });
+  }
+
+  /** Удалить запись игрока целиком (и заметку, и цвет, и метку). */
+  private deleteNoteEntry(key: string): Promise<boolean> {
+    return this.enqueueNotesWrite(async (): Promise<boolean> => {
+      const prev = this.notes[key];
+      if (prev === undefined) return true;
+      delete this.notes[key];
+      if (!(await this.saveNotes())) {
+        this.notes[key] = prev;
+        return false;
+      }
+      this.refreshNickColors();
+      this.refreshNoteIndicators();
+      this.refreshPlayerTags();
+      this.updateAllTooltips();
+      return true;
+    });
+  }
+
+  /**
+   * Все известные игроки: и с цветом ника, и просто с заметкой.
+   * Раньше список показывал ТОЛЬКО цветных — заметки правились лишь на
+   * плитке в игре, то есть до нужного игрока надо было ещё дожить.
+   */
+  private playerEntries(): Array<{
+    key: string;
+    nick: string;
+    id: string;
+    color: string;
+    text: string;
+  }> {
     return Object.entries(this.notes)
-      .filter(
-        (pair): pair is [string, NoteRecord] =>
-          typeof pair[1] !== "string" && !!pair[1].nickColor,
-      )
+      .filter(([, rec]) => (typeof rec === "string" ? !!rec : !!(rec.nickColor || rec.text)))
       .map(([key, rec]) => ({
         key,
-        nick: rec.nick || (isIdKey(key) ? `игрок ${key.slice(ID_KEY_PREFIX.length)}` : key),
+        nick:
+          (typeof rec !== "string" && rec.nick) ||
+          (isIdKey(key) ? `игрок ${key.slice(ID_KEY_PREFIX.length)}` : key),
         id: isIdKey(key) ? key.slice(ID_KEY_PREFIX.length) : "",
-        color: rec.nickColor || "",
+        color: typeof rec === "string" ? "" : rec.nickColor || "",
+        text: typeof rec === "string" ? rec : rec.text || "",
       }))
       .sort((a, b) => a.nick.localeCompare(b.nick, "ru"));
   }
@@ -2037,7 +2108,7 @@ class PlayerNotesManager {
     `;
 
     const title = document.createElement("h3");
-    title.textContent = "Цвета ников";
+    title.textContent = "Заметки и цвета игроков";
     title.style.cssText = "margin: 0 0 12px 0; color: white; font-size: 16px;";
 
     // ── добавление игрока вручную (по нику или id) ──
@@ -2066,8 +2137,8 @@ class PlayerNotesManager {
       addResult.replaceChildren();
       const info = document.createElement("div");
       info.textContent = found.id
-        ? `${found.nick} (id ${found.id}) — выбери цвет:`
-        : `${found.nick} — id не найден, цвет привяжется к нику. Выбери цвет:`;
+        ? `${found.nick} (id ${found.id}) — выберите цвет или напишите заметку:`
+        : `${found.nick} — id не найден, запись привяжется к нику. Выберите цвет или напишите заметку:`;
       info.style.cssText = "color:rgba(255,255,255,.75);font-size:12px;margin:10px 0 6px;";
       const palette = document.createElement("div");
       palette.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
@@ -2094,7 +2165,41 @@ class PlayerNotesManager {
         });
         palette.appendChild(sw);
       }
-      addResult.append(info, palette);
+
+      // Заметка прямо здесь: игрока можно завести и без цвета — например,
+      // записать «шумный, играет агрессивно» до первой встречи за столом.
+      const area = document.createElement("textarea");
+      area.placeholder = "Заметка (необязательно)";
+      area.style.cssText = `
+        width: 100%; min-height: 56px; box-sizing: border-box; resize: vertical;
+        margin-top: 10px; background: rgba(255,255,255,.1);
+        border: 1px solid rgba(255,255,255,.2); border-radius: 6px; color: #fff;
+        padding: 7px; font: 13px/1.4 system-ui, sans-serif;
+      `;
+      area.addEventListener("keydown", (e) => e.stopPropagation());
+
+      const saveNote = document.createElement("button");
+      saveNote.textContent = "Сохранить заметку";
+      saveNote.style.cssText =
+        "margin-top:8px;padding:5px 12px;color:#fff;border:none;border-radius:6px;" +
+        "cursor:pointer;font-size:12px;background:rgba(99,102,241,.6);float:right;";
+      saveNote.addEventListener("click", () => {
+        const text = area.value.trim();
+        if (!text) {
+          showAddError("Напишите текст заметки или выберите цвет.");
+          return;
+        }
+        void this.setNoteTextFor(found.key, text, found.nick).then((ok) => {
+          if (ok) {
+            addInput.value = "";
+            addResult.replaceChildren();
+            flashSaved(found.key);
+            render();
+          } else showAddError("Не удалось сохранить — попробуйте ещё раз.");
+        });
+      });
+
+      addResult.append(info, palette, area, saveNote);
     };
 
     const showAddError = (text: string) => {
@@ -2154,11 +2259,11 @@ class PlayerNotesManager {
 
     const render = () => {
       list.replaceChildren();
-      const entries = this.nickColorEntries();
+      const entries = this.playerEntries();
       if (entries.length === 0) {
         const empty = document.createElement("div");
         empty.textContent =
-          "Пока нет ни одного цвета. Цвет задаётся в заметке игрока — кнопка ✎ на его плитке.";
+          "Пока пусто. Добавьте игрока по нику или id выше — или напишите заметку прямо в игре (кнопка ✎ на плитке).";
         empty.style.cssText = "color: rgba(255,255,255,.6); font-size: 13px; padding: 8px 0;";
         list.appendChild(empty);
         return;
@@ -2166,71 +2271,102 @@ class PlayerNotesManager {
       for (const entry of entries) {
         const row = document.createElement("div");
         row.style.cssText =
-          "display:flex;align-items:center;gap:10px;padding:6px 0;" +
+          "display:flex;align-items:center;gap:10px;padding:7px 0;" +
           "border-bottom:1px solid rgba(255,255,255,.08);";
 
-        const swatch = document.createElement("button");
-        swatch.title = "Сменить цвет";
-        swatch.style.cssText = `
-          width: 20px; height: 20px; border-radius: 50%; cursor: pointer; padding: 0;
-          border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto; background: ${entry.color};
-        `;
-        const toggle = () => {
-          expandedKey = expandedKey === entry.key ? null : entry.key;
+        const openColors = () => {
+          expandedKey = expandedKey === `c:${entry.key}` ? null : `c:${entry.key}`;
           render();
         };
-        swatch.addEventListener("click", toggle);
+        const openNote = () => {
+          expandedKey = expandedKey === `n:${entry.key}` ? null : `n:${entry.key}`;
+          render();
+        };
 
-        const nick = document.createElement("span");
+        const swatch = document.createElement("button");
+        swatch.title = entry.color ? "Сменить цвет" : "Назначить цвет";
+        swatch.style.cssText = `
+          width: 20px; height: 20px; border-radius: 50%; cursor: pointer; padding: 0; flex: 0 0 auto;
+          border: 1px ${entry.color ? "solid" : "dashed"} rgba(255,255,255,.35);
+          background: ${entry.color || "transparent"};
+        `;
+        swatch.addEventListener("click", openColors);
+
+        // Ник + превью заметки под ним: видно, кто это, не раскрывая строку.
+        const who = document.createElement("div");
+        who.style.cssText = "flex:1 1 auto;min-width:0;";
+        const nick = document.createElement("div");
         nick.textContent = entry.nick;
         nick.style.cssText =
-          "color:#fff;font-size:13px;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+          "color:#fff;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        who.appendChild(nick);
+        if (entry.text) {
+          const preview = document.createElement("div");
+          preview.textContent = entry.text;
+          preview.title = entry.text;
+          preview.style.cssText =
+            "color:rgba(255,255,255,.5);font-size:11px;margin-top:1px;" +
+            "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+          who.appendChild(preview);
+        }
 
         const idEl = document.createElement("span");
         idEl.textContent = entry.id ? `id ${entry.id}` : "без id";
         idEl.title = entry.id
-          ? "Цвет привязан к аккаунту и переживёт смену ника"
-          : "Игрок ещё не резолвился в id — цвет привязан к нику";
+          ? "Запись привязана к аккаунту и переживёт смену ника"
+          : "Игрок ещё не резолвился в id — запись привязана к нику";
         idEl.style.cssText = "color:rgba(255,255,255,.45);font-size:11px;flex:0 0 auto;";
 
-        const change = document.createElement("button");
-        change.textContent = "Изменить";
-        change.style.cssText =
+        const noteBtn = document.createElement("button");
+        noteBtn.textContent = entry.text ? "Заметка" : "+ заметка";
+        noteBtn.style.cssText =
           "padding:4px 10px;color:#fff;border:none;border-radius:6px;cursor:pointer;" +
           "font-size:12px;background:rgba(99,102,241,.3);flex:0 0 auto;";
-        change.addEventListener("click", toggle);
+        noteBtn.addEventListener("click", openNote);
+
+        const colorBtn = document.createElement("button");
+        colorBtn.textContent = "Цвет";
+        colorBtn.style.cssText =
+          "padding:4px 10px;color:#fff;border:none;border-radius:6px;cursor:pointer;" +
+          "font-size:12px;background:rgba(99,102,241,.3);flex:0 0 auto;";
+        colorBtn.addEventListener("click", openColors);
 
         const del = document.createElement("button");
         del.textContent = "✕";
-        del.title = "Убрать цвет";
+        del.title = "Удалить запись игрока целиком";
         del.style.cssText =
           "padding:4px 8px;color:#fff;border:none;border-radius:6px;cursor:pointer;" +
           "font-size:12px;background:rgba(239,68,68,.35);flex:0 0 auto;";
         del.addEventListener("click", () => {
-          void this.setNickColor(entry.key, "").then((ok) => {
+          // Подтверждение: удаляется и заметка тоже, а не только цвет.
+          const what = entry.text ? "заметку и цвет" : "цвет";
+          if (!window.confirm(`Удалить ${what} игрока ${entry.nick}?`)) return;
+          void this.deleteNoteEntry(entry.key).then((ok) => {
             if (ok) {
-              if (expandedKey === entry.key) expandedKey = null;
+              if (expandedKey?.endsWith(entry.key)) expandedKey = null;
               render();
             } else del.textContent = "ошибка";
           });
         });
 
-        row.append(swatch, nick, idEl);
+        row.append(swatch, who, idEl);
         if (savedKey === entry.key) {
           const saved = document.createElement("span");
           saved.textContent = "Сохранено ✓";
           saved.style.cssText = "color:#22c55e;font-size:11px;flex:0 0 auto;";
           row.appendChild(saved);
         }
-        row.append(change, del);
+        row.append(noteBtn, colorBtn, del);
         list.appendChild(row);
 
-        if (expandedKey === entry.key) {
+        // ── раскрытая палитра ──
+        if (expandedKey === `c:${entry.key}`) {
           const palette = document.createElement("div");
           palette.style.cssText =
             "display:flex;gap:8px;padding:8px 0 10px;flex-wrap:wrap;" +
             "border-bottom:1px solid rgba(255,255,255,.08);";
           const options = [
+            { css: "", name: "без цвета" },
             ...TAG_PRESETS.filter((p) => p.css).map((p) => ({ css: p.css, name: p.name })),
             ...this.customTags.map((css) => ({ css, name: "свой цвет" })),
           ];
@@ -2239,10 +2375,13 @@ class PlayerNotesManager {
             sw.title = opt.name;
             sw.style.cssText = `
               width: 22px; height: 22px; border-radius: 50%; cursor: pointer; padding: 0;
-              border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto; background: ${opt.css};
+              border: 1px ${opt.css ? "solid" : "dashed"} rgba(255,255,255,.35); flex: 0 0 auto;
+              background: ${opt.css || "transparent"}; color: rgba(255,255,255,.6);
+              display: grid; place-items: center; font-size: 11px;
               outline: ${opt.css === entry.color ? "2px solid #fff" : "2px solid transparent"};
               outline-offset: 2px;
             `;
+            if (!opt.css) sw.textContent = "✕";
             sw.addEventListener("click", () => {
               void this.setNickColor(entry.key, opt.css).then((ok) => {
                 if (ok) {
@@ -2256,14 +2395,69 @@ class PlayerNotesManager {
           }
           list.appendChild(palette);
         }
+
+        // ── раскрытый редактор заметки ──
+        if (expandedKey === `n:${entry.key}`) {
+          const editor = document.createElement("div");
+          editor.style.cssText =
+            "padding:8px 0 12px;border-bottom:1px solid rgba(255,255,255,.08);";
+          const area = document.createElement("textarea");
+          area.value = entry.text;
+          area.placeholder = "Что важно помнить об этом игроке";
+          area.style.cssText = `
+            width: 100%; min-height: 70px; box-sizing: border-box; resize: vertical;
+            background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2);
+            border-radius: 6px; color: #fff; padding: 8px; font: 13px/1.4 system-ui, sans-serif;
+          `;
+          // Хоткеи расширения не должны срабатывать при наборе текста.
+          area.addEventListener("keydown", (e) => e.stopPropagation());
+
+          const bar = document.createElement("div");
+          bar.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:8px;";
+          const cancel = document.createElement("button");
+          cancel.textContent = "Отмена";
+          cancel.style.cssText =
+            "padding:5px 12px;color:#fff;border:none;border-radius:6px;cursor:pointer;" +
+            "font-size:12px;background:rgba(255,255,255,.12);";
+          cancel.addEventListener("click", () => {
+            expandedKey = null;
+            render();
+          });
+          const save = document.createElement("button");
+          save.textContent = "Сохранить";
+          save.style.cssText =
+            "padding:5px 12px;color:#fff;border:none;border-radius:6px;cursor:pointer;" +
+            "font-size:12px;background:rgba(99,102,241,.6);";
+          const doSave = () => {
+            void this.setNoteTextFor(entry.key, area.value.trim()).then((ok) => {
+              if (ok) {
+                expandedKey = null;
+                flashSaved(entry.key);
+                render();
+              } else save.textContent = "не сохранилось";
+            });
+          };
+          save.addEventListener("click", doSave);
+          area.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              doSave();
+            }
+          });
+          bar.append(cancel, save);
+          editor.append(area, bar);
+          list.appendChild(editor);
+          area.focus();
+          area.setSelectionRange(area.value.length, area.value.length);
+        }
       }
     };
     render();
 
     const hint = document.createElement("div");
     hint.textContent =
-      "Изменения сохраняются сразу — отдельная кнопка сохранения не нужна. " +
-      "Новый цвет можно назначить и в заметке игрока (кнопка ✎ на плитке).";
+      "Цвет применяется сразу; заметка — по кнопке «Сохранить» (или Ctrl+Enter). " +
+      "То же самое можно делать прямо в игре — кнопка ✎ на плитке игрока.";
     hint.style.cssText = "color:rgba(255,255,255,.45);font-size:11px;margin:10px 0 12px;";
 
     const closeBtn = document.createElement("button");
