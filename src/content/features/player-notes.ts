@@ -1653,8 +1653,10 @@ class PlayerNotesManager {
         if (custom) {
           sw.addEventListener("contextmenu", (e) => {
             e.preventDefault();
-            this.customTags = this.customTags.filter((c) => c !== css);
-            void this.saveCustomTags();
+            // Подтверждение обязательно: ПКМ легко нажать случайно, а свой
+            // цвет потом не восстановить — его нет в пресетах.
+            if (!this.confirmRemoveCustomTag(css)) return;
+            this.removeCustomTag(css);
             if (selectedTag === css) selectedTag = "";
             if (selectedNickColor === css) selectedNickColor = "";
             rebuildAll();
@@ -1998,6 +2000,28 @@ class PlayerNotesManager {
     }
     const existingNickKey = this.nickKeysFor(raw)[0];
     return { key: existingNickKey ?? raw, nick: raw };
+  }
+
+  /**
+   * Спросить подтверждение на удаление своего цвета из палитры.
+   * Отдельным методом — вопрос задаётся из двух мест (палитра в заметке и
+   * менеджер), а формулировка должна быть одна: важно сказать, что записи
+   * игроков при этом не меняются, иначе удаление выглядит опаснее, чем есть.
+   */
+  private confirmRemoveCustomTag(css: string): boolean {
+    const used = Object.values(this.notes).filter(
+      (rec) => typeof rec !== "string" && (rec.nickColor === css || rec.tag === css),
+    ).length;
+    const tail = used
+      ? `\n\nИгроков с этим цветом: ${used}. Их цвет останется как есть — из палитры пропадёт только заготовка.`
+      : "";
+    return window.confirm(`Удалить свой цвет из палитры?${tail}`);
+  }
+
+  /** Убрать свой цвет из палитры (сама палитра — это customTags). */
+  private removeCustomTag(css: string): void {
+    this.customTags = this.customTags.filter((c) => c !== css);
+    void this.saveCustomTags();
   }
 
   /**
@@ -2454,6 +2478,54 @@ class PlayerNotesManager {
     };
     render();
 
+    /**
+     * Блок «Мои цвета» — управление собственной палитрой.
+     * Раньше свой цвет удалялся только правой кнопкой по кружку в диалоге
+     * заметки: об этом знал лишь тот, кто читал подсказку, и делалось это
+     * без подтверждения.
+     */
+    const myColors = document.createElement("div");
+    myColors.style.cssText = "margin-top:14px;";
+    const renderMyColors = () => {
+      myColors.replaceChildren();
+      if (this.customTags.length === 0) return;
+      const label = document.createElement("div");
+      label.textContent = "Мои цвета";
+      label.style.cssText = "color:rgba(255,255,255,.7);font-size:12px;margin-bottom:6px;";
+      const rowEl = document.createElement("div");
+      rowEl.style.cssText = "display:flex;gap:10px;flex-wrap:wrap;align-items:center;";
+      for (const css of this.customTags) {
+        const item = document.createElement("span");
+        item.style.cssText = "position:relative;width:24px;height:24px;flex:0 0 auto;";
+        const dot = document.createElement("span");
+        dot.style.cssText = `
+          position:absolute; inset:0; border-radius:50%; background:${css};
+          border:1px solid rgba(255,255,255,.3);
+        `;
+        const kill = document.createElement("button");
+        kill.textContent = "✕";
+        kill.title = "Удалить этот цвет из палитры";
+        kill.style.cssText = `
+          position:absolute; top:-6px; right:-6px; width:16px; height:16px;
+          border:none; border-radius:50%; cursor:pointer; padding:0;
+          background:rgba(239,68,68,.9); color:#fff; font-size:10px; line-height:1;
+          display:grid; place-items:center;
+        `;
+        kill.addEventListener("click", () => {
+          if (!this.confirmRemoveCustomTag(css)) return;
+          this.removeCustomTag(css);
+          renderMyColors();
+          // Раскрытая палитра игрока строится из тех же customTags —
+          // перерисовываем список, иначе удалённый цвет ещё виден в ней.
+          render();
+        });
+        item.append(dot, kill);
+        rowEl.appendChild(item);
+      }
+      myColors.append(label, rowEl);
+    };
+    renderMyColors();
+
     const hint = document.createElement("div");
     hint.textContent =
       "Цвет применяется сразу; заметка — по кнопке «Сохранить» (или Ctrl+Enter). " +
@@ -2488,7 +2560,7 @@ class PlayerNotesManager {
       if (e.target === overlay) close();
     });
 
-    modal.append(title, addWrap, list, hint, closeBtn);
+    modal.append(title, addWrap, list, myColors, hint, closeBtn);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
   }
