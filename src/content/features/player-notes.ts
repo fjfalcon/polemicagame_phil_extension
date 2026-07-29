@@ -1661,20 +1661,38 @@ class PlayerNotesManager {
         for (const { css, name } of TAG_PRESETS) row.appendChild(makeSwatch(css, name, false));
         for (const css of this.customTags) row.appendChild(makeSwatch(css, "свой цвет", true));
 
-        // Кнопка «+» — выбрать свой цвет и сохранить в палитру.
-        const add = document.createElement("button");
+        /**
+         * Кнопка «+» — выбрать свой цвет и сохранить в палитру.
+         *
+         * Инпут лежит ПОВЕРХ кнопки (прозрачный, во всю её площадь), клик
+         * попадает прямо в него. Раньше кнопка звала `picker.click()` у
+         * инпута размером 0×0 с pointer-events:none — Firefox считает такой
+         * элемент невидимым и системную палитру для него не открывает:
+         * кнопка нажималась, а окно выбора цвета не появлялось.
+         */
+        const wrap = document.createElement("span");
+        wrap.style.cssText =
+          "position: relative; width: 24px; height: 24px; flex: 0 0 auto; display: inline-block;";
+        wrap.title = "Добавить свой цвет";
+
+        const add = document.createElement("span");
         add.textContent = "+";
-        add.title = "Добавить свой цвет";
         add.style.cssText = `
-          width: 24px; height: 24px; border-radius: 50%; cursor: pointer; padding: 0;
+          position: absolute; inset: 0; border-radius: 50%;
           border: 1px dashed rgba(255,255,255,.4); background: transparent; color: #fff;
-          font-size: 15px; line-height: 1; flex: 0 0 auto;
+          font-size: 15px; line-height: 1; display: grid; place-items: center;
+          pointer-events: none;
         `;
+
         const picker = document.createElement("input");
         picker.type = "color";
         picker.value = "#3b82f6";
-        picker.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
-        add.addEventListener("click", () => picker.click());
+        // Инпут кликабелен и «видим» для браузера (нулевой прозрачности, но
+        // с реальными размерами) — рисует его собой лежащая под ним кнопка.
+        picker.style.cssText = `
+          position: absolute; inset: 0; width: 100%; height: 100%;
+          opacity: 0; cursor: pointer; padding: 0; border: none; background: none;
+        `;
         picker.addEventListener("change", () => {
           const c = picker.value;
           if (c && !this.customTags.includes(c) && !TAG_PRESETS.some((p) => p.css === c)) {
@@ -1684,7 +1702,8 @@ class PlayerNotesManager {
           setSel(c);
           rebuildAll();
         });
-        row.append(add, picker);
+        wrap.append(add, picker);
+        row.append(wrap);
       };
       paletteRebuilds.push(rebuild);
       rebuild();
