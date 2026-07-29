@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Polemica Notes",
-  "version": "8.1.66",
+  "version": "8.1.67",
   "description": "Заметки об игроках, статистика, цветные ники и удобные мелочи для Polemica Game: пауза, мьют, разбор матчей.",
   "permissions": [
     "storage",
@@ -13,7 +13,7 @@
     "https://*.polemicagame.com/*"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' ws://localhost:* wss://localhost:*"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://api.github.com ws://localhost:* wss://localhost:*"
   },
   "icons": {
     "16": "icon16.png",
