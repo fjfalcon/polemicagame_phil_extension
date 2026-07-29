@@ -1571,9 +1571,16 @@ class PlayerNotesManager {
     `;
 
     const modal = document.createElement("div");
+    /**
+     * max-height + overflow ОБЯЗАТЕЛЬНЫ. С 8.1.49 в окне две строки палитры
+     * (метка и цвет ника), и на невысоком экране кнопки «Сохранить» уезжали
+     * за нижний край без всякой возможности доскроллить: со стороны это
+     * выглядело как «кнопки сохранения нет вообще» (жалоба 29.07.2026).
+     */
     modal.style.cssText = `
       background: rgba(11, 27, 57, 0.97);
       padding: 20px; border-radius: 8px; min-width: 320px; max-width: 90vw;
+      max-height: 90vh; overflow-y: auto;
       border: 1px solid rgba(79, 129, 245, 0.3);
       box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
     `;
@@ -1844,7 +1851,14 @@ class PlayerNotesManager {
     closeBtn.addEventListener("click", close);
 
     const buttons = document.createElement("div");
-    buttons.style.cssText = "display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;";
+    // sticky: кнопки видны всегда, даже когда содержимое окна прокручивается.
+    // bottom: -20px компенсирует padding модалки, чтобы полоса кнопок липла
+    // ровно к её нижнему краю.
+    buttons.style.cssText = `
+      display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;
+      position: sticky; bottom: -20px; padding: 12px 0 0;
+      background: rgba(11, 27, 57, 0.97);
+    `;
     buttons.append(closeBtn, saveBtn, saveCloseBtn);
 
     // ── закрытие по Esc / Ctrl+Enter сохранить-и-закрыть / клик мимо окна ──
