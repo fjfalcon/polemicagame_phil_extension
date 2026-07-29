@@ -793,6 +793,30 @@ const BUTTON_LABEL = "👀 Очередь";
  * наблюдателя. Запись идемпотентна (инвариант AGENTS.md §4 п.1): если наша
  * кнопка уже на месте в этой панели — не трогаем ничего.
  */
+/**
+ * Наше место в панели — сразу ПОСЛЕ блока, в котором лежит кнопка «Играть».
+ *
+ * Раньше брали `panel.querySelector(SITE.searchPlayWrap)` — ПЕРВЫЙ подходящий
+ * блок. После конца игры сайт добавляет в панель ещё один такой же (с
+ * «Продолжить игру» / «Закончить игру»), и он идёт раньше: кнопка вставала
+ * слева от «Играть» и оставалась там даже после того, как тот блок исчезал.
+ */
+function anchorFor(panel: HTMLElement): HTMLElement | null {
+  const play = panel.querySelector<HTMLElement>(SITE.profileSearchButton);
+  // Поднимаемся от «Играть» до прямого ребёнка панели — это и есть якорь.
+  let node: HTMLElement | null = play;
+  while (node && node.parentElement && node.parentElement !== panel) {
+    node = node.parentElement;
+  }
+  if (node?.parentElement === panel) return node;
+
+  // Кнопки «Играть» нет (идёт поиск, собралась игра, скелетон загрузки):
+  // берём ПОСЛЕДНИЙ блок-обёртку — он и есть текущее состояние панели.
+  const wraps = panel.querySelectorAll<HTMLElement>(SITE.searchPlayWrap);
+  const last = wraps[wraps.length - 1];
+  return last?.parentElement === panel ? last : null;
+}
+
 function ensureButton(): void {
   if (!isSearchPage()) return;
   const panel = document.querySelector<HTMLElement>(SITE.searchPanel);
@@ -800,6 +824,20 @@ function ensureButton(): void {
   const existing = panel.querySelector<HTMLButtonElement>(`.${BUTTON_CLASS}`);
   if (existing) {
     button = existing;
+    // Панель могла перестроиться (конец игры добавляет свой блок) — тогда
+    // возвращаем кнопку правее «Играть».
+    //
+    // Условие намеренно слабое: двигаем, ТОЛЬКО если кнопка оказалась ПЕРЕД
+    // якорем. Проверка «стоит ли она вплотную за ним» вызывала бы перестановку
+    // на каждом тике, если сайт вставит между ними свой узел (в панели живут
+    // basemodal и служебные div) — а это самоподдерживающийся цикл мутаций,
+    // ровно то, что запрещает инвариант AGENTS.md §4 п.1.
+    const anchor = anchorFor(panel);
+    if (anchor && anchor !== existing) {
+      const pos = anchor.compareDocumentPosition(existing);
+      const buttonIsBefore = (pos & Node.DOCUMENT_POSITION_PRECEDING) !== 0;
+      if (buttonIsBefore) anchor.insertAdjacentElement("afterend", existing);
+    }
     syncButtonVisibility();
     return;
   }
@@ -822,13 +860,9 @@ function ensureButton(): void {
   `;
   btn.addEventListener("click", () => void runPeek());
 
-  // Сразу под кнопкой «Играть», если она есть; иначе в конец панели.
-  const playWrap = panel.querySelector<HTMLElement>(SITE.searchPlayWrap);
-  if (playWrap && playWrap.parentElement === panel) {
-    playWrap.insertAdjacentElement("afterend", btn);
-  } else {
-    panel.appendChild(btn);
-  }
+  const anchor = anchorFor(panel);
+  if (anchor) anchor.insertAdjacentElement("afterend", btn);
+  else panel.appendChild(btn);
   button = btn;
   syncButtonVisibility();
 }
