@@ -12,7 +12,7 @@
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
-import { getSettings, setSettings, onSettingsChanged } from "@core/settings";
+import { getSettings, setSettings, onSettingsChanged, DEFAULT_SETTINGS } from "@core/settings";
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
 import { escapeHtml } from "@core/escape";
 import { loadNotes, saveNotes, mergeNotes } from "@core/notes-store";
@@ -261,15 +261,20 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
         const count = Object.keys(notes).length;
-        if (count === 0) {
-          showPopupToast("Заметок пока нет — нечего выгружать", "error");
-          return;
-        }
+        // Настройки выгружаем ВСЕГДА, даже без заметок: у пользователей
+        // storage обнуляется при каждом переезде расширения (см. AGENTS.md
+        // §2б — ID распакованного Chrome-расширения зависит от пути папки, а
+        // временное дополнение Firefox стирается при закрытии браузера), и
+        // бэкап «только заметок» их от перенастройки не спасал.
+        const settings = await getSettings();
+        // Пароль OBS в файл НЕ кладём: бэкап уезжает в облака и мессенджеры.
+        const { obs_password: _pw, ...safeSettings } = settings;
         const payload = {
           app: "polemica-notes",
           type: "notes-backup",
           version: browser.runtime.getManifest().version,
           exportedAt: new Date().toISOString(),
+          settings: safeSettings,
           notes,
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -279,7 +284,9 @@ document.addEventListener("DOMContentLoaded", () => {
         a.download = `polemica-notes-backup-${new Date().toISOString().slice(0, 10)}.json`;
         a.click();
         URL.revokeObjectURL(url);
-        showPopupToast(`Экспортировано заметок: ${count}`);
+        showPopupToast(
+          count ? `Экспортировано: заметок ${count} + настройки` : "Экспортированы настройки",
+        );
       } catch (e) {
         log.error(SCOPE, "export failed", e);
         showPopupToast("Не удалось выгрузить заметки", "error");
@@ -298,8 +305,43 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
           throw new Error("bad format");
         }
+
+        // ── настройки из бэкапа (8.1.56) ──
+        // Берём ТОЛЬКО известные ключи и только с совпадающим типом: файл
+        // мог прийти от другого человека, из будущей версии или быть правлен
+        // руками. obs_password не импортируем — его там и нет.
+        let restoredSettings = 0;
+        const rawSettings = data?.settings;
+        if (rawSettings && typeof rawSettings === "object" && !Array.isArray(rawSettings)) {
+          const patch: Record<string, unknown> = {};
+          for (const [key, def] of Object.entries(DEFAULT_SETTINGS)) {
+            if (key === "obs_password" || !(key in rawSettings)) continue;
+            const value = (rawSettings as Record<string, unknown>)[key];
+            if (typeof value === typeof def) patch[key] = value;
+          }
+          if (Object.keys(patch).length) {
+            try {
+              await setSettings(patch as Partial<Settings>);
+              restoredSettings = Object.keys(patch).length;
+              const applied = await getSettings();
+              lastKnown = applied;
+              reflectPatch(applied);
+              const { obs_password: _pw, ...safe } = applied;
+              void broadcastToGameTabs({ type: "updateNotesSettings", settings: safe });
+            } catch (e) {
+              log.error(SCOPE, "settings import failed", e);
+              showPopupToast("Настройки из файла восстановить не удалось", "error");
+            }
+          }
+        }
+
         if (Object.keys(incoming).length === 0) {
-          showPopupToast("В файле нет заметок", "error");
+          showPopupToast(
+            restoredSettings
+              ? `Восстановлено настроек: ${restoredSettings}. Заметок в файле нет`
+              : "В файле нет заметок",
+            restoredSettings ? "success" : "error",
+          );
           return;
         }
 
@@ -321,10 +363,11 @@ document.addEventListener("DOMContentLoaded", () => {
           showPopupToast("Не удалось сохранить заметки", "error");
           return;
         }
+        const notesMsg = replaced
+          ? `Добавлено: ${added}, обновлено: ${replaced}`
+          : `Импортировано заметок: ${added}`;
         showPopupToast(
-          replaced
-            ? `Добавлено: ${added}, обновлено: ${replaced}`
-            : `Импортировано заметок: ${added}`,
+          restoredSettings ? `${notesMsg}; настроек: ${restoredSettings}` : notesMsg,
         );
       } catch (e) {
         log.error(SCOPE, "import failed", e);
