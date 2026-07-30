@@ -119,6 +119,11 @@ function consumeClickBudget(el: Element): boolean {
 }
 
 function clickAcceptButtons() {
+  // Приём игры существует ТОЛЬКО на странице поиска. Без гейта скан шёл
+  // каждую секунду на ЛЮБОЙ странице, включая игровую комнату, где точные
+  // тексты «готов»/«подтвердить» — это подписи ИГРОВЫХ кнопок: лишний CPU
+  // всегда и риск клика по чужому диалогу.
+  if (!location.pathname.startsWith("/game-search")) return;
   // Идёт разведка очереди — принимать игру нельзя ни в коем случае
   // (см. content/auto-accept-gate.ts).
   if (isAutoAcceptSuppressed()) return;

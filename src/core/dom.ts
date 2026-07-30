@@ -40,6 +40,23 @@ type DomSubscriber = (mutations: MutationRecord[]) => void;
  */
 const MAX_PENDING = 4000;
 
+/**
+ * Минимальная пауза между проходами подписчиков.
+ *
+ * Раньше flush шёл на каждый rAF (до 60 раз/с). В игровой комнате мутации не
+ * прекращаются никогда: тикает таймер речи, сайт постоянно меняет style/class
+ * на индикаторах звука — а мы подписаны ровно на эти атрибуты. Итог на слабой
+ * машине: подписчики (полный проход по плиткам, кликеры auto-start, чистка
+ * цветов) съедали главный поток, Vue сайта не успевал применять смену фаз и
+ * обрабатывать клики. Жалоба 30.07.2026: «лагает, фазы не переходят, стрелять
+ * не мог; удалил расширение — всё ок сразу» — страница ожила БЕЗ перезагрузки,
+ * то есть дело было именно в съеденном CPU.
+ *
+ * 250мс — незаметная для глаза задержка появления наших кнопок/цветов, но
+ * в непрерывном потоке мутаций это в ~15 раз меньше работы.
+ */
+const MIN_FLUSH_INTERVAL_MS = 250;
+
 /** Общий наблюдатель за всем документом с debounce и набором подписчиков. */
 class SharedDomObserver {
   private observer: MutationObserver | null = null;
@@ -49,6 +66,7 @@ class SharedDomObserver {
   private scheduled = false;
   private timerId: ReturnType<typeof setTimeout> | null = null;
   private lastSlowLog = 0;
+  private lastFlushAt = 0;
   private onVisibility: (() => void) | null = null;
 
   subscribe(fn: DomSubscriber): () => void {
@@ -103,6 +121,16 @@ class SharedDomObserver {
         this.timerId = null;
         this.flush();
       }, 500);
+      return;
+    }
+    // Дроссель: не раньше MIN_FLUSH_INTERVAL_MS после прошлого прохода.
+    // rAF внутри таймера сохраняет прежнее свойство «работаем в кадре».
+    const wait = this.lastFlushAt + MIN_FLUSH_INTERVAL_MS - performance.now();
+    if (wait > 0) {
+      this.timerId = setTimeout(() => {
+        this.timerId = null;
+        requestAnimationFrame(() => this.flush());
+      }, wait);
     } else {
       requestAnimationFrame(() => this.flush());
     }
@@ -110,6 +138,7 @@ class SharedDomObserver {
 
   private flush() {
     this.scheduled = false;
+    this.lastFlushAt = performance.now();
     const batch = this.pending;
     this.pending = [];
     if (this.dropped) {
