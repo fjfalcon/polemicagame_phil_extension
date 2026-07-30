@@ -167,7 +167,9 @@ export abstract class FloatingPanel {
   }
 
   // ───────────────────────── drag ─────────────────────────
-  private enableDrag(handle: HTMLElement, root: HTMLElement): void {
+  /** protected: наследник может навесить перетаскивание на свой элемент
+   *  (twitch-панель таскается за hover-полоску при скрытом заголовке). */
+  protected enableDrag(handle: HTMLElement, root: HTMLElement): void {
     let startX = 0;
     let startY = 0;
     let baseLeft = 0;

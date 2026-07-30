@@ -33,10 +33,8 @@ import type { TwitchControlMsg } from "@shared/types";
 const SCOPE = "twitch";
 
 const IRC_URL = "wss://irc-ws.chat.twitch.tv:443";
-/** Максимум хранимых сообщений (как в оригинале). */
-const MAX_MESSAGES = 100;
-/** Сколько последних сообщений рисуем (компактность, как в оригинале). */
-const VISIBLE_MESSAGES = 3;
+/** Максимум хранимых сообщений. */
+const MAX_MESSAGES = 200;
 /** Базовая задержка переподключения. */
 const RECONNECT_DELAY = 5000;
 /** Потолок попыток: опечатка в имени канала не должна долбить IRC вечно. */
@@ -45,9 +43,104 @@ let reconnectAttempts = 0;
 
 interface ChatMessage {
   username?: string;
+  /** Цвет ника из IRC-тега color (проверенный #rrggbb) либо undefined. */
+  color?: string;
+  /** Эмодзи-префиксы бейджей (мод/вип/саб/стример) — наши константы. */
+  badges?: string[];
   message: string;
   timestamp: Date;
   type: "chat" | "system";
+  /** Сообщение упоминает @канал — подсветить. */
+  mention?: boolean;
+}
+
+// ─────────────── пер-устройство настройки вида панели ───────────────
+
+/**
+ * Живут в localStorage СТРАНИЦЫ рядом с позицией панели (fp:*): это визуальные
+ * предпочтения конкретного устройства, как и позиция окна. ВНИМАНИЕ: страница
+ * принадлежит сайту, источник недоверенный — каждое поле санитизируется при
+ * чтении (см. карту хранилища в AGENTS.md §5).
+ */
+interface PanelPrefs {
+  headerHidden: boolean;
+  /** Прозрачность фона, 0..100 (0 — фона нет вовсе, «голые» строки чата). */
+  bgOpacity: number;
+  fontSize: "s" | "m" | "l";
+  timestamps: boolean;
+  highlightMentions: boolean;
+  /** Панель не ловит мышь вообще — оверлей «только чтение» поверх игры. */
+  clickThrough: boolean;
+  /** Сколько последних сообщений видно (окно чата; остальное — скроллом). */
+  visibleCount: number;
+}
+
+const PREFS_KEY = "fp:twitch-panel:prefs";
+const DEFAULT_PREFS: PanelPrefs = {
+  headerHidden: false,
+  bgOpacity: 95,
+  fontSize: "m",
+  timestamps: true,
+  highlightMentions: true,
+  clickThrough: false,
+  visibleCount: 10,
+};
+const FONT_PX = { s: 11, m: 12.5, l: 14 } as const;
+const VISIBLE_VARIANTS = [3, 5, 10, 25, 50] as const;
+
+function loadPrefs(): PanelPrefs {
+  let raw: Partial<PanelPrefs> | null = null;
+  try {
+    raw = JSON.parse(localStorage.getItem(PREFS_KEY) || "null");
+  } catch {
+    raw = null;
+  }
+  const d = DEFAULT_PREFS;
+  if (!raw || typeof raw !== "object") return { ...d };
+  return {
+    headerHidden: raw.headerHidden === true,
+    bgOpacity:
+      typeof raw.bgOpacity === "number" && Number.isFinite(raw.bgOpacity)
+        ? Math.min(100, Math.max(0, Math.round(raw.bgOpacity)))
+        : d.bgOpacity,
+    fontSize: raw.fontSize === "s" || raw.fontSize === "l" ? raw.fontSize : "m",
+    timestamps: raw.timestamps !== false,
+    highlightMentions: raw.highlightMentions !== false,
+    clickThrough: raw.clickThrough === true,
+    visibleCount: (VISIBLE_VARIANTS as readonly number[]).includes(raw.visibleCount as number)
+      ? (raw.visibleCount as number)
+      : d.visibleCount,
+  };
+}
+
+function savePrefs(p: PanelPrefs): void {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+  } catch {
+    /* приватный режим / квота */
+  }
+}
+
+/** Дефолтная палитра цветов ников Twitch — когда стример не выбрал свой. */
+const NICK_COLORS = [
+  "#FF4500",
+  "#2E8B57",
+  "#DAA520",
+  "#D2691E",
+  "#5F9EA0",
+  "#1E90FF",
+  "#FF69B4",
+  "#9ACD32",
+  "#00FF7F",
+  "#B22222",
+  "#FF7F50",
+  "#8A2BE2",
+] as const;
+
+function fallbackNickColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return NICK_COLORS[Math.abs(h) % NICK_COLORS.length];
 }
 
 function formatTime(date: Date): string {
@@ -73,6 +166,15 @@ function hasActiveGameInterface(): boolean {
 class TwitchChatPanel extends FloatingPanel {
   private messagesEl: HTMLElement | null = null;
   private messages: ChatMessage[] = [];
+  private prefs: PanelPrefs = loadPrefs();
+  /** Пользователь у нижнего края чата (автоскролл включён). */
+  private atBottom = true;
+  /** Непрочитанные, пока пользователь листает историю. */
+  private unseen = 0;
+  private newBtn: HTMLElement | null = null;
+  private gearMenu: HTMLElement | null = null;
+  private hoverStrip: HTMLElement | null = null;
+  private unlockChip: HTMLElement | null = null;
 
   /** Панель смонтирована и видима (не hide()). */
   get isShown(): boolean {
@@ -84,8 +186,8 @@ class TwitchChatPanel extends FloatingPanel {
       storageKey: "twitch-panel",
       title: "Twitch Chat",
       width: 280,
-      height: 150,
-      minWidth: 250,
+      height: 180,
+      minWidth: 220,
       minHeight: 120,
       resizable: true,
       className: "twitch-chat-panel",
@@ -93,6 +195,7 @@ class TwitchChatPanel extends FloatingPanel {
   }
 
   protected renderBody(body: HTMLElement): void {
+    this.addHeaderButton("⚙", () => this.toggleGearMenu(), "Настройки панели");
     // Кнопка закрытия в заголовке: прячет панель и выключает фичу в настройках.
     this.addHeaderButton(
       "×",
@@ -108,6 +211,7 @@ class TwitchChatPanel extends FloatingPanel {
       flexDirection: "column",
       height: "100%",
       overflow: "hidden",
+      position: "relative",
     } as CSSStyleDeclaration);
 
     const messagesEl = document.createElement("div");
@@ -119,62 +223,442 @@ class TwitchChatPanel extends FloatingPanel {
       background: "rgba(0,0,0,.12)",
       borderRadius: "8px",
     } as CSSStyleDeclaration);
+    messagesEl.addEventListener("scroll", () => {
+      const nearBottom =
+        messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 24;
+      if (nearBottom === this.atBottom) return;
+      this.atBottom = nearBottom;
+      if (nearBottom) this.unseen = 0;
+      this.updateNewBtn();
+    });
 
-    wrap.appendChild(messagesEl);
+    // «↓ N новых» — появляется, когда листаешь историю, а чат живёт дальше.
+    const newBtn = document.createElement("button");
+    Object.assign(newBtn.style, {
+      position: "absolute",
+      bottom: "6px",
+      left: "50%",
+      transform: "translateX(-50%)",
+      display: "none",
+      padding: "3px 10px",
+      border: "none",
+      borderRadius: "10px",
+      background: "rgba(99,102,241,.9)",
+      color: "#fff",
+      font: "600 11px system-ui, sans-serif",
+      cursor: "pointer",
+      zIndex: "3",
+    } as CSSStyleDeclaration);
+    newBtn.addEventListener("click", () => {
+      this.atBottom = true;
+      this.unseen = 0;
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      this.updateNewBtn();
+    });
+
+    wrap.append(messagesEl, newBtn);
     body.appendChild(wrap);
 
     this.messagesEl = messagesEl;
+    this.newBtn = newBtn;
+
+    this.buildHoverStrip();
+    this.buildUnlockChip();
+    this.buildGearMenu();
+    this.applyChrome();
     this.renderMessages();
   }
 
-  addChatMessage(username: string, message: string): void {
-    this.messages.push({ username, message, timestamp: new Date(), type: "chat" });
+  // ── добавление сообщений ──
+
+  addChatMessage(
+    username: string,
+    message: string,
+    extra?: { color?: string; badges?: string[] },
+  ): void {
+    // Граница слова обязательна: `@foo` не должен подсвечиваться в `@foobar`
+    // (ники твича — [a-z0-9_], поэтому проверка следующего символа достаточна).
+    const lower = message.toLowerCase();
+    const needle = `@${channelName.toLowerCase()}`;
+    let mention = false;
+    if (channelName) {
+      let from = 0;
+      while (!mention) {
+        const i = lower.indexOf(needle, from);
+        if (i === -1) break;
+        const next = lower[i + needle.length];
+        if (!next || !/[a-z0-9_]/.test(next)) mention = true;
+        from = i + 1;
+      }
+    }
+    this.messages.push({
+      username,
+      message,
+      color: extra?.color,
+      badges: extra?.badges,
+      mention,
+      timestamp: new Date(),
+      type: "chat",
+    });
     if (this.messages.length > MAX_MESSAGES) this.messages.shift();
+    if (!this.atBottom) this.bumpUnseen();
     this.renderMessages();
   }
 
   addSystemMessage(message: string): void {
     this.messages.push({ message, timestamp: new Date(), type: "system" });
     if (this.messages.length > MAX_MESSAGES) this.messages.shift();
+    // Тоже «непрочитанное»: иначе системная строка сдвигала окно рендера,
+    // не увеличив его (находка ревью №7).
+    if (!this.atBottom) this.bumpUnseen();
     this.renderMessages();
   }
 
-  /** Перерисовать последние сообщения. ВСЁ пользовательское — через escapeHtml. */
+  /** После show() чат должен стоять на дне, если пользователь его не листал:
+   *  рендер в display:none даёт scrollHeight=0, и доскролл терялся. */
+  show(): void {
+    super.show();
+    if (this.atBottom && this.messagesEl) {
+      this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+    }
+  }
+
+  // ── рендер ──
+
+  /** Перерисовать сообщения. ВСЁ пользовательское — через escapeHtml. */
   private renderMessages(): void {
     const el = this.messagesEl;
     if (!el) return;
+    const p = this.prefs;
+    const base = FONT_PX[p.fontSize];
 
     if (this.messages.length === 0) {
-      el.innerHTML =
-        '<div class="twitch-no-messages" style="text-align:center;color:#6c757d;font-size:12px;padding:20px;font-style:italic;">Чат пуст</div>';
+      el.innerHTML = `<div class="twitch-no-messages" style="text-align:center;color:#6c757d;font-size:${base}px;padding:20px;font-style:italic;">Чат пуст</div>`;
       return;
     }
 
-    const recent = this.messages.slice(-VISIBLE_MESSAGES);
+    // Позицию скролла сохраняем: innerHTML-перерисовка не должна дёргать
+    // историю, которую пользователь читает.
+    const keepScrollTop = el.scrollTop;
+
+    // Пока пользователь читает историю, окно рендера РАСШИРЯЕТСЯ на unseen:
+    // начало окна стоит на месте, новые строки дописываются снизу — иначе
+    // slice(-N) сдвигался с каждым сообщением и текст уезжал из-под глаз
+    // (находка ревью №2). После возврата вниз unseen=0 — окно обычное.
+    const windowSize = Math.max(p.visibleCount, 1) + (this.atBottom ? 0 : this.unseen);
+    const recent = this.messages.slice(-windowSize);
     el.innerHTML = recent
       .map((msg) => {
-        const time = escapeHtml(formatTime(msg.timestamp));
+        const time = p.timestamps
+          ? `<span class="twitch-timestamp" style="color:rgba(255,255,255,.45);font-size:${base - 2}px;margin-left:4px;">${escapeHtml(formatTime(msg.timestamp))}</span>`
+          : "";
         if (msg.type === "system") {
           return `
-            <div class="twitch-system-message" style="color:rgba(255,255,255,.55);font-size:11px;font-style:italic;text-align:center;padding:4px;margin:4px 0;">
-              ${escapeHtml(msg.message)}
-              <span class="twitch-timestamp" style="color:rgba(255,255,255,.45);font-size:10px;margin-left:4px;">${time}</span>
+            <div class="twitch-system-message" style="color:rgba(255,255,255,.55);font-size:${base - 1}px;font-style:italic;text-align:center;padding:4px;margin:4px 0;">
+              ${escapeHtml(msg.message)}${time}
             </div>`;
         }
+        const color = msg.color || fallbackNickColor(msg.username ?? "");
+        // Бейджи — только наши эмодзи-константы из BADGE_ICONS, не ввод сети.
+        const badges = (msg.badges ?? [])
+          .map((b) => `<span style="font-size:${base - 2}px;margin-right:3px;">${b}</span>`)
+          .join("");
+        const highlight =
+          msg.mention && p.highlightMentions
+            ? "background:rgba(255,170,0,.16);border-left:2px solid rgba(255,170,0,.65);padding-left:4px;border-radius:3px;"
+            : "";
         return `
-          <div class="twitch-message" style="margin-bottom:2px;padding:2px 0;">
-            <span class="twitch-username" style="font-weight:600;color:rgba(210,190,255,.95);font-size:12px;margin-right:6px;">${escapeHtml(
+          <div class="twitch-message" style="margin-bottom:2px;padding:2px 0;${highlight}">
+            ${badges}<span class="twitch-username" style="font-weight:600;color:${color};font-size:${base}px;margin-right:6px;">${escapeHtml(
               msg.username ?? "",
             )}:</span>
-            <span class="twitch-message-text" style="color:#fff;font-size:12px;word-wrap:break-word;line-height:1.4;">${escapeHtml(
+            <span class="twitch-message-text" style="color:#fff;font-size:${base}px;word-wrap:break-word;line-height:1.4;">${escapeHtml(
               msg.message,
             )}</span>
-            <span class="twitch-timestamp" style="color:rgba(255,255,255,.45);font-size:10px;margin-left:4px;">${time}</span>
+            ${time}
           </div>`;
       })
       .join("");
 
-    el.scrollTop = el.scrollHeight;
+    if (this.atBottom) el.scrollTop = el.scrollHeight;
+    else el.scrollTop = keepScrollTop;
+    this.updateNewBtn();
+  }
+
+  /** unseen не может превышать буфер: дальше якорь окна всё равно теряется
+   *  (shift выкидывает старые), а «↓ N нов.» не должен обещать больше,
+   *  чем реально можно прочитать. */
+  private bumpUnseen(): void {
+    this.unseen = Math.min(this.unseen + 1, MAX_MESSAGES - this.prefs.visibleCount);
+  }
+
+  private updateNewBtn(): void {
+    const btn = this.newBtn;
+    if (!btn) return;
+    const want = this.unseen > 0 ? "block" : "none";
+    if (btn.style.display !== want) btn.style.display = want;
+    const label = `↓ ${this.unseen} нов.`;
+    if (btn.textContent !== label) btn.textContent = label;
+  }
+
+  // ── применение настроек вида ──
+
+  private setPrefs(patch: Partial<PanelPrefs>, rerender = false): void {
+    this.prefs = { ...this.prefs, ...patch };
+    savePrefs(this.prefs);
+    this.applyChrome();
+    if (rerender) this.renderMessages();
+  }
+
+  /** Фон/заголовок/сквозь-клики. Идемпотентно можно не делать: зовётся только
+   *  по действию пользователя в меню, не из наблюдателей DOM. */
+  private applyChrome(): void {
+    const p = this.prefs;
+    const a = p.bgOpacity / 100;
+    this.root.style.background = `rgba(30,31,38,${a.toFixed(2)})`;
+    this.root.style.borderColor = `rgba(255,255,255,${(0.12 * a).toFixed(3)})`;
+    this.root.style.boxShadow = a < 0.2 ? "none" : "0 8px 30px rgba(0,0,0,.45)";
+    if (this.messagesEl) {
+      this.messagesEl.style.background = a < 0.3 ? "transparent" : "rgba(0,0,0,.12)";
+    }
+    this.header.style.display = p.headerHidden ? "none" : "flex";
+    if (this.hoverStrip) {
+      this.hoverStrip.style.display = p.headerHidden && !p.clickThrough ? "flex" : "none";
+    }
+    // Сквозь-клики: панель не ловит мышь; кликабелен только чип-замок.
+    this.root.style.pointerEvents = p.clickThrough ? "none" : "";
+    if (this.unlockChip) this.unlockChip.style.display = p.clickThrough ? "grid" : "none";
+    if (p.clickThrough && this.gearMenu) this.gearMenu.style.display = "none";
+  }
+
+  // ── скрытый заголовок: hover-полоска ──
+
+  private buildHoverStrip(): void {
+    const strip = document.createElement("div");
+    Object.assign(strip.style, {
+      position: "absolute",
+      top: "0",
+      left: "0",
+      right: "0",
+      height: "18px",
+      zIndex: "5",
+      display: "none",
+      alignItems: "center",
+      justifyContent: "flex-end",
+      gap: "4px",
+      padding: "0 4px",
+      cursor: "move",
+      opacity: "0",
+      transition: "opacity .15s",
+      background: "linear-gradient(rgba(0,0,0,.6), transparent)",
+    } as CSSStyleDeclaration);
+    strip.addEventListener("mouseenter", () => (strip.style.opacity = "1"));
+    strip.addEventListener("mouseleave", () => (strip.style.opacity = "0"));
+
+    const mkBtn = (label: string, title: string, onClick: () => void) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.title = title;
+      Object.assign(b.style, {
+        background: "transparent",
+        border: "none",
+        color: "#fff",
+        cursor: "pointer",
+        fontSize: "11px",
+        lineHeight: "1",
+        padding: "2px 4px",
+      } as CSSStyleDeclaration);
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    strip.append(
+      mkBtn("⚙", "Настройки панели", () => this.toggleGearMenu()),
+      mkBtn("▾", "Показать заголовок", () => this.setPrefs({ headerHidden: false })),
+    );
+
+    // Полоска — ручка перетаскивания, когда заголовка нет.
+    this.enableDrag(strip, this.root);
+    this.root.appendChild(strip);
+    this.hoverStrip = strip;
+  }
+
+  // ── сквозь-клики: чип-замок ──
+
+  private buildUnlockChip(): void {
+    const chip = document.createElement("button");
+    chip.textContent = "🔓";
+    chip.title = "Чат в режиме «сквозь клики». Нажмите, чтобы вернуть управление панелью";
+    Object.assign(chip.style, {
+      position: "absolute",
+      top: "4px",
+      right: "4px",
+      zIndex: "7",
+      width: "22px",
+      height: "22px",
+      display: "none",
+      placeItems: "center",
+      border: "none",
+      borderRadius: "6px",
+      background: "rgba(0,0,0,.55)",
+      fontSize: "12px",
+      cursor: "pointer",
+      opacity: "0.35",
+      transition: "opacity .15s",
+      // Родитель в режиме сквозь-кликов имеет pointer-events:none; у чипа —
+      // явный auto, поэтому он единственный остаётся кликабельным.
+      pointerEvents: "auto",
+    } as CSSStyleDeclaration);
+    chip.addEventListener("mouseenter", () => (chip.style.opacity = "1"));
+    chip.addEventListener("mouseleave", () => (chip.style.opacity = "0.35"));
+    chip.addEventListener("click", () => this.setPrefs({ clickThrough: false }));
+    this.root.appendChild(chip);
+    this.unlockChip = chip;
+  }
+
+  // ── меню настроек ──
+
+  private toggleGearMenu(): void {
+    const menu = this.gearMenu;
+    if (!menu) return;
+    const opening = menu.style.display === "none";
+    // Контролы пересобираются при КАЖДОМ открытии: prefs меняются и мимо
+    // меню (чип-замок, «▾» на полоске), и чекбоксы иначе врали (ревью №3).
+    if (opening) this.populateGearMenu(menu);
+    menu.style.display = opening ? "block" : "none";
+  }
+
+  private buildGearMenu(): void {
+    const menu = document.createElement("div");
+    Object.assign(menu.style, {
+      position: "absolute",
+      top: "34px",
+      right: "6px",
+      zIndex: "6",
+      display: "none",
+      width: "210px",
+      padding: "10px",
+      background: "#23242c",
+      border: "1px solid rgba(255,255,255,.15)",
+      borderRadius: "8px",
+      boxShadow: "0 8px 24px rgba(0,0,0,.5)",
+      font: "12px/1.5 system-ui, sans-serif",
+      // Панель может быть ниже меню (дефолт 180px, а у root overflow:hidden) —
+      // без ограничения высоты нижние пункты недостижимы (блокер ревью).
+      maxHeight: "calc(100% - 44px)",
+      overflowY: "auto",
+      boxSizing: "border-box",
+    } as CSSStyleDeclaration);
+
+    this.root.appendChild(menu);
+    this.gearMenu = menu;
+  }
+
+  /** Наполнить меню актуальными значениями prefs (зовётся на каждое открытие). */
+  private populateGearMenu(menu: HTMLElement): void {
+    menu.replaceChildren();
+
+    const row = (label: string, control: HTMLElement) => {
+      const r = document.createElement("div");
+      r.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;";
+      const l = document.createElement("span");
+      l.textContent = label;
+      l.style.color = "rgba(255,255,255,.85)";
+      r.append(l, control);
+      return r;
+    };
+    const check = (value: boolean, onChange: (v: boolean) => void) => {
+      const c = document.createElement("input");
+      c.type = "checkbox";
+      c.checked = value;
+      c.style.cursor = "pointer";
+      c.addEventListener("change", () => onChange(c.checked));
+      return c;
+    };
+
+    // Прозрачность фона.
+    const range = document.createElement("input");
+    range.type = "range";
+    range.min = "0";
+    range.max = "100";
+    range.value = String(this.prefs.bgOpacity);
+    range.style.cssText = "width:100px;cursor:pointer;";
+    // input — только вид (живой предпросмотр при перетаскивании);
+    // запись в localStorage — один раз, по отпусканию (ревью №4).
+    range.addEventListener("input", () => {
+      this.prefs = { ...this.prefs, bgOpacity: Number(range.value) };
+      this.applyChrome();
+    });
+    range.addEventListener("change", () => savePrefs(this.prefs));
+    menu.appendChild(row("Фон", range));
+
+    // Размер шрифта.
+    const fonts = document.createElement("span");
+    (["s", "m", "l"] as const).forEach((size) => {
+      const b = document.createElement("button");
+      b.textContent = size.toUpperCase();
+      b.style.cssText =
+        "border:1px solid rgba(255,255,255,.25);background:transparent;color:#fff;" +
+        "cursor:pointer;padding:2px 7px;margin-left:4px;border-radius:5px;font-size:11px;";
+      const sync = () => {
+        b.style.background =
+          this.prefs.fontSize === size ? "rgba(99,102,241,.5)" : "transparent";
+      };
+      b.addEventListener("click", () => {
+        this.setPrefs({ fontSize: size }, true);
+        fonts.querySelectorAll("button").forEach((x) => (x.style.background = "transparent"));
+        sync();
+      });
+      sync();
+      fonts.appendChild(b);
+    });
+    menu.appendChild(row("Шрифт", fonts));
+
+    // Сколько сообщений видно.
+    const counts = document.createElement("select");
+    counts.style.cssText =
+      "background:#1e1f26;color:#fff;border:1px solid rgba(255,255,255,.25);" +
+      "border-radius:5px;padding:2px 4px;cursor:pointer;font-size:11px;";
+    for (const n of VISIBLE_VARIANTS) {
+      const o = document.createElement("option");
+      o.value = String(n);
+      o.textContent = String(n);
+      if (n === this.prefs.visibleCount) o.selected = true;
+      counts.appendChild(o);
+    }
+    counts.addEventListener("change", () =>
+      this.setPrefs({ visibleCount: Number(counts.value) }, true),
+    );
+    menu.appendChild(row("Сообщений", counts));
+
+    menu.appendChild(
+      row(
+        "Заголовок",
+        check(!this.prefs.headerHidden, (v) => this.setPrefs({ headerHidden: !v })),
+      ),
+    );
+    menu.appendChild(
+      row(
+        "Время сообщений",
+        check(this.prefs.timestamps, (v) => this.setPrefs({ timestamps: v }, true)),
+      ),
+    );
+    menu.appendChild(
+      row(
+        "Подсветка @обращений",
+        check(this.prefs.highlightMentions, (v) => this.setPrefs({ highlightMentions: v }, true)),
+      ),
+    );
+    menu.appendChild(
+      row(
+        "Сквозь клики",
+        check(this.prefs.clickThrough, (v) => this.setPrefs({ clickThrough: v })),
+      ),
+    );
+
+    const hint = document.createElement("div");
+    hint.textContent = "«Сквозь клики»: чат перестаёт ловить мышь; выход — замок в углу панели.";
+    hint.style.cssText = "color:rgba(255,255,255,.45);font-size:10px;line-height:1.4;";
+    menu.appendChild(hint);
   }
 }
 
@@ -356,6 +840,8 @@ function connectToTwitch(): void {
 
     ws.onopen = () => {
       log.debug(SCOPE, "IRC websocket open");
+      // Теги дают цвет ника, display-name и бейджи. Доступны и анониму.
+      ws.send("CAP REQ :twitch.tv/tags");
       // Анонимный вход.
       ws.send("PASS SCHMOOPIIE");
       ws.send(`NICK justinfan${Math.floor(Math.random() * 100000)}`);
@@ -431,15 +917,67 @@ function handleTwitchData(data: string): void {
   }
 }
 
+/** Экранирование значений IRC-тегов (IRCv3): \s → пробел, \: → «;» и т.д. */
+function unescapeTag(value: string): string {
+  return value.replace(/\\(.)/g, (_, c: string) => {
+    if (c === "s") return " ";
+    if (c === ":") return ";";
+    if (c === "r") return "\r";
+    if (c === "n") return "\n";
+    return c;
+  });
+}
+
+function parseTags(raw: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw) return out;
+  for (const pair of raw.split(";")) {
+    const eq = pair.indexOf("=");
+    if (eq === -1) out[pair] = "";
+    else out[pair.slice(0, eq)] = unescapeTag(pair.slice(eq + 1));
+  }
+  return out;
+}
+
+/** Бейджи → наши эмодзи-префиксы (константы, в HTML попадают только они). */
+const BADGE_ICONS: Record<string, string> = {
+  broadcaster: "🎥",
+  moderator: "🛡",
+  vip: "💎",
+  subscriber: "★",
+  founder: "★",
+};
+
+function parseBadges(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const out: string[] = [];
+  for (const item of raw.split(",")) {
+    const name = item.split("/")[0];
+    const icon = BADGE_ICONS[name];
+    if (icon && !out.includes(icon)) out.push(icon);
+  }
+  return out;
+}
+
 function parsePrivMsg(line: string): void {
   try {
+    // С CAP tags строка может начинаться с @key=value;…, дальше как раньше:
     // :username!username@username.tmi.twitch.tv PRIVMSG #channel :message
-    const match = line.match(/:([^!]+)![^@]+@[^\s]+ PRIVMSG #[^\s]+ :(.+)/);
-    if (match) {
-      const username = match[1];
-      const message = match[2];
-      panel?.addChatMessage(username, message);
+    const match = line.match(/^(?:@(\S+) )?:([^!]+)![^@]+@[^\s]+ PRIVMSG #[^\s]+ :(.+)/);
+    if (!match) return;
+    const tags = parseTags(match[1]);
+    // display-name сохраняет регистр и юникод; пустой (или из одних пробелов
+    // после \s-unescape) у части аккаунтов — тогда логин.
+    const username = (tags["display-name"] || "").trim() || match[2];
+    let message = match[3];
+    // /me приходит как \x01ACTION текст\x01 — управляющие байты в чат не пускаем.
+    if (message.startsWith("\u0001ACTION ")) {
+      message = message.slice(8).replace(/\u0001$/, "").trim();
     }
+    // Цвет уходит в inline-style — принимаем СТРОГО #rrggbb, ничего больше.
+    const rawColor = tags["color"] || "";
+    const color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : undefined;
+    panel?.addChatMessage(username, message, { color, badges: parseBadges(tags["badges"]) });
   } catch (e) {
     log.error(SCOPE, "failed to parse PRIVMSG", e);
   }
