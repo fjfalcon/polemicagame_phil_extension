@@ -171,10 +171,20 @@ export function mergeNotes(
       merged[targetKey] = safe;
       added++;
     } else if (noteTimestamp(safe) > noteTimestamp(existing)) {
-      // Слив в id-ключ сохраняет nick-поле существующей записи.
-      const nick =
-        typeof existing !== "string" && existing.nick ? { nick: existing.nick } : {};
-      merged[targetKey] = typeof safe === "string" ? safe : { ...safe, ...nick };
+      // Слив в id-ключ сохраняет nick-поле существующей записи. Цвет и метка
+      // наследуются по правилу «непустое побеждает пустое»: более свежая
+      // запись без цвета — это обычно заметка, сохранённая, пока цвет жил в
+      // другой записи игрока, а не намеренное снятие цвета. Раньше замена
+      // молча теряла nickColor/tag существующей записи.
+      const keep: Partial<NoteRecord> = {};
+      if (typeof existing !== "string") {
+        if (existing.nick) keep.nick = existing.nick;
+        if (typeof safe !== "string") {
+          if (!safe.tag && existing.tag) keep.tag = existing.tag;
+          if (!safe.nickColor && existing.nickColor) keep.nickColor = existing.nickColor;
+        }
+      }
+      merged[targetKey] = typeof safe === "string" ? safe : { ...safe, ...keep };
       replaced++;
     }
   }

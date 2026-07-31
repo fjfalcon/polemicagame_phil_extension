@@ -579,8 +579,37 @@ class PlayerNotesManager {
       // Для ЧТЕНИЯ id-ключ приоритетен, но если записи под ним ещё нет,
       // а под ником есть — читаем ник (миграция могла не успеть).
       if (this.notes[key] !== undefined || this.notes[username] === undefined) return key;
+      return username;
     }
-    return username;
+    if (this.notes[username] !== undefined) return username;
+    // id не резолвлен (статистика ещё грузится или профиль скрыт), записи под
+    // ником нет — ищем id-запись по её полю nick. Без этого игроки, раскрашенные
+    // через менеджер (запись сразу на id-ключе), стояли белыми до резолва id,
+    // а со скрытым профилем — вечно.
+    // Компромисс: rec.nick — исторический; если ник освободили и занял другой
+    // игрок, до резолва id совпадение отдаст чужую запись (та же слабая
+    // идентичность, что у легаси-ник-ключей; резолв id её вытесняет).
+    return this.idKeyByNick().get(username.toLowerCase()) ?? username;
+  }
+
+  /** Кэш «lowercase-ник → id-ключ записи»; TTL, а не инвалидация по каждому
+   *  из десятка мест мутации this.notes: секунда устаревания не видна глазу,
+   *  а пропущенная инвалидация — вечный баг. */
+  private nickIndexCache: { at: number; map: Map<string, string> } | null = null;
+
+  private idKeyByNick(): Map<string, string> {
+    const now = Date.now();
+    if (this.nickIndexCache && now - this.nickIndexCache.at < 1000) {
+      return this.nickIndexCache.map;
+    }
+    const map = new Map<string, string>();
+    for (const [k, v] of Object.entries(this.notes)) {
+      if (isIdKey(k) && v && typeof v !== "string" && v.nick) {
+        map.set(v.nick.toLowerCase(), k);
+      }
+    }
+    this.nickIndexCache = { at: now, map };
+    return map;
   }
 
   private getNote(username: string): NoteRecord | string | undefined {
@@ -671,8 +700,14 @@ class PlayerNotesManager {
     for (const loser of losers) {
       if (ts(loser) === ts(winner) && loser.text && loser.text !== winner.text) {
         winner.text = winner.text ? `${winner.text}\n[слито: ${loser.text}]` : loser.text;
-        if (!winner.tag && loser.tag) winner.tag = loser.tag;
       }
+      // Цвет и метка наследуются БЕЗУСЛОВНО (непустое побеждает пустое):
+      // свежая запись без цвета почти всегда означает «заметку сохранили,
+      // пока цвет жил в другой записи этого же игрока», а не «цвет сняли».
+      // Раньше слияние молча теряло цвет навсегда (жалоба 31.07.2026:
+      // «~50 из 200 раскрашенных ников стали белыми»).
+      if (!winner.tag && loser.tag) winner.tag = loser.tag;
+      if (!winner.nickColor && loser.nickColor) winner.nickColor = loser.nickColor;
     }
 
     fresh[key] = { ...winner, nick: username };
@@ -1781,9 +1816,13 @@ class PlayerNotesManager {
       }
       const value = textarea.value.trim();
       // Пишем по id-ключу, если статистика уже резолвила игрока: такая заметка
-      // переживёт смену ника и не перепутает тёзок. Иначе — легаси-ник.
+      // переживёт смену ника и не перепутает тёзок. Если id не резолвлен, но
+      // модалка открылась на id-записи, найденной по нику (фолбэк noteKeyFor),
+      // пишем в неё же — иначе рядом рождался дубль под ником, который при
+      // миграции побеждал по времени и стирал цвет игрока.
       const id = this.noteUserId(username);
-      const key = id !== undefined ? idKey(id) : username;
+      const key =
+        id !== undefined ? idKey(id) : isIdKey(openedKey) ? openedKey : username;
       // Снапшот ВСЕХ затрагиваемых ключей для отката (id + ник-варианты).
       const touched = new Map<string, NoteRecord | string | undefined>();
       touched.set(key, this.notes[key]);
@@ -1801,7 +1840,9 @@ class PlayerNotesManager {
           version: VERSION,
           tag: selectedTag || unseenTag || undefined,
           nickColor: selectedNickColor || unseenColor || undefined,
-          ...(id !== undefined ? { nick: username } : {}),
+          // nick обязателен у ЛЮБОЙ id-записи (в т.ч. при записи в openedKey
+          // без резолвленного id) — по нему работает фолбэк-поиск.
+          ...(isIdKey(key) ? { nick: username } : {}),
         };
       } else if (unseen === undefined) {
         delete this.notes[key];
