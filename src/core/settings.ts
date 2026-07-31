@@ -54,6 +54,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // Автозаход рискованнее ручного (игрока может не быть у экрана), поэтому
   // отдельная галочка и тоже выключено по умолчанию.
   queue_peek_auto: false,
+  // Выключено по умолчанию (решение владельца, 31.07.2026): фича совершает
+  // действие за игрока (ставит в очередь) — включать её должен он сам,
+  // осознанно. Тот же принцип, что у queue_peek_enabled.
+  requeue_after_lobby_fail_enabled: false,
   queue_peek_standard: true,
   queue_peek_polite: true,
   queue_peek_prime: true,

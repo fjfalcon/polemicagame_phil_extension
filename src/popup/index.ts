@@ -518,6 +518,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("enable_role_faker", items.enable_role_faker);
     set("skip_start_screen_enabled", items.skip_start_screen_enabled);
     set("queue_background_warning_enabled", items.queue_background_warning_enabled);
+    set("requeue_after_lobby_fail_enabled", items.requeue_after_lobby_fail_enabled);
     set("queue_peek_enabled", items.queue_peek_enabled);
     set("queue_peek_auto", items.queue_peek_auto);
     set("queue_peek_standard", items.queue_peek_standard);
@@ -637,6 +638,7 @@ document.addEventListener("DOMContentLoaded", () => {
       connection_diag_enabled: cb("connection_diag_enabled", false),
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       queue_background_warning_enabled: cb("queue_background_warning_enabled", true),
+      requeue_after_lobby_fail_enabled: cb("requeue_after_lobby_fail_enabled", false),
       queue_peek_enabled: cb("queue_peek_enabled", false),
       queue_peek_auto: cb("queue_peek_auto", false),
       queue_peek_standard: cb("queue_peek_standard", true),
@@ -712,6 +714,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "enable_role_faker",
     "skip_start_screen_enabled",
     "queue_background_warning_enabled",
+    "requeue_after_lobby_fail_enabled",
     "queue_peek_enabled",
     "queue_peek_auto",
     "queue_peek_standard",

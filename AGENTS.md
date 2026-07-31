@@ -263,6 +263,7 @@ src/
 | local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |
 | localStorage страницы | fp:*, polemica:loglevel/buflevel | панели/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник. `polemica:update*` больше НЕ используются (переехали в local, 8.1.44) |
+| sessionStorage страницы | pn_flipped_players, pn_requeue_pending | camera-flip (перевороты на игру) и queue-requeue (одноразовый мост «комната распущена → поиск», TTL 45с). Недоверенный источник: значения валидируются при чтении, подделка сайтом не даёт привилегий |
 
 ## 6. Техдолг (актуален на v8.1.28)
 

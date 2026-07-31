@@ -24,6 +24,7 @@ import { updateNotifyFeature } from "./features/update-notify";
 import { connectionDiagFeature } from "./features/connection-diag";
 import { queueGuardFeature } from "./features/queue-guard";
 import { queuePeekFeature } from "./features/queue-peek";
+import { queueRequeueFeature } from "./features/queue-requeue";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -41,6 +42,7 @@ const manager = new FeatureManager().register(
   connectionDiagFeature,
   queueGuardFeature,
   queuePeekFeature,
+  queueRequeueFeature,
   obsPanelFeature,
   twitchPanelFeature,
 );

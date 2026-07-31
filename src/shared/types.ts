@@ -60,6 +60,8 @@ export interface Settings {
   queue_peek_enabled: boolean;
   /** Сразу смотреть состав очередей при открытии страницы поиска. */
   queue_peek_auto: boolean;
+  /** Развалилось принятое лобби — автоматически снова встать в поиск. */
+  requeue_after_lobby_fail_enabled: boolean;
   /** Какие очереди разрешено использовать для разведки. */
   queue_peek_standard: boolean;
   queue_peek_polite: boolean;
