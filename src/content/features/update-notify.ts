@@ -3,7 +3,7 @@
  * и, если он новее установленной версии, показывает ненавязчивый баннер со ссылкой
  * на страницу релиза. «Закрыть» прячет баннер для этой версии (больше не напоминаем).
  */
-import { browser } from "@core/env";
+import { browser, isStoreInstall } from "@core/env";
 import { log } from "@core/log";
 import type { Feature } from "@core/feature";
 
@@ -78,14 +78,21 @@ function showBanner(latest: string, dismissed: string): void {
     font: 13px system-ui, sans-serif;
   `;
 
+  // Сторовая установка обновляется самим браузером (и только после проверки
+  // стором — версия с GitHub может быть ещё недоступна), поэтому призыв
+  // «обновитесь» со ссылкой на zip тут не только бесполезен, но и вреден:
+  // ручная установка поверх сторовой ломает автообновление.
+  const store = isStoreInstall();
   const text = document.createElement("span");
-  text.textContent = `Доступна новая версия Polemica Notes (${latest}) — обновитесь`;
+  text.textContent = store
+    ? `Вышла версия Polemica Notes ${latest} — браузер обновит расширение сам`
+    : `Доступна новая версия Polemica Notes (${latest}) — обновитесь`;
 
   const link = document.createElement("a");
   link.href = RELEASES_URL;
   link.target = "_blank";
   link.rel = "noopener";
-  link.textContent = "Обновить";
+  link.textContent = store ? "Что нового" : "Обновить";
   link.style.cssText =
     "background:#3b82f6;color:#fff;text-decoration:none;padding:5px 12px;border-radius:8px;font-weight:600;";
 

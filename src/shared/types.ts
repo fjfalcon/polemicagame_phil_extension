@@ -1,6 +1,9 @@
 /** Тема кнопок статистики. */
 export type StatsTheme = "default" | string;
 
+/** Толщина рамки-метки: thin=1px, medium=2px, thick=3px (исторический вид). */
+export type NoteFrameWidth = "thin" | "medium" | "thick";
+
 /** Полная схема пользовательских настроек расширения. */
 export interface Settings {
   /** Мастер-выключатель: false гасит ВСЕ функции расширения разом. */
@@ -33,6 +36,8 @@ export interface Settings {
   player_mute_enabled: boolean;
   /** Цветные ники игроков (цвет задаётся в заметке; палитра — как у рамок). */
   nick_colors_enabled: boolean;
+  /** Толщина цветной рамки-метки вокруг камеры игрока. */
+  note_frame_width: NoteFrameWidth;
   /** Кнопки на плитке игрока — можно убрать любую из ряда. */
   btn_stats_enabled: boolean;
   btn_note_enabled: boolean;

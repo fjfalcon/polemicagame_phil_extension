@@ -32,6 +32,8 @@ export const DEFAULT_SETTINGS: Settings = {
   camera_rotate_enabled: true,
   player_mute_enabled: true,
   nick_colors_enabled: true,
+  // "thick" (3px) — вид, каким рамки были всегда; тонкие/средние — по вкусу.
+  note_frame_width: "thick",
   btn_stats_enabled: true,
   btn_note_enabled: true,
   btn_last_games_enabled: true,

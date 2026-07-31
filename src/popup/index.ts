@@ -9,7 +9,7 @@
  *  • OBS-команды — sendRuntime({type:"obs_command", ...}); события — onMessage.
  *  • chrome.* → browser.*, console.* → log.*.
  */
-import { browser } from "@core/env";
+import { browser, isStoreInstall } from "@core/env";
 import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
 import { getSettings, setSettings, onSettingsChanged, DEFAULT_SETTINGS } from "@core/settings";
@@ -25,6 +25,7 @@ import {
 } from "@core/messaging";
 import type {
   Settings,
+  NoteFrameWidth,
   ObsScene,
   ObsEventMsg,
   TwitchStatusMsg,
@@ -76,6 +77,32 @@ document.addEventListener("DOMContentLoaded", () => {
   // кэша — сразу после выхода релиза баннера на странице ещё нет. Кнопка
   // спрашивает GitHub немедленно и заодно сбрасывает кэш, чтобы контент-скрипт
   // показал баннер на следующей же странице.
+  //
+  // Для установки из стора (isStoreInstall) GitHub — только «что вообще вышло»:
+  // релиз появляется там раньше, чем стор его одобрит, и ставить zip поверх
+  // сторовой версии нельзя. Поэтому дополнительно спрашиваем сам браузер
+  // (runtime.requestUpdateCheck) — он знает, раздаёт ли стор новую версию,
+  // и при положительном ответе сам её скачивает.
+  const requestStoreUpdate = async (): Promise<{ status: string; version?: string }> => {
+    try {
+      const rt = browser.runtime as unknown as {
+        requestUpdateCheck?: () => Promise<unknown>;
+      };
+      if (typeof rt.requestUpdateCheck !== "function") return { status: "unavailable" };
+      const raw = await rt.requestUpdateCheck();
+      // Chrome ≥110 отдаёт {status, version}; полифилл поверх старого
+      // callback-API мог отдать пару [status, {version}].
+      if (Array.isArray(raw)) {
+        const [status, details] = raw as [unknown, { version?: string } | undefined];
+        return { status: String(status || ""), version: details?.version };
+      }
+      const obj = (raw || {}) as { status?: string; version?: string };
+      return { status: String(obj.status || ""), version: obj.version };
+    } catch (e) {
+      log.debug(SCOPE, "requestUpdateCheck failed", e);
+      return { status: "error" };
+    }
+  };
   const checkUpdateBtn = $<HTMLButtonElement>("check_update_now");
   if (checkUpdateBtn) {
     checkUpdateBtn.addEventListener("click", async () => {
@@ -83,21 +110,36 @@ document.addEventListener("DOMContentLoaded", () => {
       checkUpdateBtn.disabled = true;
       checkUpdateBtn.textContent = "Проверяю…";
       try {
-        const res = await fetch(
-          "https://api.github.com/repos/fjfalcon/polemicagame_phil_extension/releases/latest",
-          { headers: { Accept: "application/vnd.github+json" } },
-        );
-        if (!res.ok) throw new Error(`GitHub ${res.status}`);
-        const data = (await res.json()) as { tag_name?: string; html_url?: string };
-        const latest = String(data.tag_name || "").replace(/^v/, "");
-        if (!latest) throw new Error("пустой тег");
+        // Сторовый опрос НЕ зависит от GitHub и идёт первым: при упавшем
+        // GitHub (сеть, анонимный лимит API) стор всё равно может уже
+        // раздавать обновление — молчать об этом нельзя.
+        const store = isStoreInstall() ? await requestStoreUpdate() : null;
 
-        // Свежий ответ кладём в общий кэш: баннер на странице появится сразу,
-        // а «не напоминать» для новой версии сбрасываем — она ещё не показана.
-        await browser.storage.local.set({
-          pn_update_last_check: Date.now(),
-          pn_update_latest: latest,
-        });
+        let latest = "";
+        let releaseUrl = "";
+        try {
+          const res = await fetch(
+            "https://api.github.com/repos/fjfalcon/polemicagame_phil_extension/releases/latest",
+            { headers: { Accept: "application/vnd.github+json" } },
+          );
+          if (!res.ok) throw new Error(`GitHub ${res.status}`);
+          const data = (await res.json()) as { tag_name?: string; html_url?: string };
+          latest = String(data.tag_name || "").replace(/^v/, "");
+          if (!latest) throw new Error("пустой тег");
+          releaseUrl = String(data.html_url || "");
+
+          // Свежий ответ кладём в общий кэш: баннер на странице появится
+          // сразу, а «не напоминать» для новой версии сбрасываем — она ещё
+          // не показана.
+          await browser.storage.local.set({
+            pn_update_last_check: Date.now(),
+            pn_update_latest: latest,
+          });
+        } catch (e) {
+          // Для self-канала без GitHub проверить нечем — это фатально.
+          if (!store) throw e;
+          log.debug(SCOPE, "GitHub недоступен при сторовой проверке", e);
+        }
 
         const cmp = (a: string, b: string): number => {
           const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
@@ -107,9 +149,27 @@ document.addEventListener("DOMContentLoaded", () => {
           }
           return 0;
         };
-        if (cmp(latest, current) > 0) {
+        const newer = latest !== "" && cmp(latest, current) > 0;
+
+        if (store) {
+          if (store.status === "update_available") {
+            showPopupToast(
+              `Стор уже раздаёт версию ${store.version || latest || "новее вашей"} — браузер скачает и применит её сам (быстрее всего — перезапустить браузер)`,
+            );
+          } else if (newer) {
+            // Без утверждения «стор ещё не одобрил»: при статусе throttled
+            // (кнопку понажимали несколько раз) версия может быть уже одобрена.
+            showPopupToast(
+              `Версия ${latest} вышла (у вас ${current}) — стор доставит её автоматически`,
+            );
+          } else if (latest) {
+            showPopupToast(`У вас последняя версия (${current})`);
+          } else {
+            showPopupToast("Не удалось проверить обновление", "error");
+          }
+        } else if (newer) {
           showPopupToast(`Доступна версия ${latest} (у вас ${current}) — открываю страницу релиза`);
-          void browser.tabs.create({ url: data.html_url || `https://github.com/fjfalcon/polemicagame_phil_extension/releases/latest` });
+          void browser.tabs.create({ url: releaseUrl || `https://github.com/fjfalcon/polemicagame_phil_extension/releases/latest` });
         } else {
           showPopupToast(`У вас последняя версия (${current})`);
         }
@@ -544,6 +604,13 @@ document.addEventListener("DOMContentLoaded", () => {
     set("camera_rotate_enabled", items.camera_rotate_enabled);
     set("player_mute_enabled", items.player_mute_enabled);
     set("nick_colors_enabled", items.nick_colors_enabled);
+    const nfw = $<HTMLSelectElement>("note_frame_width");
+    if (nfw) {
+      // Нормализация: импорт бэкапа проверяет только typeof, и мусорная
+      // строка в storage оставила бы селект пустым (selectedIndex −1).
+      const v = items.note_frame_width;
+      nfw.value = v === "thin" || v === "medium" ? v : "thick";
+    }
     set("btn_stats_enabled", items.btn_stats_enabled);
     set("btn_note_enabled", items.btn_note_enabled);
     set("btn_last_games_enabled", items.btn_last_games_enabled);
@@ -605,6 +672,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const cb = (id: string, fallback = false): boolean =>
       $<HTMLInputElement>(id)?.checked ?? fallback;
     const val = (id: string, fallback = ""): string => $<HTMLInputElement>(id)?.value || fallback;
+    /** Значение селекта толщины рамок с защитой от мусора в DOM. */
+    const noteFrameWidthValue = (): NoteFrameWidth => {
+      const v = $<HTMLSelectElement>("note_frame_width")?.value;
+      return v === "thin" || v === "medium" ? v : "thick";
+    };
     /** Пустой список сцен = OBS не подключён; сохранённый выбор трогать нельзя. */
     const sceneVal = (id: string, known: string): string => {
       const sel = $<HTMLSelectElement>(id);
@@ -627,6 +699,7 @@ document.addEventListener("DOMContentLoaded", () => {
       camera_rotate_enabled: cb("camera_rotate_enabled", true),
       player_mute_enabled: cb("player_mute_enabled", true),
       nick_colors_enabled: cb("nick_colors_enabled", true),
+      note_frame_width: noteFrameWidthValue(),
       btn_stats_enabled: cb("btn_stats_enabled", true),
       btn_note_enabled: cb("btn_note_enabled", true),
       btn_last_games_enabled: cb("btn_last_games_enabled", true),
@@ -732,6 +805,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "camera_rotate_enabled",
     "player_mute_enabled",
     "nick_colors_enabled",
+    "note_frame_width",
     "btn_stats_enabled",
     "btn_note_enabled",
     "btn_last_games_enabled",

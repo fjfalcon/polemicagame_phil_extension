@@ -261,6 +261,13 @@
             <div class="row"><span>Цветные ники игроков<span class="hint">цвет задаётся в заметке игрока (кнопка ✎ на плитке); палитра — как у рамок</span></span>
                 <label class="switch"><input type="checkbox" id="nick_colors_enabled" checked><span class="slider"></span></label>
             </div>
+            <div class="row"><span>Толщина рамок заметок<span class="hint">цветная рамка вокруг камеры игрока с меткой</span></span>
+                <select id="note_frame_width" class="sel">
+                    <option value="thin">Тонкие</option>
+                    <option value="medium">Средние</option>
+                    <option value="thick" selected>Как раньше</option>
+                </select>
+            </div>
             <div class="row"><span>Заметки и цвета игроков<span class="hint">все ваши записи одним списком: заметка, цвет, id. Можно добавить игрока по нику или id, не дожидаясь встречи в игре. Откроется на активной вкладке полемики</span></span>
                 <button id="open_nick_colors" class="btn btn-primary">Открыть</button>
             </div>

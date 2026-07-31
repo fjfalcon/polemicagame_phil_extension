@@ -333,6 +333,9 @@ class PlayerNotesManager {
             this.processExistingElements();
             // Выключение nick_colors_enabled должно снять покраску сразу.
             this.refreshNickColors();
+            // Смена толщины рамки должна примениться сразу, без ожидания
+            // прохода DOM-наблюдателя.
+            this.refreshPlayerTags();
           }
           this.updateAllTooltips();
         }
@@ -701,24 +704,43 @@ class PlayerNotesManager {
       ring.className = "pn-tag-ring";
       container.appendChild(ring);
     }
-    // Перерисовываем только при смене метки/владельца: безусловная запись
-    // style будила общий MutationObserver на каждом проходе. Владелец (pnFor)
-    // нужен сторожу пересадки: ночью сайт двигает игроков по плиткам.
-    if (ring.dataset.tag === tag && ring.dataset.pnFor === username) return;
+    const width = this.frameWidthPx();
+    // Перерисовываем только при смене метки/владельца/толщины: безусловная
+    // запись style будила общий MutationObserver на каждом проходе. Владелец
+    // (pnFor) нужен сторожу пересадки: ночью сайт двигает игроков по плиткам.
+    if (
+      ring.dataset.tag === tag &&
+      ring.dataset.pnFor === username &&
+      ring.dataset.pnWidth === width
+    )
+      return;
     ring.dataset.tag = tag;
     ring.dataset.pnFor = username;
-    // Градиентная рамка: маской вырезаем середину, остаётся рамка 3px.
+    ring.dataset.pnWidth = width;
+    // Градиентная рамка: маской вырезаем середину, остаётся рамка шириной width.
     // ВАЖНО: mask-composite ставим ПОСЛЕ shorthand-ов mask/-webkit-mask,
     // иначе shorthand сбрасывает composite в add и градиент заливает всю плитку.
     ring.style.cssText = `
       position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 5;
-      padding: 3px; background: ${tag};
+      padding: ${width}; background: ${tag};
       -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
       mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
       -webkit-mask-composite: xor;
       mask-composite: exclude;
       filter: drop-shadow(0 0 4px rgba(0,0,0,.4));
     `;
+  }
+
+  /** Ширина рамки-метки в px по настройке (неизвестное значение = как раньше). */
+  private frameWidthPx(): string {
+    switch (this.settings.note_frame_width) {
+      case "thin":
+        return "1px";
+      case "medium":
+        return "2px";
+      default:
+        return "3px";
+    }
   }
 
   /** Обновить подсветку плиток у всех видимых игроков. */
