@@ -23,7 +23,7 @@ import { onDomChange } from "@core/dom";
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { onMessage, sendRuntime } from "@core/messaging";
-import { SITE, TEXT } from "@core/selectors";
+import { SITE, classifyPhaseText } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { ObsConnectionState, ObsScene } from "@shared/types";
 
@@ -500,18 +500,6 @@ function getStageContainer(): Element | null {
     : container;
 }
 
-function hasMarker(text: string, markers: readonly string[]): boolean {
-  return markers.some((marker) => {
-    // Короткие английские слова — только по границам слова: «day» не должен
-    // матчиться в «today», «miss» — в «dismiss». Латиница живёт в никах
-    // игроков, которые могут попадать в текст стадии на русском интерфейсе.
-    if (/^[a-z]+$/.test(marker) && marker.length <= 5) {
-      return new RegExp(`(^|[^a-z])${marker}([^a-z]|$)`).test(text);
-    }
-    return text.includes(marker);
-  });
-}
-
 /**
  * Определяет время суток на основе DOM элементов страницы игры.
  * RU-логика сохранена из obs-floating-panel.js; EN-маркеры — best-effort.
@@ -549,42 +537,23 @@ function detectTimeOfDay(): TimeOfDay {
         const nextStageText = norm(nextStage);
         log.debug(SCOPE, 'Found "До смены этапа", next stage:', nextStageText);
 
-        const dayStages = [
-          "день | речь игрока",
-          "голосование",
-          "доп. речь",
-          "прощальная минута",
-          "лучший ход",
-          "промах",
-          // best-effort, не проверено на живом EN-интерфейсе
-          "day",
-          "vote",
-          "voting",
-          "player speech",
-          "additional speech",
-          "farewell",
-          "best move",
-          "miss",
-        ];
-        for (const dayStage of dayStages) {
-          if (nextStageText.includes(dayStage)) {
-            log.debug(SCOPE, "Detected DAY via next stage:", dayStage);
-            return "day";
-          }
+        // Общий классификатор вместо локальных списков: прежний список
+        // проверял «голосование» ПЕРВЫМ, и next «Ночь | Голосование мафии»
+        // возвращал день прямо на входе в ночь. RU «промах»/«лучший ход»
+        // classify не знает (в TEXT.day только EN-варианты) — оставлены
+        // явными дневными спецслучаями.
+        const nextPhase = classifyPhaseText(nextStageText);
+        if (
+          nextPhase === "day" ||
+          nextStageText.includes("промах") ||
+          nextStageText.includes("лучший ход")
+        ) {
+          log.debug(SCOPE, "Detected DAY via next stage:", nextStageText);
+          return "day";
         }
-
-        const nightStages = [
-          "ночь",
-          "знакомство мафии",
-          // best-effort, не проверено на живом EN-интерфейсе
-          "night",
-          "mafia introduction",
-        ];
-        for (const nightStage of nightStages) {
-          if (nextStageText.includes(nightStage)) {
-            log.debug(SCOPE, "Detected NIGHT via next stage:", nightStage);
-            return "night";
-          }
+        if (nextPhase === "night") {
+          log.debug(SCOPE, "Detected NIGHT via next stage:", nextStageText);
+          return "night";
         }
       }
 
@@ -658,13 +627,17 @@ function detectTimeOfDay(): TimeOfDay {
         }
       }
 
-      if (hasMarker(stageText, TEXT.night) && !hasMarker(stageText, TEXT.day)) {
+      // Общий классификатор (selectors.ts): «Ночь | Голосование мафии»
+      // раньше проваливалась в дневную ветку по слову «голос» — дневная
+      // сцена OBS включалась посреди хода мафии.
+      const currentPhase = classifyPhaseText(stageText);
+      if (currentPhase === "night") {
         log.debug(SCOPE, "Detected NIGHT stage via marker");
         return "night";
       }
 
-      if (stageText.includes("день | речь игрока") || hasMarker(stageText, TEXT.day)) {
-        log.debug(SCOPE, "Detected DAY stage: День | Речь игрока");
+      if (stageText.includes("день | речь игрока") || currentPhase === "day") {
+        log.debug(SCOPE, "Detected DAY stage via marker");
         return "day";
       }
     }
@@ -679,10 +652,11 @@ function detectTimeOfDay(): TimeOfDay {
       const isIsolatedNight =
         isSubstage && (stageText.trim() === "ночь" || stageText.trim() === "night");
 
-      if (hasMarker(stageText, TEXT.night) && !hasMarker(stageText, TEXT.day) && !isIsolatedNight) {
+      const phase = classifyPhaseText(stageText);
+      if (phase === "night" && !isIsolatedNight) {
         hasAnyNightStage = true;
       }
-      if (hasMarker(stageText, TEXT.day) || stageText.includes("итоги подъема")) {
+      if (phase === "day" || stageText.includes("итоги подъема")) {
         hasAnyDayStage = true;
       }
     });

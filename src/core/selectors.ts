@@ -94,17 +94,31 @@ export const SITE = {
 export const TEXT = {
   accept: ["начать игру", "готов", "подтвердить", "принять", "старт", "join", "ready", "accept"],
   pause: ["пауза", "break", "перерыв"],
+  // Сверено с room/bundle/locales/RU.js (31.07.2026): ночные этапы —
+  // card_distribution «Раздача карт», familiarity_with_mafia «Знакомство
+  // мафии», first_night «Первая ночь», night «Ночь», mafia_acts «Ход мафии»
+  // ИЛИ «Голосование мафии» (два словаря!), checks «Проверки», doctor_acts
+  // «Ход доктора»; дневные — morning «Утро», day «День», discussion «Речь
+  // игрока», voting «Голосование/Начало голосования», voting_summary «Итоги
+  // голосования», extra_speeches «Доп. речь», farewell_minute «Прощальная
+  // минута».
   night: [
     "ночь",
     "ноч",
     "раздача карт",
     "ход мафии",
     "знакомство мафии",
+    // «Голосование мафии», любые будущие «… мафии» (конфликт с дневным
+    // «голос» решает DAY_STRONG-приоритет в auto-start).
+    "мафи",
     "проверк",
+    // «Ход доктора»
+    "доктор",
     "night",
     "card deal",
     "dealing",
     "mafia",
+    "doctor",
     "check",
     // best-effort, не проверено на живом EN-интерфейсе
     "mafia turn",
@@ -113,12 +127,16 @@ export const TEXT = {
   ],
   day: [
     "день",
+    // «Утро» — этап сводки ночи (промах/убийство); без него после промаха
+    // фаза «залипала» в ночи и роли не скрывались (жалоба 31.07.2026).
+    "утро",
     "голос",
     "итоги",
     "речь игрока",
     "доп. речь",
     "прощальная",
     "day",
+    "morning",
     "vote",
     "voting",
     "results",
@@ -132,6 +150,24 @@ export const TEXT = {
     "miss",
   ],
   vote: ["голос", "vote"],
+  /**
+   * Сильные дневные маркеры — побеждают при конфликте день+ночь в ОДНОМ
+   * тексте (см. classifyPhaseText). Слабое «голос» конфликт не решает:
+   * оно есть и в ночном «Голосование мафии».
+   */
+  dayStrong: [
+    "день",
+    "утро",
+    "речь игрока",
+    "итоги",
+    "доп. речь",
+    "прощальная",
+    "day",
+    "morning",
+    "speech",
+    "results",
+    "farewell",
+  ],
   // Кнопки приёма игры на странице поиска (auto-start, RU+EN)
   acceptGameButton: [
     "готов",
@@ -178,3 +214,39 @@ export const OWN = {
 /** Все классы наших элементов, которые надо удалять при выключении фичи. */
 export const OWN_BUTTON_SELECTOR =
   ".stats-button, .note-button, .last-games-button, .hide-video-button, .rotate-button, .mute-button";
+
+/** Матч маркера фазы в тексте этапа (для classifyPhaseText и спецслучаев). */
+export function hasPhaseMarker(text: string, markers: readonly string[]): boolean {
+  return markers.some((marker) => {
+    // Короткие английские слова — только по границам слова: «day» не должен
+    // матчиться в «today», «miss» — в «dismiss». Латиница живёт в никах
+    // игроков, которые могут попадать в текст стадии на русском интерфейсе.
+    if (/^[a-z]+$/.test(marker) && marker.length <= 5) {
+      return new RegExp(`(^|[^a-z])${marker}([^a-z]|$)`).test(text);
+    }
+    return text.includes(marker);
+  });
+}
+
+/**
+ * Классификация текста этапа игры в фазу день/ночь. Единая точка для
+ * авто-скрытия ролей (auto-start) и автосцен OBS (obs-panel) — раньше у
+ * каждого была своя, и «Голосование мафии» (ночной этап mafia_acts в одном
+ * из двух словарей локали сайта; в другом — «Ход мафии») из-за слова «голос»
+ * классифицировался как день посреди ночи.
+ *
+ * Правило конфликта (текст матчит оба списка): побеждает ночь, КРОМЕ
+ * текстов с сильным дневным маркером (TEXT.dayStrong). Сегодня реальный
+ * конфликтный текст один — «Ночь | Голосование мафии», и он ночной;
+ * dayStrong — страховка на случай будущих дневных текстов с «мафи»/«доктор»
+ * внутри (в substage сайт дописывает только номер игрока, не ник — ники в
+ * конфликт не попадают).
+ */
+export function classifyPhaseText(text: string): "day" | "night" | null {
+  const day = hasPhaseMarker(text, TEXT.day);
+  const night = hasPhaseMarker(text, TEXT.night);
+  if (day && night) return hasPhaseMarker(text, TEXT.dayStrong) ? "day" : "night";
+  if (day) return "day";
+  if (night) return "night";
+  return null;
+}

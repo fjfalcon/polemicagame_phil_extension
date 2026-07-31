@@ -18,7 +18,7 @@
 import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { keyboard } from "@core/keyboard";
 import { log } from "@core/log";
-import { SITE, TEXT, OWN } from "@core/selectors";
+import { SITE, TEXT, OWN, classifyPhaseText } from "@core/selectors";
 import { isAutoAcceptSuppressed } from "../auto-accept-gate";
 import type { Feature, FeatureContext } from "@core/feature";
 
@@ -582,12 +582,17 @@ function getTexts(selector: string): string[] {
     .filter(Boolean);
 }
 
+// Классификация вынесена в selectors.ts (classifyPhaseText) — она общая с
+// автосценами OBS. Причина появления: «Голосование мафии» (ночной этап
+// в одном из словарей сайта) содержит дневное «голос» — раньше это включало
+// «день» посреди ночи, прятало роли и воевало с ночным показом
+// («подглючивает с переключением ролей», жалоба 31.07.2026).
 function isNightText(text: string): boolean {
-  return containsAny(text, TEXT.night);
+  return classifyPhaseText(text) === "night";
 }
 
 function isDayText(text: string): boolean {
-  return containsAny(text, TEXT.day);
+  return classifyPhaseText(text) === "day";
 }
 
 function detectRolePhase(): "day" | "night" {
