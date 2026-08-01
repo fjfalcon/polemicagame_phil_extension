@@ -49,31 +49,49 @@ interface DiagWindow extends Window {
   const RealWS = window.WebSocket;
   const shortUrl = (u: unknown) => String(u).replace(/\?.*/, "?…");
 
+  /**
+   * Структурное описание фрейма БЕЗ его содержимого.
+   *
+   * Раньше сюда уезжали куски тел («WS send <первые 64 символа>»), а лог
+   * потом уходит в файл, который пользователь шлёт в поддержку: в кадре
+   * `40/search?userId=…&authKey=…` это прямая утечка ключа сессии, в кадре
+   * handshake — sid (аудит безопасности 01.08.2026, находка 9). Для
+   * диагностики хватает кода engine.io, имени события и длины.
+   */
+  const frame = (raw: unknown): string => {
+    const s = String(raw);
+    if (s === "2") return "ping->";
+    if (s === "3") return "pong<-";
+    const code = /^\d{1,2}/.exec(s)?.[0] ?? "?";
+    // 42["event"] и 42/search,["event"] — имя события не секрет и очень
+    // помогает в разборе; очередь работает именно в неймспейсе /search,
+    // поэтому вариант с ним обязателен.
+    const evt = /^\d{1,2}(?:\/[A-Za-z0-9_/-]{0,40})?,?\["([A-Za-z0-9_.:-]{1,40})"/.exec(s)?.[1];
+    // Неймспейс без query: «40/search?userId=…&authKey=…» → «40/search».
+    const ns = /^\d{1,2}(\/[A-Za-z0-9_/-]{0,40})/.exec(s)?.[1];
+    const kind =
+      code === "0" ? "handshake" : code === "40" ? "ns-connect" : code === "42" ? "event" : code;
+    return `${kind}${ns ? ` ${ns}` : ""}${evt ? ` ${evt}` : ""} len=${s.length}`;
+  };
+
   const PatchedWS = function (this: WebSocket, url: string | URL, protocols?: string | string[]) {
     const ws = protocols !== undefined ? new RealWS(url, protocols) : new RealWS(url);
     const label = shortUrl(url);
     say(`WS OPEN-ATTEMPT ${label}`);
 
     ws.addEventListener("open", () => say(`WS OPEN ${label}`));
-    ws.addEventListener("message", (e: MessageEvent) => {
-      const d = String(e.data);
-      // engine.io v3: "0{handshake}" (внутри pingInterval/pingTimeout!),
-      // "3" — pong сервера, "40..." — connect неймспейса, "42[...]" — событие.
-      if (d[0] === "0") say(`WS HANDSHAKE ${d.slice(0, 200)}`);
-      else if (d === "3") say("WS pong<-");
-      else if (d.length <= 48) say(`WS msg ${d}`);
-      else say(`WS msg(${d.length}) ${d.slice(0, 32)}…`);
-    });
+    // engine.io v3: "0{handshake}", "3" — pong сервера, "40…" — connect
+    // неймспейса, "42[…]" — событие. Пишем только структуру (см. frame()).
+    ws.addEventListener("message", (e: MessageEvent) => say(`WS msg ${frame(e.data)}`));
     const realSend = ws.send.bind(ws);
     ws.send = (data: Parameters<WebSocket["send"]>[0]) => {
-      const s = String(data);
-      if (s === "2") say("WS ping->");
-      else if (s.length <= 64) say(`WS send ${s}`);
-      else say(`WS send(${s.length}) ${s.slice(0, 32)}…`);
+      say(`WS send ${frame(data)}`);
       return realSend(data);
     };
     ws.addEventListener("close", (e: CloseEvent) =>
-      say(`WS CLOSE ${label} code=${e.code} clean=${e.wasClean} reason=${e.reason || "-"}`),
+      say(
+        `WS CLOSE ${label} code=${e.code} clean=${e.wasClean} reasonLen=${(e.reason || "").length}`,
+      ),
     );
     ws.addEventListener("error", () => say(`WS ERROR ${label}`));
     return ws;
@@ -105,27 +123,22 @@ interface DiagWindow extends Window {
 
   const nativeSend = proto.send;
   proto.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
-    const s = String(data);
-    const label = shortUrl(this.url);
-    if (s === "2") say(`WS ping-> ${label}`);
-    else if (s.length <= 64) say(`WS send ${s} ${label}`);
-    else say(`WS send(${s.length}) ${s.slice(0, 32)}… ${label}`);
+    say(`WS send ${frame(data)} ${shortUrl(this.url)}`);
     return nativeSend.call(this, data);
   };
 
   const describe = (ws: WebSocket, type: string, e: Event): void => {
     const label = shortUrl(ws.url);
     if (type === "message") {
-      const d = String((e as MessageEvent).data);
-      if (d[0] === "0") say(`WS HANDSHAKE ${label} ${d.slice(0, 200)}`);
-      else if (d === "3") say(`WS pong<- ${label}`);
-      else if (d.length <= 48) say(`WS msg ${d} ${label}`);
-      else say(`WS msg(${d.length}) ${d.slice(0, 32)}… ${label}`);
+      say(`WS msg ${frame((e as MessageEvent).data)} ${label}`);
       return;
     }
     if (type === "close") {
       const c = e as CloseEvent;
-      say(`WS CLOSE ${label} code=${c.code} clean=${c.wasClean} reason=${c.reason || "-"}`);
+      // reason — строка от сервера; в лог идёт только её длина.
+      say(
+        `WS CLOSE ${label} code=${c.code} clean=${c.wasClean} reasonLen=${(c.reason || "").length}`,
+      );
       return;
     }
     say(`WS ${type.toUpperCase()} ${label}`);

@@ -15,7 +15,42 @@ import { installErrorCapture } from "@core/errors";
 import { getSettings, setSettings, onSettingsChanged, DEFAULT_SETTINGS } from "@core/settings";
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
 import { escapeHtml } from "@core/escape";
-import { loadNotes, saveNotes, mergeNotes } from "@core/notes-store";
+import {
+  loadNotes,
+  saveNotes,
+  mergeNotes,
+  isSafeTag,
+  TAGS_KEY,
+  MAX_IMPORT_ENTRIES,
+} from "@core/notes-store";
+
+/** Потолок размера файла бэкапа (наши 200 заметок ≈ 40 КБ). */
+const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
+
+/** Настройки, включающие действия за игрока и сетевые подключения. */
+const OPERATIONAL_KEYS = [
+  "auto_accept_enabled",
+  "requeue_after_lobby_fail_enabled",
+  "queue_peek_enabled",
+  "queue_peek_auto",
+  "obs_enabled",
+  "obs_auto_mode_enabled",
+  "twitch_chat_enabled",
+  "enable_role_faker",
+  "disable_webcam_clicks",
+] as const;
+
+const OPERATIONAL_LABELS: Record<string, string> = {
+  auto_accept_enabled: "автопринятие игры",
+  requeue_after_lobby_fail_enabled: "автовозврат в поиск после развала лобби",
+  queue_peek_enabled: "заход в очередь для просмотра, кто в поиске",
+  queue_peek_auto: "автоматический заход в очередь",
+  obs_enabled: "подключение к OBS",
+  obs_auto_mode_enabled: "автопереключение сцен OBS",
+  twitch_chat_enabled: "подключение к чату Twitch",
+  enable_role_faker: "подмена роли",
+  disable_webcam_clicks: "блокировка кликов по камерам",
+};
 import type { NotesMap } from "@core/notes-store";
 import {
   sendRuntime,
@@ -225,6 +260,55 @@ document.addEventListener("DOMContentLoaded", () => {
     popupToastTimer = setTimeout(() => notification.classList.remove("show"), timeoutMs);
   }
 
+  /**
+   * Подтверждение ВНУТРИ попапа.
+   *
+   * Нативный confirm() здесь использовать нельзя: он забирает фокус, а попап
+   * расширения при потере фокуса закрывается (Firefox) — обработчик импорта
+   * умирал молча посреди работы, без записи и без сообщения (ревью аудита
+   * безопасности 01.08.2026). Оверлей живёт в самом попапе и фокус не отдаёт.
+   */
+  function popupConfirm(text: string, okLabel = "Продолжить"): Promise<boolean> {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.style.cssText =
+        "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;" +
+        "align-items:center;justify-content:center;padding:12px;";
+      const box = document.createElement("div");
+      box.style.cssText =
+        "background:#1e1f26;color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:10px;" +
+        "padding:14px;max-width:320px;font:12px/1.45 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5);";
+      const msg = document.createElement("div");
+      msg.textContent = text;
+      msg.style.cssText = "white-space:pre-line;margin-bottom:12px;";
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;justify-content:flex-end;";
+      const mk = (label: string, primary: boolean) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.style.cssText =
+          `padding:5px 12px;border-radius:8px;cursor:pointer;font:600 12px system-ui,sans-serif;` +
+          (primary
+            ? "background:#3b82f6;color:#fff;border:none;"
+            : "background:transparent;color:#fff;border:1px solid rgba(255,255,255,.25);");
+        return b;
+      };
+      const okBtn = mk(okLabel, true);
+      const cancelBtn = mk("Отмена", false);
+      const done = (v: boolean) => {
+        overlay.remove();
+        resolve(v);
+      };
+      okBtn.addEventListener("click", () => done(true));
+      cancelBtn.addEventListener("click", () => done(false));
+      row.append(cancelBtn, okBtn);
+      box.append(msg, row);
+      overlay.append(box);
+      document.body.appendChild(overlay);
+      okBtn.focus();
+    });
+  }
+
   // ───────────────────────── Модалка длины ников ─────────────────────────
   const nicklenOverlay = $("nicklen_overlay");
   const nicklenBody = $("nicklen_modal_body");
@@ -329,6 +413,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const settings = await getSettings();
         // Пароль OBS в файл НЕ кладём: бэкап уезжает в облака и мессенджеры.
         const { obs_password: _pw, ...safeSettings } = settings;
+        // Палитра своих цветов и локальные мьюты — тоже устойчивые данные
+        // пользователя; без них обещание «импорт вернёт всё как было» врало
+        // (аудит безопасности 01.08.2026, находка 7).
+        const extra = (await browser.storage.local.get({
+          [TAGS_KEY]: [],
+          pn_muted_players: [],
+        })) as Record<string, unknown>;
         const payload = {
           app: "polemica-notes",
           type: "notes-backup",
@@ -336,6 +427,8 @@ document.addEventListener("DOMContentLoaded", () => {
           exportedAt: new Date().toISOString(),
           settings: safeSettings,
           notes,
+          customTags: Array.isArray(extra[TAGS_KEY]) ? extra[TAGS_KEY] : [],
+          mutedPlayers: Array.isArray(extra.pn_muted_players) ? extra.pn_muted_players : [],
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -360,42 +453,125 @@ document.addEventListener("DOMContentLoaded", () => {
       const file = importFile.files?.[0];
       if (!file) return;
       try {
+        // Размер проверяем ДО чтения: присланный «бэкап» на сотни мегабайт
+        // подвешивал попап и мог выесть квоту storage.local, после чего
+        // переставали сохраняться и заметки (аудит безопасности, №5).
+        if (file.size > MAX_BACKUP_BYTES) {
+          showPopupToast(
+            `Файл слишком большой (${(file.size / 1048576).toFixed(1)} МБ, максимум ${
+              MAX_BACKUP_BYTES / 1048576
+            } МБ)`,
+            "error",
+          );
+          return;
+        }
         const data = JSON.parse(await file.text());
         const incoming = (data?.notes ?? (data?.app ? {} : data)) as NotesMap;
         if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
           throw new Error("bad format");
+        }
+        if (Object.keys(incoming).length > MAX_IMPORT_ENTRIES) {
+          showPopupToast(
+            `В файле слишком много записей (${Object.keys(incoming).length}, максимум ${MAX_IMPORT_ENTRIES})`,
+            "error",
+          );
+          return;
         }
 
         // ── настройки из бэкапа (8.1.56) ──
         // Берём ТОЛЬКО известные ключи и только с совпадающим типом: файл
         // мог прийти от другого человека, из будущей версии или быть правлен
         // руками. obs_password не импортируем — его там и нет.
-        let restoredSettings = 0;
+        //
+        // ПОРЯДОК: патч настроек ГОТОВИМ здесь, но ПРИМЕНЯЕМ после заметок —
+        // раньше настройки успевали включиться (автопринятие, автовозврат в
+        // очередь, OBS), а затем импорт заметок падал по квоте, и откатывать
+        // было нечего (аудит безопасности 01.08.2026, находка 6).
         const rawSettings = data?.settings;
+        const settingsPatch: Record<string, unknown> = {};
         if (rawSettings && typeof rawSettings === "object" && !Array.isArray(rawSettings)) {
-          const patch: Record<string, unknown> = {};
           for (const [key, def] of Object.entries(DEFAULT_SETTINGS)) {
             if (key === "obs_password" || !(key in rawSettings)) continue;
             const value = (rawSettings as Record<string, unknown>)[key];
-            if (typeof value === typeof def) patch[key] = value;
+            if (typeof value !== typeof def) continue;
+            if (typeof value === "string" && value.length > 200) continue;
+            settingsPatch[key] = value;
           }
-          if (Object.keys(patch).length) {
-            try {
-              await setSettings(patch as Partial<Settings>);
-              restoredSettings = Object.keys(patch).length;
-              const applied = await getSettings();
-              lastKnown = applied;
-              reflectPatch(applied);
-              const { obs_password: _pw, ...safe } = applied;
-              void broadcastToGameTabs({ type: "updateNotesSettings", settings: safe });
-            } catch (e) {
-              log.error(SCOPE, "settings import failed", e);
-              showPopupToast("Настройки из файла восстановить не удалось", "error");
-            }
+          // Флаги, включающие ДЕЙСТВИЯ за игрока и сетевые подключения, не
+          // должны приезжать из чужого файла молча.
+          const risky = OPERATIONAL_KEYS.filter((k) => settingsPatch[k] === true);
+          if (risky.length) {
+            const ok = await popupConfirm(
+              `В файле включены действия, которые расширение будет выполнять за вас:\n\n` +
+                risky.map((k) => `• ${OPERATIONAL_LABELS[k] ?? k}`).join("\n") +
+                `\n\nВключить их?`,
+              "Включить",
+            );
+            if (!ok) for (const k of risky) delete settingsPatch[k];
+          }
+          // Смена адреса OBS = другой сервер: старый пароль ему не отдаём.
+          if (
+            typeof settingsPatch.obs_host === "string" &&
+            settingsPatch.obs_host !== lastKnown?.obs_host
+          ) {
+            settingsPatch.obs_password = "";
           }
         }
 
+        const applySettings = async (): Promise<number> => {
+          if (!Object.keys(settingsPatch).length) return 0;
+          try {
+            await setSettings(settingsPatch as Partial<Settings>);
+            const applied = await getSettings();
+            lastKnown = applied;
+            reflectPatch(applied);
+            const { obs_password: _pw, ...safe } = applied;
+            void broadcastToGameTabs({ type: "updateNotesSettings", settings: safe });
+            return Object.keys(settingsPatch).length;
+          } catch (e) {
+            log.error(SCOPE, "settings import failed", e);
+            showPopupToast("Настройки из файла восстановить не удалось", "error");
+            return 0;
+          }
+        };
+
+        // Палитра и мьюты (см. экспорт): восстанавливаем объединением, чтобы
+        // импорт не стирал то, что уже есть у пользователя.
+        const applyExtras = async (): Promise<void> => {
+          const tags = Array.isArray(data?.customTags)
+            ? (data.customTags as unknown[]).filter(isSafeTag)
+            : [];
+          const muted = Array.isArray(data?.mutedPlayers)
+            ? (data.mutedPlayers as unknown[]).filter(
+                (m): m is string => typeof m === "string" && m.length > 0 && m.length <= 200,
+              )
+            : [];
+          if (!tags.length && !muted.length) return;
+          try {
+            const cur = (await browser.storage.local.get({
+              [TAGS_KEY]: [],
+              pn_muted_players: [],
+            })) as Record<string, unknown>;
+            const patch: Record<string, unknown> = {};
+            if (tags.length) {
+              const curTags = Array.isArray(cur[TAGS_KEY]) ? (cur[TAGS_KEY] as string[]) : [];
+              patch[TAGS_KEY] = [...new Set([...curTags, ...tags])].slice(0, 100);
+            }
+            if (muted.length) {
+              const curMuted = Array.isArray(cur.pn_muted_players)
+                ? (cur.pn_muted_players as string[])
+                : [];
+              patch.pn_muted_players = [...new Set([...curMuted, ...muted])].slice(0, 1000);
+            }
+            await browser.storage.local.set(patch);
+          } catch (e) {
+            log.error(SCOPE, "extras import failed", e);
+          }
+        };
+
         if (Object.keys(incoming).length === 0) {
+          const restoredSettings = await applySettings();
+          await applyExtras();
           showPopupToast(
             restoredSettings
               ? `Восстановлено настроек: ${restoredSettings}. Заметок в файле нет`
@@ -416,13 +592,35 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         const { merged, added, replaced } = mergeNotes(notes, incoming);
         if (!added && !replaced) {
-          showPopupToast("Все заметки из файла уже есть");
+          const onlyExtras = await applySettings();
+          await applyExtras();
+          showPopupToast(
+            onlyExtras
+              ? `Все заметки из файла уже есть; настроек: ${onlyExtras}`
+              : "Все заметки из файла уже есть",
+          );
           return;
+        }
+        // Замена существующих заметок — необратимая правка чужим файлом:
+        // спрашиваем, как только импорт что-то перезаписывает (находка 5).
+        if (replaced) {
+          const ok = await popupConfirm(
+            `Импорт обновит ${replaced} существующих заметок более свежими из файла ` +
+              `(добавит ${added} новых).\n\nПродолжить?`,
+            "Импортировать",
+          );
+          if (!ok) {
+            showPopupToast("Импорт отменён");
+            return;
+          }
         }
         if (!(await saveNotes(merged))) {
           showPopupToast("Не удалось сохранить заметки", "error");
           return;
         }
+        // Настройки применяем ПОСЛЕ успешной записи заметок (находка 6).
+        const restoredSettings = await applySettings();
+        await applyExtras();
         const notesMsg = replaced
           ? `Добавлено: ${added}, обновлено: ${replaced}`
           : `Импортировано заметок: ${added}`;

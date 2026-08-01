@@ -391,11 +391,22 @@ export abstract class FloatingPanel {
       (box.width as number) > 0 &&
       (box.height as number) > 0
     ) {
+      // Кламп по вьюпорту: localStorage принадлежит САЙТУ (AGENTS.md §5), и
+      // сохранённая им коробка вида {left: 1e9, width: 1e9} навсегда уносила
+      // панель за экран (аудит безопасности 01.08.2026, №16). Заодно чинит
+      // честный кейс «панель осталась от большого монитора».
+      const vw = window.innerWidth || 1280;
+      const vh = window.innerHeight || 720;
+      const width = Math.min(Math.max(this.opts.minWidth, box.width as number), vw);
+      const height = Math.min(Math.max(this.opts.minHeight, box.height as number), vh);
+      // Заголовок обязан остаться доступным: не даём уехать за края.
+      const left = Math.min(Math.max(0, box.left as number), Math.max(0, vw - width));
+      const top = Math.min(Math.max(0, box.top as number), Math.max(0, vh - 32));
       Object.assign(this.root.style, {
-        left: `${box.left}px`,
-        top: `${box.top}px`,
-        width: `${Math.max(this.opts.minWidth, box.width as number)}px`,
-        height: `${Math.max(this.opts.minHeight, box.height as number)}px`,
+        left: `${left}px`,
+        top: `${top}px`,
+        width: `${width}px`,
+        height: `${height}px`,
         right: "auto",
         bottom: "auto",
       } as CSSStyleDeclaration);

@@ -129,4 +129,6 @@ void getSetting("extension_enabled")
 setupNicknameLengthsResponder();
 setupDiagnostics();
 
-log.info("content", "booted", navigator.userAgent, location.href);
+// Только origin+pathname: query/fragment могут нести приглашения и ключи, а
+// лог выгружается в файл для поддержки (аудит безопасности 01.08.2026, №13).
+log.info("content", "booted", navigator.userAgent, location.origin + location.pathname);

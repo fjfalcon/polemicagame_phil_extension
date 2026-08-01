@@ -254,6 +254,12 @@ class PlayerNotesManager {
   private lastGamesInFlight = new Map<string, Promise<LastGameEntry[]>>();
   /** Тултипы, живущие порталом в body (для уборки осиротевших). */
   private portaledTooltips = new Set<HTMLElement>();
+  /** Снятые в этой вкладке мьюты — не воскрешаем их при слиянии с диском. */
+  private unmutedThisSession = new Set<string>();
+  /** Удалённые в этой вкладке свои цвета — то же для палитры. */
+  private removedTagsThisSession = new Set<string>();
+  /** Живые плашки-уведомления (снимаются в disable). */
+  private toasts = new Set<HTMLElement>();
   /** Ники с временно скрытым видео (в пределах сессии). */
   private hiddenVideos = new Set<string>();
   /**
@@ -484,6 +490,10 @@ class PlayerNotesManager {
     this.lastGamesInFlight.clear();
     this.statsErrorAt.clear();
     this.portaledTooltips.clear();
+    for (const t of this.toasts) t.remove();
+    this.toasts.clear();
+    this.unmutedThisSession.clear();
+    this.removedTagsThisSession.clear();
     this.profileIdByNick.clear();
     this.nickIndexCache = null;
     this.colorIndexCache = null;
@@ -557,17 +567,52 @@ class PlayerNotesManager {
     }
   }
 
+  /**
+   * Мьюты пишутся СЛИЯНИЕМ со свежим списком с диска: обе вкладки хранят
+   * список целиком, и «последний писатель побеждает» терял мьюты, сделанные
+   * в соседней вкладке (аудит безопасности 01.08.2026, находка 8). Ошибку
+   * записи показываем пользователю — раньше она молча уходила в лог, а после
+   * перезагрузки мьют исчезал.
+   */
   private persistMutedPlayers(): void {
-    void browser.storage.local
-      .set({ [MUTED_PLAYERS_KEY]: [...this.mutedPlayers] })
-      .catch((e) => log.warn("player-notes", "muted players save failed", e));
+    void (async () => {
+      try {
+        const cur = (await browser.storage.local.get({ [MUTED_PLAYERS_KEY]: [] })) as Record<
+          string,
+          unknown
+        >;
+        const disk = Array.isArray(cur[MUTED_PLAYERS_KEY])
+          ? (cur[MUTED_PLAYERS_KEY] as string[])
+          : [];
+        // Снятые в ЭТОЙ вкладке мьюты не должны воскресать из дискового списка.
+        const merged = new Set([...disk.filter((n) => !this.unmutedThisSession.has(n))]);
+        for (const n of this.mutedPlayers) merged.add(n);
+        await browser.storage.local.set({ [MUTED_PLAYERS_KEY]: [...merged] });
+      } catch (e) {
+        log.warn("player-notes", "muted players save failed", e);
+        this.toast("Не удалось сохранить мьют — он слетит после перезагрузки", true);
+      }
+    })();
   }
 
-  private async saveCustomTags(): Promise<void> {
+  private async saveCustomTags(): Promise<boolean> {
     // Та же дыра «пишем непрочитанное», что у заметок: при упавшем loadNotes
     // палитра в памяти пуста, и запись стёрла бы пользовательские цвета.
-    if (this.notesReadOnly) return;
-    await saveCustomTagsToStore(this.customTags);
+    if (this.notesReadOnly) return false;
+    // Слияние со свежей палитрой с диска — по той же причине, что у мьютов:
+    // две вкладки писали массив целиком и теряли цвета друг друга.
+    try {
+      const cur = (await browser.storage.local.get({ [TAGS_KEY]: [] })) as Record<string, unknown>;
+      const disk = Array.isArray(cur[TAGS_KEY]) ? (cur[TAGS_KEY] as string[]) : [];
+      const merged = [
+        ...new Set([...disk.filter((t) => !this.removedTagsThisSession.has(t)), ...this.customTags]),
+      ];
+      this.customTags = merged;
+      return await saveCustomTagsToStore(merged);
+    } catch (e) {
+      log.warn("player-notes", "custom tags merge failed", e);
+      return await saveCustomTagsToStore(this.customTags);
+    }
   }
 
   /** Возвращает false, если запись не удалась — интерфейс обязан это показать. */
@@ -701,10 +746,17 @@ class PlayerNotesManager {
     const toRecord = (n: NoteRecord | string): NoteRecord =>
       typeof n === "string" ? { text: n, timestamp: 0 } : n;
 
+    // toRecord, а не typeof-проверка: строковая (легаси) запись под u:-ключом
+    // игнорировалась, ник-запись побеждала «по умолчанию» и затирала её текст
+    // без участия пользователя. Такие записи есть у реальных пользователей —
+    // прежние версии миграции клали строку под id-ключ (аудит безопасности
+    // 01.08.2026, находка 12; поймано ревью применения).
     let best: NoteRecord | undefined =
-      fresh[key] !== undefined && typeof fresh[key] === "object"
-        ? (fresh[key] as NoteRecord)
-        : undefined;
+      fresh[key] !== undefined ? toRecord(fresh[key]) : undefined;
+    // Текст легаси-СТРОКИ под id-ключом: у неё ts=0, поэтому любая ник-запись
+    // с настоящим временем побеждает её по времени. Такой текст нельзя терять
+    // молча — ниже он дописывается в победителя наравне с ничьёй.
+    const idLegacyText = typeof fresh[key] === "string" ? (fresh[key] as string) : "";
     const losers: NoteRecord[] = [];
     for (const nk of freshNickKeys) {
       const record = toRecord(fresh[nk]);
@@ -723,7 +775,11 @@ class PlayerNotesManager {
     // проигравший текст молча, а дописываем его в запись.
     const winner: NoteRecord = { ...best };
     for (const loser of losers) {
-      if (ts(loser) === ts(winner) && loser.text && loser.text !== winner.text) {
+      if (
+        loser.text &&
+        loser.text !== winner.text &&
+        (ts(loser) === ts(winner) || loser.text === idLegacyText)
+      ) {
         winner.text = winner.text ? `${winner.text}\n[слито: ${loser.text}]` : loser.text;
       }
       // Цвет и метка наследуются БЕЗУСЛОВНО (непустое побеждает пустое):
@@ -1281,7 +1337,7 @@ class PlayerNotesManager {
   private updatePlayerTooltips(username: string): void {
     document
       .querySelectorAll(
-        `.${OWN.tooltip}[data-pn-stats="1"][data-username="${cssAttr(username)}"]`,
+        `.${OWN.tooltip}[data-pn-stats="1"][data-username=${cssAttr(username)}]`,
       )
       .forEach((tooltip) => {
         tooltip.innerHTML = this.generateTooltipContent(username);
@@ -1568,6 +1624,25 @@ class PlayerNotesManager {
     }
   }
 
+  /** Короткое уведомление поверх страницы (ошибки сохранения — не в лог, а глазам). */
+  private toast(text: string, isError = false): void {
+    const el = document.createElement("div");
+    el.textContent = text;
+    el.style.cssText =
+      "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483000;" +
+      `background:${isError ? "rgba(190,40,40,.95)" : "rgba(30,32,40,.95)"};color:#fff;` +
+      "padding:8px 16px;border-radius:10px;font:13px system-ui,sans-serif;" +
+      "box-shadow:0 8px 30px rgba(0,0,0,.45);pointer-events:none;";
+    document.body.appendChild(el);
+    // Реестр, а не intervals: disable() гасит таймеры через clearInterval, и
+    // плашка, не успевшая исчезнуть, оставалась на странице навсегда.
+    this.toasts.add(el);
+    window.setTimeout(() => {
+      el.remove();
+      this.toasts.delete(el);
+    }, 4000);
+  }
+
   /** Снять портальные тултипы, чей якорь сайт уже удалил из DOM. */
   private sweepOrphanTooltips(): void {
     for (const tooltip of [...this.portaledTooltips]) {
@@ -1643,8 +1718,13 @@ class PlayerNotesManager {
       e.preventDefault();
       e.stopPropagation();
       const uname = username.toLowerCase();
-      if (this.mutedPlayers.has(uname)) this.mutedPlayers.delete(uname);
-      else this.mutedPlayers.add(uname);
+      if (this.mutedPlayers.has(uname)) {
+        this.mutedPlayers.delete(uname);
+        this.unmutedThisSession.add(uname);
+      } else {
+        this.mutedPlayers.add(uname);
+        this.unmutedThisSession.delete(uname);
+      }
       this.persistMutedPlayers();
       this.applyMuteState(container, username);
       this.syncMuteButton(btn, username);
@@ -1916,7 +1996,12 @@ class PlayerNotesManager {
           const c = picker.value;
           if (c && !this.customTags.includes(c) && !TAG_PRESETS.some((p) => p.css === c)) {
             this.customTags.push(c);
-            void this.saveCustomTags();
+            this.removedTagsThisSession.delete(c);
+            void this.saveCustomTags().then((ok) => {
+              // Молчаливый провал записи оставлял цвет только в памяти: после
+              // перезагрузки он исчезал (аудит безопасности, находка 8).
+              if (!ok) this.toast("Не удалось сохранить цвет в палитру", true);
+            });
           }
           setSel(c);
           rebuildAll();
@@ -2237,7 +2322,10 @@ class PlayerNotesManager {
   /** Убрать свой цвет из палитры (сама палитра — это customTags). */
   private removeCustomTag(css: string): void {
     this.customTags = this.customTags.filter((c) => c !== css);
-    void this.saveCustomTags();
+    this.removedTagsThisSession.add(css);
+    void this.saveCustomTags().then((ok) => {
+      if (!ok) this.toast("Не удалось сохранить палитру — цвет вернётся после перезагрузки", true);
+    });
   }
 
   /**
@@ -3125,10 +3213,10 @@ class PlayerNotesManager {
   private removeOldButtons(username: string, root: ParentNode = document): void {
     const sel = cssAttr(username);
     [
-      `.${OWN.noteButton}[data-username="${sel}"]`,
-      `.${OWN.statsButton}[data-username="${sel}"]`,
-      `.${OWN.lastGamesButton}[data-username="${sel}"]`,
-      `.${OWN.hideVideoButton}[data-username="${sel}"]`,
+      `.${OWN.noteButton}[data-username=${sel}]`,
+      `.${OWN.statsButton}[data-username=${sel}]`,
+      `.${OWN.lastGamesButton}[data-username=${sel}]`,
+      `.${OWN.hideVideoButton}[data-username=${sel}]`,
     ].forEach((s) => root.querySelectorAll(s).forEach((b) => b.remove()));
   }
 
@@ -3251,9 +3339,20 @@ const TOOLTIP_CSS = `
   color: white;
 `;
 
-/** Экранирование значения для подстановки в [data-username="..."] селектор. */
+/**
+ * Значение атрибута для селектора БЕЗ кавычек: `[data-username=<escaped>]`.
+ *
+ * Ручная замена кавычек не покрывала управляющие символы (LF/CR/FF): ник с
+ * ними делал селектор невалидным, и querySelectorAll бросал исключение —
+ * обновление кнопок/тултипов срывалось (аудит безопасности 01.08.2026, №14).
+ * CSS.escape экранирует по спецификации именно идентификатор, поэтому
+ * подставлять результат нужно без обрамляющих кавычек.
+ */
 function cssAttr(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
+  // Фолбэк (движков без CSS.escape среди наших минимумов нет): экранируем
+  // всё, что не [A-Za-z0-9_-] и не кириллица, по правилу CSS «\<hex> ».
+  return value.replace(/[^\wЀ-ӿ-]/g, (c) => `\\${c.codePointAt(0)!.toString(16)} `);
 }
 
 // ───────────────────────── Экспорт фичи ─────────────────────────

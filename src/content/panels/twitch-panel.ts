@@ -927,11 +927,21 @@ function disconnect(): void {
   if (hadConnection) sendTwitchStatus(false);
 }
 
+/** Команда IRC-строки (PRIVMSG/NOTICE/366/…) без её содержимого. */
+function ircCommandOf(line: string): string {
+  const noTags = line.startsWith("@") ? line.slice(line.indexOf(" ") + 1) : line;
+  const parts = noTags.startsWith(":") ? noTags.split(" ") : ["", ...noTags.split(" ")];
+  return /^[A-Z0-9]{2,12}$/.test(parts[1] || "") ? parts[1] : "?";
+}
+
 function handleTwitchData(data: string): void {
   const lines = data.split("\r\n");
   for (const line of lines) {
     if (!line) continue;
-    log.debug(SCOPE, "IRC <<", line);
+    // В лог — только тип IRC-команды и длина: raw-строка содержит ник,
+    // display-name и ПОЛНЫЙ текст сообщения зрителя, а буфер логов уезжает в
+    // файл для поддержки (аудит безопасности 01.08.2026, находка 10).
+    log.debug(SCOPE, "IRC <<", ircCommandOf(line), `len=${line.length}`);
 
     // Ответ на PING (keep-alive).
     if (line.startsWith("PING")) {

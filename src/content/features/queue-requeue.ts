@@ -193,7 +193,11 @@ function consumePendingFromRoom(): void {
   }
   if (!raw) return;
   const ts = Number(raw);
-  if (!Number.isFinite(ts) || Date.now() - ts > PENDING_TTL_MS) return;
+  const age = Date.now() - ts;
+  // age < 0 — метка из БУДУЩЕГО: sessionStorage принадлежит сайту (AGENTS.md
+  // §5), и значение Date.now()+1e12 выглядело «вечно свежим» (аудит
+  // безопасности 01.08.2026, №15).
+  if (!Number.isFinite(ts) || age < 0 || age > PENDING_TTL_MS) return;
   accepted = true;
   armedFromRoom = true;
   disappearedAt = Date.now();

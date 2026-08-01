@@ -30,7 +30,17 @@ function detectCtx(): string {
   }
 }
 
-function resolveLevel(key: string, fallback: Level): Level {
+/**
+ * Уровень из localStorage — ТОЛЬКО для вывода в консоль.
+ *
+ * В content-скрипте localStorage принадлежит САЙТУ (AGENTS.md §5,
+ * недоверенный источник). Раньше отсюда же брался уровень БУФЕРА, и сайт мог
+ * выставить `polemica:buflevel=debug`, после чего в storage расширения (и
+ * потом в файл для поддержки) писались, например, полные строки твич-чата
+ * третьих лиц — тихое включение сбора чужих данных (аудит безопасности
+ * 01.08.2026, находка 10). Буферный уровень теперь фиксирован.
+ */
+function resolveConsoleLevel(key: string, fallback: Level): Level {
   try {
     const v = (globalThis as any).localStorage?.getItem(key) as Level | null;
     if (v && v in ORDER) return v;
@@ -64,10 +74,28 @@ interface Entry {
 
 let buffer: Entry[] = [];
 let persist = true;
-let consoleLevel: Level = resolveLevel("polemica:loglevel", "warn");
-let bufferLevel: Level = resolveLevel("polemica:buflevel", "info");
+let consoleLevel: Level = resolveConsoleLevel("polemica:loglevel", "warn");
+/** Не из page-storage: см. resolveConsoleLevel. Меняется только кодом расширения. */
+let bufferLevel: Level = "info";
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let dirty = false;
+
+/**
+ * Вырезать из строки то, что похоже на секреты, и обрезать по длине.
+ * Логи выгружаются в файл, который пользователь отправляет в поддержку —
+ * ключи сессии, токены и пароли туда попадать не должны (аудит безопасности
+ * 01.08.2026). Экспортируется, чтобы этим пользовались все, кто логирует
+ * строки из сети/страницы.
+ */
+// \b вокруг коротких слов обязателен: без него «sid» съедал «considered».
+// Схема (Bearer/Basic) пропускается ПЕРЕД значением, иначе вырезалось слово
+// схемы, а сам токен оставался в логе.
+const SECRET_RE =
+  /(\b(?:auth[_-]?key|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|session[_-]?id|sid|authorization)\b["'\s:=]{0,4}(?:(?:Bearer|Basic)\s+)?)([^\s,&"';]{4,})/gi;
+
+export function redactSecrets(input: string, maxLen = 400): string {
+  return input.replace(SECRET_RE, (_m, k: string) => `${k}…`).slice(0, maxLen);
+}
 
 function fmtArgs(args: unknown[]): string {
   return args

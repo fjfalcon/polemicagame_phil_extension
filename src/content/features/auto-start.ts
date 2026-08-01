@@ -95,10 +95,22 @@ const ACCEPT_CANDIDATE_SELECTOR =
  * safeClick раз в секунду. Берём только кликабельные узлы и оставляем самые
  * глубокие совпадения.
  */
+/** Панель принятия игры — вне её мы не кликаем ничего (см. ниже). */
+const ACCEPT_SCOPE_SELECTOR =
+  ".p-play__profile-accept, .p-play-profile__wr, .p-play__profile-panel";
+
 function findAcceptTextElements(): HTMLElement[] {
   const matched = Array.from(
     document.querySelectorAll<HTMLElement>(ACCEPT_CANDIDATE_SELECTOR),
-  ).filter((el) => containsAny(norm(el), TEXT.acceptGameText));
+  ).filter(
+    (el) =>
+      containsAny(norm(el), TEXT.acceptGameText) &&
+      // Гейт по контейнеру: текстовый фолбэк кликал любой элемент страницы с
+      // подстрокой «принять игру» — сайт (или его будущая разметка) мог
+      // подсунуть посторонний элемент с таким текстом (аудит безопасности
+      // 01.08.2026, находка 11).
+      el.closest(ACCEPT_SCOPE_SELECTOR) !== null,
+  );
   return matched.filter((el) => !matched.some((other) => other !== el && el.contains(other)));
 }
 
@@ -168,7 +180,14 @@ function clickAcceptButtons() {
 
   try {
     Array.from(document.querySelectorAll<HTMLElement>(SITE.cursorPointerDiv))
-      .filter((el) => containsAny(norm(el), TEXT.acceptGameText))
+      .filter(
+        (el) =>
+          containsAny(norm(el), TEXT.acceptGameText) &&
+          // Тот же scope-гейт, что в findAcceptTextElements: без него любой
+          // div.cursor-pointer с текстом «принять игру» где угодно на странице
+          // оставался кликабельным (аудит безопасности, находка 11).
+          el.closest(ACCEPT_SCOPE_SELECTOR) !== null,
+      )
       .forEach((el) => gameAcceptDivs.push(el));
   } catch (e) {
     log.debug(SCOPE, "cursor-pointer accept selector failed", e);

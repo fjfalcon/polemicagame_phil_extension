@@ -18,7 +18,7 @@
  * Только страница /game-search: на других страницах фича спит.
  */
 import { browser } from "@core/env";
-import { log } from "@core/log";
+import { log, redactSecrets } from "@core/log";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const SCOPE = "conn-diag";
@@ -58,7 +58,11 @@ export const connectionDiagFeature: Feature = {
       if (e.source !== window || e.origin !== location.origin) return;
       const data = e.data as { source?: string; t?: number; line?: string };
       if (data?.source !== "pn-conn-diag" || typeof data.line !== "string") return;
-      log.info(SCOPE, `+${((data.t || 0) / 1000).toFixed(1)}s`, data.line.slice(0, 400));
+      // Строка приходит из мира СТРАНИЦЫ (недоверенного, AGENTS.md §5): сайт
+      // может слать сюда что угодно тем же postMessage. Ограничиваем длину и
+      // вычищаем то, что похоже на ключи/токены — лог уезжает в файл для
+      // поддержки (аудит безопасности 01.08.2026, находка 9).
+      log.info(SCOPE, `+${((data.t || 0) / 1000).toFixed(1)}s`, redactSecrets(data.line, 200));
     };
     window.addEventListener("message", messageListener);
 

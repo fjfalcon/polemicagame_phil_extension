@@ -42,13 +42,22 @@ function injectedAutoAccept(): void {
     '[class*="button"][class*="accept"]',
     "button",
   ];
+  // Панель поиска/принятия игры. Без этого гейта generic-тексты («готов»,
+  // «подтвердить», «join») искались по ВСЕМУ документу, и расширение могло
+  // нажать постороннюю кнопку сайта с таким же текстом (аудит безопасности
+  // 01.08.2026, находка 11).
+  const ACCEPT_SCOPE =
+    ".p-play__profile-accept, .p-play-profile__wr, .p-play__profile-panel, .common-room-modal";
   const clicks = new WeakMap<Element, number>();
 
   const clickAccept = (): boolean => {
+    // Только страница поиска: инжект живёт 10с и мог застать переход в игру.
+    if (!location.pathname.startsWith("/game-search")) return false;
     for (const sel of SELECTORS) {
       for (const btn of Array.from(document.querySelectorAll(sel))) {
         const t = (btn.textContent || "").trim().toLowerCase().replace(/\s+/g, " ");
         if (!TEXTS.includes(t)) continue;
+        if (!btn.closest(ACCEPT_SCOPE)) continue;
         const r = (btn as HTMLElement).getBoundingClientRect();
         if (r.width === 0 || r.height === 0) continue;
         const used = clicks.get(btn) ?? 0;

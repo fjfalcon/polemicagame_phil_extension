@@ -69,7 +69,12 @@ export function isSafeNoteKey(key: string): boolean {
  */
 const SAFE_TAG_RE = /^[#a-zA-Z0-9(),.%\s-]+$/;
 
-export function isSafeTag(tag: string): boolean {
+export function isSafeTag(tag: unknown): tag is string {
+  // typeof-гард ПЕРВЫМ: RegExp приводит аргумент к строке, поэтому число 123 и
+  // массив ["red"] проходили проверку и сохранялись в карту как есть — потом
+  // потребители падали на rec.nickColor.includes(...) (аудит безопасности
+  // 01.08.2026, находка 4).
+  if (typeof tag !== "string") return false;
   if (!tag || tag.length > 200) return false;
   if (!SAFE_TAG_RE.test(tag)) return false;
   return !/url\s*\(|expression|@import/i.test(tag);
@@ -134,6 +139,44 @@ function noteTimestamp(note: NoteRecord | string | undefined): number {
  * Слить две карты заметок. Побеждает более свежая запись.
  * `added` считает только те ключи, которых не было или которые реально обновились.
  */
+/** Максимумы для записи из ЧУЖОГО файла (присланный «бэкап» — недоверенный ввод). */
+export const MAX_NOTE_TEXT = 5000;
+export const MAX_NOTE_KEY = 200;
+export const MAX_IMPORT_ENTRIES = 20_000;
+
+/**
+ * Собрать чистый NoteRecord из произвольного значения. Берём ТОЛЬКО известные
+ * поля известных типов — раньше запись из файла сохранялась сырым объектом
+ * (`safe = note`), и `nick: 123` / `tag: ["red"]` доезжали до storage, а потом
+ * ломали проходы заметок TypeError'ом (аудит безопасности 01.08.2026, №4/№12).
+ * Возвращает null, если из значения не получается осмысленной заметки.
+ */
+export function normalizeNoteRecord(raw: unknown): NoteRecord | null {
+  if (typeof raw === "string") {
+    // Легаси-формат: заметка была просто строкой.
+    return { text: raw.slice(0, MAX_NOTE_TEXT), timestamp: 0 };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.text !== "string") return null;
+
+  const rec: NoteRecord = {
+    text: r.text.slice(0, MAX_NOTE_TEXT),
+    // Время из чужого файла ограничиваем «сейчас»: timestamp вида
+    // Number.MAX_SAFE_INTEGER делал присланную запись вечным победителем
+    // слияния и затирал настоящие заметки (№5).
+    timestamp:
+      typeof r.timestamp === "number" && Number.isFinite(r.timestamp) && r.timestamp > 0
+        ? Math.min(r.timestamp, Date.now())
+        : 0,
+  };
+  if (typeof r.version === "string" && r.version.length <= 20) rec.version = r.version;
+  if (isSafeTag(r.tag)) rec.tag = r.tag;
+  if (isSafeTag(r.nickColor)) rec.nickColor = r.nickColor;
+  if (typeof r.nick === "string" && r.nick) rec.nick = r.nick.slice(0, MAX_NOTE_KEY);
+  return rec;
+}
+
 export function mergeNotes(
   base: NotesMap,
   incoming: NotesMap,
@@ -144,27 +187,23 @@ export function mergeNotes(
   // (дубль был бы невидим при чтении id-first и «воскресал» бы после
   // удаления). Сливаем в id-ключ по обычному правилу timestamp.
   const idKeyByNick = new Map<string, string>();
-  for (const [k, v] of Object.entries(base)) {
+  const indexNick = (k: string, v: NoteRecord | string | undefined) => {
     if (isIdKey(k) && v && typeof v !== "string" && v.nick) {
       idKeyByNick.set(v.nick.toLowerCase(), k);
     }
-  }
+  };
+  for (const [k, v] of Object.entries(base)) indexNick(k, v);
   let added = 0;
   let replaced = 0;
-  for (const [key, note] of Object.entries(incoming)) {
-    if (!isSafeNoteKey(key)) continue;
-    if (!note || (typeof note !== "string" && typeof note.text !== "string")) continue;
-    // Метка/цвет ника из чужого файла могут нести произвольный CSS —
-    // вычищаем их, саму заметку при этом сохраняем.
-    let safe = note;
-    if (typeof safe !== "string" && safe.tag && !isSafeTag(safe.tag)) {
-      log.warn("notes", "dropped unsafe tag on import", key);
-      safe = { ...safe, tag: undefined };
-    }
-    if (typeof safe !== "string" && safe.nickColor && !isSafeTag(safe.nickColor)) {
-      log.warn("notes", "dropped unsafe nickColor on import", key);
-      safe = { ...safe, nickColor: undefined };
-    }
+  for (const [rawKey, note] of Object.entries(incoming)) {
+    // Канонизация id-ключа: "u:0123" и "u:123" — один игрок, иначе присланный
+    // файл плодил вторую невидимую запись (аудит безопасности, №12).
+    const key = canonicalNoteKey(rawKey);
+    if (!isSafeNoteKey(key) || key.length > MAX_NOTE_KEY) continue;
+    // Запись пересобирается из разрешённых полей: сырой объект из чужого
+    // файла в карту больше не попадает (№4).
+    const safe = normalizeNoteRecord(note);
+    if (!safe) continue;
     const targetKey = !isIdKey(key) ? (idKeyByNick.get(key.toLowerCase()) ?? key) : key;
     const existing = merged[targetKey];
     if (existing === undefined) {
@@ -179,16 +218,26 @@ export function mergeNotes(
       const keep: Partial<NoteRecord> = {};
       if (typeof existing !== "string") {
         if (existing.nick) keep.nick = existing.nick;
-        if (typeof safe !== "string") {
-          if (!safe.tag && existing.tag) keep.tag = existing.tag;
-          if (!safe.nickColor && existing.nickColor) keep.nickColor = existing.nickColor;
-        }
+        if (!safe.tag && existing.tag) keep.tag = existing.tag;
+        if (!safe.nickColor && existing.nickColor) keep.nickColor = existing.nickColor;
       }
-      merged[targetKey] = typeof safe === "string" ? safe : { ...safe, ...keep };
+      merged[targetKey] = { ...safe, ...keep };
       replaced++;
     }
+    // Новая id-запись с ником должна попасть в индекс: иначе ник-ключ того же
+    // игрока, идущий дальше по файлу, создавал бы дубль (№12).
+    indexNick(targetKey, merged[targetKey]);
   }
   return { merged, added, replaced };
+}
+
+/** Канонический вид ключа: у id-ключей убираем ведущие нули. */
+export function canonicalNoteKey(key: string): string {
+  if (!isIdKey(key)) return key;
+  const id = key.slice(ID_KEY_PREFIX.length);
+  if (!/^\d+$/.test(id)) return key;
+  const norm = id.replace(/^0+(?=\d)/, "");
+  return `${ID_KEY_PREFIX}${norm}`;
 }
 
 /** Разовый перенос заметок из storage.sync. Ошибка не выставляет флаг — повторим позже. */
@@ -205,15 +254,26 @@ async function migrateFromSync(
 
     const fromSync = (sync[NOTES_KEY] as NotesMap) || {};
     const fromLegacy = (sync[LEGACY_KEY] as NotesMap) || {};
+    // Палитра: ОБЪЕДИНЯЕМ local и sync как упорядоченное множество. Раньше
+    // любой local-цвет полностью подавлял sync-цвета, а при пустых заметках
+    // ветка «переносить нечего» вообще не доходила до палитры — цвета из
+    // облака терялись молча (аудит безопасности 01.08.2026, №3).
+    const syncTags = Array.isArray(sync[TAGS_KEY])
+      ? (sync[TAGS_KEY] as unknown[]).filter(isSafeTag)
+      : [];
+    const customTags = [...new Set([...localTags, ...syncTags])];
+    const tagsChanged = customTags.length !== localTags.length;
+
     if (!Object.keys(fromSync).length && !Object.keys(fromLegacy).length) {
-      // Переносить нечего, но флаг ставим — чтобы не читать sync на каждой загрузке.
-      await browser.storage.local.set({ [MIGRATED_KEY]: true });
-      return { notes: localNotes, customTags: localTags };
+      // Заметок в sync нет, но палитра могла быть — пишем её вместе с флагом.
+      await browser.storage.local.set({
+        [MIGRATED_KEY]: true,
+        ...(tagsChanged ? { [TAGS_KEY]: customTags } : {}),
+      });
+      return { notes: localNotes, customTags };
     }
 
     const merged = mergeNotes(mergeNotes(localNotes, fromLegacy).merged, fromSync).merged;
-    const syncTags = Array.isArray(sync[TAGS_KEY]) ? (sync[TAGS_KEY] as string[]) : [];
-    const customTags = localTags.length ? localTags : syncTags;
 
     await browser.storage.local.set({
       [NOTES_KEY]: merged,

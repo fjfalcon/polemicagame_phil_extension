@@ -15,6 +15,10 @@ export const searchFeature: Feature = {
   settingKey: "auto_accept_enabled",
   enable() {
     onClick = (e: MouseEvent) => {
+      // Только НАСТОЯЩИЙ клик игрока: синтетический click() от скрипта сайта
+      // открывал 10-секундное окно автопринятия в background-инжекте
+      // (аудит безопасности 01.08.2026, находка 11).
+      if (!e.isTrusted) return;
       const t = e.target as HTMLElement;
       if (t.matches?.(SITE.profileSearchButton)) {
         // Игрок сам начал поиск — его действие важнее нашей разведки очереди:
