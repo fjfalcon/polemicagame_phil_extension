@@ -1,22 +1,34 @@
 /**
- * Переворот видео игрока на 180° через canvas-оверлей (без режима/кнопки на странице).
+ * Переворот видео игрока на 180° CSS-трансформацией (без режима/кнопки на странице).
  * Используется кнопкой «повернуть камеру» в ряду кнопок игрока (player-notes).
  *
  * В Firefox видео иногда приходит перевёрнутым — это позволяет развернуть его обратно.
+ *
+ * До аудита 01.08.2026 здесь был canvas-оверлей: полноразмерное копирование
+ * кадров на каждый rAF (до ~553 млн пикселей/с при 10 камерах) — прямой путь
+ * к фризам видео. CSS `rotate(180deg)` делает то же самое на компоузере
+ * бесплатно. Inline-transform намеренно ПЕРЕКРЫВАЕТ возможный transform сайта
+ * (зеркалирование): canvas тоже показывал сырые кадры без сайтовых
+ * трансформаций, поведение сохранено.
  */
 import { SITE } from "@core/selectors";
 import { log } from "@core/log";
 
 interface FlipState {
-  wrapper: HTMLElement;
   video: HTMLVideoElement;
-  canvas: HTMLCanvasElement;
-  originalOpacity: string;
+  originalTransform: string;
   originalFlipped: string | undefined;
-  rafId: number | null;
 }
 
 const activeFlips = new Map<HTMLVideoElement, FlipState>();
+
+/** Убрать записи отсоединённых video: сайт пересоздаёт элементы на смене фаз,
+ *  и без уборки карта удерживала бы мёртвые video-поддеревья до unflipAll. */
+function sweepDetached(): void {
+  for (const video of [...activeFlips.keys()]) {
+    if (!video.isConnected) activeFlips.delete(video);
+  }
+}
 
 export function isPlayerFlipped(playerEl: HTMLElement): boolean {
   const v = playerEl.querySelector<HTMLVideoElement>(SITE.playerVideoEl);
@@ -25,6 +37,7 @@ export function isPlayerFlipped(playerEl: HTMLElement): boolean {
 
 /** Перевернуть/вернуть видео игрока. Возвращает новое состояние (true = перевёрнуто) или null. */
 export function toggleFlipForPlayer(playerEl: HTMLElement): boolean | null {
+  sweepDetached();
   const wrapper = playerEl.querySelector<HTMLElement>(SITE.playerVideoWrapper);
   const video = wrapper?.querySelector<HTMLVideoElement>(SITE.playerVideoEl) ?? null;
   if (!wrapper || !video) {
@@ -36,71 +49,34 @@ export function toggleFlipForPlayer(playerEl: HTMLElement): boolean | null {
     cleanupFlip(active);
     return false;
   }
-  return flip(wrapper, video);
-}
-
-function flip(wrapper: HTMLElement, video: HTMLVideoElement): boolean {
-  const canvas = document.createElement("canvas");
-  canvas.className = "polemica-camera-flip";
-  canvas.width = video.videoWidth || 1280;
-  canvas.height = video.videoHeight || 720;
-  canvas.style.cssText = "width:100%;height:100%;position:absolute;top:0;left:0";
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    canvas.remove();
-    log.warn("camera-flip", "no 2d context");
+  // Осиротевший переворот: расширение перезагрузили, пока камера была
+  // перевёрнута — dataset и inline rotate живы, а карта пуста. Без
+  // нормализации flip() захватил бы rotate(180deg) как «оригинал» и камеру
+  // было бы не вернуть. Клик в этом состоянии = «вернуть как было».
+  if (video.dataset.flipped === "true") {
+    video.style.transform = "";
+    delete video.dataset.flipped;
     return false;
   }
-  ctx.scale(-1, -1); // поворот на 180°
-  ctx.translate(-canvas.width, -canvas.height);
+  return flip(video);
+}
 
+function flip(video: HTMLVideoElement): boolean {
   const state: FlipState = {
-    wrapper,
     video,
-    canvas,
-    originalOpacity: video.style.opacity,
+    originalTransform: video.style.transform,
     originalFlipped: video.dataset.flipped,
-    rafId: null,
   };
-  wrapper.appendChild(canvas);
-  video.style.opacity = "0";
-  // Флаг ставим ДО старта отрисовки, иначе первый кадр сразу выходит по условию.
+  video.style.transform = "rotate(180deg)";
   video.dataset.flipped = "true";
   activeFlips.set(video, state);
-
-  const draw = () => {
-    if (
-      video.ended ||
-      !video.isConnected ||
-      !wrapper.isConnected ||
-      !canvas.isConnected ||
-      video.dataset.flipped !== "true"
-    ) {
-      cleanupFlip(state);
-      return;
-    }
-    try {
-      if (video.readyState >= 2) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    } catch {
-      /* кадр ещё не готов */
-    }
-    state.rafId = requestAnimationFrame(draw);
-  };
   if (video.paused) video.play().catch(() => undefined);
-  state.rafId = requestAnimationFrame(draw);
-
   log.debug("camera-flip", "flip", { paused: video.paused, readyState: video.readyState });
   return true;
 }
 
 function cleanupFlip(state: FlipState): void {
-  if (state.rafId !== null) {
-    cancelAnimationFrame(state.rafId);
-    state.rafId = null;
-  }
-  state.canvas.remove();
-  state.video.style.opacity = state.originalOpacity;
+  state.video.style.transform = state.originalTransform;
   if (state.originalFlipped === undefined) delete state.video.dataset.flipped;
   else state.video.dataset.flipped = state.originalFlipped;
   if (activeFlips.get(state.video) === state) activeFlips.delete(state.video);
@@ -108,4 +84,5 @@ function cleanupFlip(state: FlipState): void {
 
 export function unflipAll(): void {
   for (const state of [...activeFlips.values()]) cleanupFlip(state);
+  sweepDetached();
 }

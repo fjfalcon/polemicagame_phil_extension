@@ -94,43 +94,91 @@ function fmtArgs(args: unknown[]): string {
 let primed = false;
 let priming: Promise<void> | null = null;
 
+/** Индекс лог-ключей: чтобы уборка не читала ВЕСЬ storage.local.
+ *  Имена НЕ под CONTENT_LOG_PREFIX — иначе сами попадали бы в кандидаты. */
+const LOG_KEYS_INDEX = `${LOG_PREFIX}keys-index`;
+const LOG_KEYS_SCAN_AT = `${LOG_PREFIX}keys-scanned-at`;
+/** Раз в неделю — полный скан: страховка от ключей, осиротевших из-за гонки
+ *  индекса между вкладками (последний писатель побеждает). */
+const FULL_SCAN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
 async function cleanupStaleContentLogs(): Promise<void> {
   if (CTX !== "content") return;
   try {
-    const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
+    // Раньше здесь был storage.local.get(null): каждый запуск content-скрипта
+    // десериализовывал ВСЁ хранилище, включая карту заметок на сотни записей
+    // (аудит 01.08.2026, находка 11). Теперь ключи берутся из индекса; полный
+    // скан — миграция при отсутствии индекса и еженедельная страховка.
+    const idxRes = (await browser.storage.local.get([LOG_KEYS_INDEX, LOG_KEYS_SCAN_AT])) as Record<
+      string,
+      unknown
+    >;
+    const scannedAt = Number(idxRes[LOG_KEYS_SCAN_AT]) || 0;
+    const fullScan =
+      !Array.isArray(idxRes[LOG_KEYS_INDEX]) || Date.now() - scannedAt > FULL_SCAN_INTERVAL_MS;
+    let candidates: string[];
+    if (!fullScan) {
+      candidates = (idxRes[LOG_KEYS_INDEX] as unknown[]).filter(
+        (k): k is string =>
+          typeof k === "string" &&
+          (k === LEGACY_CONTENT_LOG_KEY || k.startsWith(CONTENT_LOG_PREFIX)),
+      );
+    } else {
+      const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
+      candidates = Object.keys(all).filter(
+        (k) => k === LEGACY_CONTENT_LOG_KEY || k.startsWith(CONTENT_LOG_PREFIX),
+      );
+    }
+    const foreign = candidates.filter((k) => k !== STORAGE_KEY);
+    const logs = foreign.length
+      ? ((await browser.storage.local.get(foreign)) as Record<string, unknown>)
+      : {};
+
     const cutoff = Date.now() - CONTENT_LOG_TTL_MS;
-    const stale = Object.entries(all)
-      .filter(([key, value]) => {
-        if (
-          (key !== LEGACY_CONTENT_LOG_KEY && !key.startsWith(CONTENT_LOG_PREFIX)) ||
-          key === STORAGE_KEY
-        ) {
-          return false;
-        }
-        if (!Array.isArray(value) || value.length === 0) return true;
-        return (value as Entry[]).every((entry) => typeof entry.t !== "number" || entry.t < cutoff);
-      })
-      .map(([key]) => key);
+    const stale = foreign.filter((key) => {
+      const value = logs[key];
+      if (!Array.isArray(value) || value.length === 0) return true;
+      return (value as Entry[]).every((entry) => typeof entry.t !== "number" || entry.t < cutoff);
+    });
     if (stale.length) await browser.storage.local.remove(stale);
 
     // Потолок на число сессионных ключей ВНУТРИ суток: марафонный день с
     // десятками перезагрузок не должен приближаться к квоте local (она общая
     // с заметками). Оставляем 8 самых свежих чужих ключей + свой.
-    const survivors = Object.entries(all)
-      .filter(
-        ([key, value]) =>
-          key.startsWith(CONTENT_LOG_PREFIX) &&
-          key !== STORAGE_KEY &&
-          !stale.includes(key) &&
-          Array.isArray(value),
-      )
-      .map(([key, value]) => ({
+    const survivors = foreign
+      .filter((key) => key.startsWith(CONTENT_LOG_PREFIX) && !stale.includes(key))
+      .map((key) => ({
         key,
-        last: Math.max(0, ...(value as Entry[]).map((e) => (typeof e.t === "number" ? e.t : 0))),
+        last: Math.max(
+          0,
+          ...((logs[key] as Entry[]) ?? []).map((e) => (typeof e.t === "number" ? e.t : 0)),
+        ),
       }))
       .sort((a, b) => b.last - a.last);
     const overflow = survivors.slice(8).map((s) => s.key);
     if (overflow.length) await browser.storage.local.remove(overflow);
+
+    // Свежий индекс: выжившие чужие ключи + наш. Перед записью пере-читаем
+    // индекс и ОБЪЕДИНЯЕМ: вторая вкладка могла успеть дописать свой ключ, и
+    // «последний писатель побеждает» осиротил бы его навсегда (уборка видит
+    // только ключи из индекса). Гонку это сужает, а редкие потери добирает
+    // еженедельный полный скан.
+    const removed = new Set([...stale, ...overflow]);
+    const kept = foreign.filter((k) => !removed.has(k));
+    const freshIdx = (await browser.storage.local.get(LOG_KEYS_INDEX)) as Record<string, unknown>;
+    const concurrent = Array.isArray(freshIdx[LOG_KEYS_INDEX])
+      ? (freshIdx[LOG_KEYS_INDEX] as unknown[]).filter(
+          (k): k is string =>
+            typeof k === "string" &&
+            !removed.has(k) &&
+            (k === LEGACY_CONTENT_LOG_KEY || k.startsWith(CONTENT_LOG_PREFIX)),
+        )
+      : [];
+    const union = [...new Set([...concurrent, ...kept, STORAGE_KEY])];
+    await browser.storage.local.set({
+      [LOG_KEYS_INDEX]: union,
+      ...(fullScan ? { [LOG_KEYS_SCAN_AT]: Date.now() } : {}),
+    });
   } catch {
     /* недоступно — следующая сессия попробует снова */
   }
@@ -234,6 +282,10 @@ export const log = {
       const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
       const merged: Entry[] = [];
       for (const [k, v] of Object.entries(all)) {
+        // Служебный индекс ключей — тоже массив под LOG_PREFIX, но строк, а
+        // не Entry: без исключения его содержимое попадало в экспорт мусором
+        // с «Invalid Date».
+        if (k === LOG_KEYS_INDEX) continue;
         if (k.startsWith(LOG_PREFIX) && Array.isArray(v)) merged.push(...(v as Entry[]));
       }
       // Плюс несброшенные записи текущего контекста. Дедуп по содержимому:

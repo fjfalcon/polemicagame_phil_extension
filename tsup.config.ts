@@ -23,7 +23,11 @@ export default defineConfig({
   splitting: false,
   treeshake: true,
   sourcemap: false,
-  minify: false,
+  // Минификация включена по аудиту 01.08.2026 (находка 6): content.js грузится
+  // на каждой странице сайта в document_end, и ~449 KiB неминифицированного JS
+  // парсились до возврата управления странице. Обфускации нет — это допустимо
+  // и для CWS, и для подписи AMO.
+  minify: true,
   clean: true,
   // esbuild iife: одна самодостаточная функция на каждый entry
   outExtension() {

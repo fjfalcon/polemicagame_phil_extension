@@ -37,8 +37,10 @@ import {
   NOTES_KEY,
   TAGS_KEY,
   NOTES_VERSION,
+  buildNickColorIndex,
+  nickColorFrom,
 } from "@core/notes-store";
-import type { NoteRecord, NotesMap } from "@core/notes-store";
+import type { NoteRecord, NotesMap, NickColorIndex } from "@core/notes-store";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings, ExtMessage } from "@shared/types";
 
@@ -109,6 +111,10 @@ const VERSION = NOTES_VERSION;
 
 /** TTL кэшей статистики: за игровой вечер MMR меняется каждой игрой. */
 const STATS_TTL_MS = 5 * 60 * 1000;
+/** Пауза перед повторной попыткой после ошибки статистики (не долбим API). */
+const STATS_ERROR_BACKOFF_MS = 30 * 1000;
+/** TTL пустой истории игр: короче обычного, чтобы новые игры подтянулись. */
+const EMPTY_GAMES_TTL_MS = 60 * 1000;
 
 /** storage.local: массив ников (lowercase) с выключенным у нас звуком. */
 const MUTED_PLAYERS_KEY = "pn_muted_players";
@@ -242,6 +248,12 @@ class PlayerNotesManager {
   private gamesFetchedAt = new Map<string, number>();
   /** Ники, по которым запрос уже в полёте (пересборка плитки не дублирует его). */
   private statsInFlight = new Set<string>();
+  /** Время последней ошибки загрузки статистики по нику (для бэкоффа). */
+  private statsErrorAt = new Map<string, number>();
+  /** Запросы истории игр в полёте (дедупликация одновременных hover'ов). */
+  private lastGamesInFlight = new Map<string, Promise<LastGameEntry[]>>();
+  /** Тултипы, живущие порталом в body (для уборки осиротевших). */
+  private portaledTooltips = new Set<HTMLElement>();
   /** Ники с временно скрытым видео (в пределах сессии). */
   private hiddenVideos = new Set<string>();
   /**
@@ -291,34 +303,34 @@ class PlayerNotesManager {
     this.syncMatchPageRoute(getMatchId() !== null);
 
     // Один общий наблюдатель за DOM вместо нескольких MutationObserver.
+    // Полный проход — только на мутации, задевающие плитки/списки игроков:
+    // до аудита 01.08.2026 (находка 2) проход шёл на ЛЮБУЮ мутацию (класс
+    // звукового индикатора, текст таймера) — стабильно 4 раза в секунду.
+    // Страховка от пропущенного — безусловный редкий проход в интервале ниже.
     this.unsubscribers.push(
-      onDomChange(() => {
+      onDomChange((muts) => {
         if (this.matchPageActive) this.applyMatchPageMarker();
         if (this.settings.statistics_enabled === false) {
           this.removeStatisticsElements();
           return;
         }
-        this.processExistingElements();
+        if (this.mutationsTouchPlayers(muts)) this.processExistingElements();
       }),
     );
 
-    // Восстановитель: если игроки есть, а наши кнопки пропали (смена дня/ночи,
-    // пересборка слотов) — переинициализируем. Заменяет связку из нескольких
-    // интервалов и observer'ов оригинала.
+    // Страховочный редкий полный проход (2с): ловит всё, что не задело
+    // фильтр mutationsTouchPlayers (атрибутные правки сайта внутри плиток,
+    // пропущенные восстановления mute/скрытия видео) и заменяет прежний
+    // восстановитель «кнопки пропали». Полный проход идемпотентен, 0.5 раза
+    // в секунду — на порядок дешевле прежних четырёх.
     this.intervals.push(
       window.setInterval(() => {
+        this.sweepOrphanTooltips();
         if (this.settings.statistics_enabled === false) {
           this.removeStatisticsElements();
           return;
         }
-        const playersExist = document.querySelectorAll(SITE.player).length > 0;
-        // Маркер — контейнер иконок, а не кнопка статистики: её теперь можно
-        // выключить галочкой, и проверка по ней зациклила бы восстановитель.
-        const buttonsExist = document.querySelectorAll(`.${OWN.playerIcons}`).length > 0;
-        if (playersExist && !buttonsExist) {
-          log.debug("player-notes", "buttons missing, reprocessing");
-          this.processExistingElements();
-        }
+        this.processExistingElements();
       }, 2000),
     );
 
@@ -469,6 +481,12 @@ class PlayerNotesManager {
 
     this.playerStats.clear();
     this.lastGamesCache.clear();
+    this.lastGamesInFlight.clear();
+    this.statsErrorAt.clear();
+    this.portaledTooltips.clear();
+    this.profileIdByNick.clear();
+    this.nickIndexCache = null;
+    this.colorIndexCache = null;
     this.hiddenVideos.clear();
     // Мьют персистентный, но при выключенной фиче звук обязан вернуться:
     // расширение «ничего не делает», когда его выключили (§4 п.7).
@@ -738,10 +756,12 @@ class PlayerNotesManager {
       ring?.remove();
       return;
     }
-    if (getComputedStyle(container).position === "static") {
-      container.style.position = "relative";
-    }
     if (!ring) {
+      // getComputedStyle — только при создании рамки: вызов на каждый проход
+      // по каждой плитке давал до 80 style-чтений/с (аудит 01.08.2026).
+      if (getComputedStyle(container).position === "static") {
+        container.style.position = "relative";
+      }
       ring = document.createElement("div");
       ring.className = "pn-tag-ring";
       container.appendChild(ring);
@@ -854,27 +874,27 @@ class PlayerNotesManager {
       ring?.remove();
       return;
     }
-    if (getComputedStyle(box).position === "static") {
-      box.style.position = "relative";
-    }
     if (!ring) {
+      // Style-чтения — только при создании (см. applyPlayerTag).
+      if (getComputedStyle(box).position === "static") {
+        box.style.position = "relative";
+      }
       ring = document.createElement("div");
       ring.className = "pn-tag-ring";
       box.appendChild(ring);
     }
     const width = this.frameWidthPx();
-    const radius = getComputedStyle(avatar).borderRadius || "8px";
     if (
       ring.dataset.tag === tag &&
       ring.dataset.pnFor === username &&
-      ring.dataset.pnWidth === width &&
-      ring.dataset.pnRadius === radius
+      ring.dataset.pnWidth === width
     )
       return;
+    // Радиус читаем только при реальной перерисовке — не на каждый проход.
+    const radius = getComputedStyle(avatar).borderRadius || "8px";
     ring.dataset.tag = tag;
     ring.dataset.pnFor = username;
     ring.dataset.pnWidth = width;
-    ring.dataset.pnRadius = radius;
     ring.style.cssText = `
       position: absolute; inset: 0; border-radius: ${radius}; pointer-events: none; z-index: 5;
       padding: ${width}; background: ${tag};
@@ -920,23 +940,24 @@ class PlayerNotesManager {
    */
   private colorForPlayer(id: string | undefined, nick: string | undefined): string {
     if (this.settings.nick_colors_enabled === false) return "";
-    if (id) {
-      const rec = this.notes[idKey(id)];
-      if (rec && typeof rec !== "string" && rec.nickColor) return rec.nickColor;
+    // Кэшированный индекс вместо сканов карты заметок: раньше строка списка
+    // «Участники» без id-совпадения проходила все записи (30 участников ×
+    // 200 заметок × 4 прохода/с — аудит 01.08.2026, находка 8). Тот же
+    // TTL-подход, что у idKeyByNick.
+    return nickColorFrom(this.colorIndex(), id, nick);
+  }
+
+  /** Кэш индекса цветов (byId/byNick), TTL 1с — см. комментарий idKeyByNick. */
+  private colorIndexCache: { at: number; index: NickColorIndex } | null = null;
+
+  private colorIndex(): NickColorIndex {
+    const now = Date.now();
+    if (this.colorIndexCache && now - this.colorIndexCache.at < 1000) {
+      return this.colorIndexCache.index;
     }
-    if (nick) {
-      for (const k of this.nickKeysFor(nick)) {
-        const rec = this.notes[k];
-        if (rec && typeof rec !== "string" && rec.nickColor) return rec.nickColor;
-      }
-      const lower = nick.toLowerCase();
-      for (const [k, v] of Object.entries(this.notes)) {
-        if (isIdKey(k) && typeof v !== "string" && v.nickColor && v.nick?.toLowerCase() === lower) {
-          return v.nickColor;
-        }
-      }
-    }
-    return "";
+    const index = buildNickColorIndex(this.notes);
+    this.colorIndexCache = { at: now, index };
+    return index;
   }
 
   /**
@@ -984,6 +1005,9 @@ class PlayerNotesManager {
       now - (this.activeGameCheckedAt.get(key) ?? 0) >= ACTIVE_GAMES_TTL_MS;
     if (cached && now - fetchedAt < STATS_TTL_MS && !needsActiveRecheck) return;
     if (this.statsInFlight.has(key)) return; // запрос уже в полёте
+    // Бэкофф после ошибки: без него каждый повторный hover заново гнал три
+    // профильных запроса по игроку с падающим API (аудит 01.08.2026).
+    if (now - (this.statsErrorAt.get(key) ?? 0) < STATS_ERROR_BACKOFF_MS) return;
     this.statsInFlight.add(key);
 
     try {
@@ -1025,16 +1049,23 @@ class PlayerNotesManager {
         userId = ratingPlayer.user_id;
       }
 
+      // ok-чек и таймаут: раньше не-2xx молча парсился, а зависший запрос
+      // висел вечно (аудит 01.08.2026, находка 4).
+      const getJson = (url: string) =>
+        fetch(url, { signal: AbortSignal.timeout(15_000) }).then((r) => {
+          if (!r.ok) throw new Error(`stats API ${r.status}`);
+          return r.json();
+        });
       const [generalStats, roleStats, killcount]: [any[], any, any[]] = await Promise.all([
-        fetch(
+        getJson(
           `https://polemicagame.com/profile/default/get-role-statistic?user_id=${userId}&role=&game_type=league&scoring_type=scoring_2%2Cscoring_3`,
-        ).then((r) => r.json()),
-        fetch(
+        ),
+        getJson(
           `https://polemicagame.com/profile/default/get-statistic?user_id=${userId}&game_type=league&scoring_type=scoring_2%2Cscoring_3`,
-        ).then((r) => r.json()),
-        fetch(
+        ),
+        getJson(
           `https://polemicagame.com/profile/default/get-role-statistic?user_id=${userId}&role=civilian%2Csheriff&game_type=league&scoring_type=scoring_2%2Cscoring_3`,
-        ).then((r) => r.json()),
+        ),
       ]);
 
       const generalData = generalStats[0] || {};
@@ -1109,6 +1140,7 @@ class PlayerNotesManager {
       // только первую — вторая навсегда оставалась с заглушками «???».
       this.updatePlayerTooltips(username);
     } catch (e) {
+      this.statsErrorAt.set(key, Date.now());
       log.error("player-notes", `loadPlayerStats failed for ${username}`, e);
     } finally {
       this.statsInFlight.delete(key);
@@ -1257,9 +1289,10 @@ class PlayerNotesManager {
   }
 
   private createTooltip(username: string): HTMLDivElement {
-    if (!this.playerStats.has(username.toLowerCase())) {
-      void this.loadPlayerStats(username);
-    }
+    // БЕЗ немедленной загрузки статистики: раньше создание тултипов для
+    // стола из 10 игроков давало залп из ~30 HTTP-запросов при входе в
+    // комнату (аудит 01.08.2026, находка 4). Загрузку запускает mouseenter
+    // кнопки статистики; до ответа тултип показывает заглушки «???».
     const tooltip = document.createElement("div");
     tooltip.className = OWN.tooltip;
     // Метки для поиска тултипа, пока он в портале (см. updateAllTooltips).
@@ -1291,6 +1324,10 @@ class PlayerNotesManager {
     if (tooltip.parentElement !== document.body) {
       tooltip.dataset.pnShown = "1";
       document.body.appendChild(tooltip);
+      // Реестр активных порталов: если сайт удалит плитку до mouseleave,
+      // страховочный проход снимет осиротевший тултип (аудит 01.08.2026,
+      // находка 12) — иначе он удерживал бы отсоединённое поддерево плитки.
+      this.portaledTooltips.add(tooltip);
     }
     // ПОРЯДОК ВАЖЕН: сначала ставим геометрию (ещё невидимым), и только
     // потом показываем. Обратный порядок давал вспышку у левого края экрана
@@ -1320,6 +1357,7 @@ class PlayerNotesManager {
     tooltip.style.visibility = "hidden";
     tooltip.style.opacity = "0";
     delete tooltip.dataset.pnShown;
+    this.portaledTooltips.delete(tooltip);
     const anchor = this.tooltipAnchors.get(tooltip);
     if (anchor?.isConnected && tooltip.parentElement === document.body) {
       anchor.appendChild(tooltip);
@@ -1491,9 +1529,9 @@ class PlayerNotesManager {
     const el = container as HTMLElement;
     if (isPlayerFlipped(el)) return;
     const video = el.querySelector<HTMLVideoElement>(SITE.playerVideoEl);
-    // ended-гард обязателен: у мёртвого потока draw() тут же выходит через
-    // cleanupFlip, флаг flipped снимается — и без гарда мы бы пересоздавали
-    // canvas на КАЖДОМ тике DOM, пока сайт не заменит video.
+    // ended-гард: мёртвый поток переворачивать бессмысленно — ждём, пока сайт
+    // заменит video (при canvas-реализации без гарда тут был бы цикл
+    // пересоздания; с CSS-переворотом он просто лишняя работа).
     if (!video || video.ended) return;
     if (toggleFlipForPlayer(el)) {
       const btn = el.querySelector<HTMLElement>(`.${OWN.rotateButton}`);
@@ -1527,6 +1565,17 @@ class PlayerNotesManager {
       button.appendChild(dot);
     } else if (!has && dot) {
       dot.remove();
+    }
+  }
+
+  /** Снять портальные тултипы, чей якорь сайт уже удалил из DOM. */
+  private sweepOrphanTooltips(): void {
+    for (const tooltip of [...this.portaledTooltips]) {
+      const anchor = this.tooltipAnchors.get(tooltip);
+      if (!anchor?.isConnected || !tooltip.isConnected) {
+        tooltip.remove();
+        this.portaledTooltips.delete(tooltip);
+      }
     }
   }
 
@@ -1699,12 +1748,15 @@ class PlayerNotesManager {
       tooltip.innerHTML = "Загрузка...";
       this.showTooltip(tooltip, button);
       const games = await this.getLastGames(username);
+      // Курсор мог уйти до ответа — скрытый тултип не трогаем (запись DOM
+      // будила бы наблюдатель вхолостую); следующий hover перерисует сам.
+      if (tooltip.dataset.pnShown !== "1") return;
       tooltip.innerHTML =
         games.length > 0
           ? this.formatGamesHistory(games)
           : "Нет данных о последних играх";
       // Содержимое сменилось — размер тоже, пересчитываем позицию.
-      if (tooltip.dataset.pnShown === "1") this.showTooltip(tooltip, button);
+      this.showTooltip(tooltip, button);
     });
     button.addEventListener("mouseleave", () => {
       this.hideTooltip(tooltip);
@@ -2736,12 +2788,22 @@ class PlayerNotesManager {
     const cached = this.lastGamesCache.get(key);
     const fetchedAt = this.gamesFetchedAt.get(key) ?? 0;
     if (cached && Date.now() - fetchedAt < STATS_TTL_MS) return cached;
+    // Дедупликация: несколько mouseenter до первого ответа (или две плитки
+    // одного игрока) запускали одинаковые запросы (аудит 01.08.2026, находка 7).
+    const inFlight = this.lastGamesInFlight.get(key);
+    if (inFlight) return inFlight;
 
+    const promise = this.fetchLastGames(username, key);
+    this.lastGamesInFlight.set(key, promise);
     try {
-      const timeoutPromise = new Promise<LastGameEntry[]>((_, reject) =>
-        setTimeout(() => reject(new Error("Timeout")), 15000),
-      );
+      return await promise;
+    } finally {
+      this.lastGamesInFlight.delete(key);
+    }
+  }
 
+  private async fetchLastGames(username: string, key: string): Promise<LastGameEntry[]> {
+    try {
       const dataPromise = (async (): Promise<LastGameEntry[]> => {
         let userId: number | string | undefined;
         const stats = this.playerStats.get(key);
@@ -2762,8 +2824,11 @@ class PlayerNotesManager {
         }
 
         try {
+          // Настоящий таймаут через AbortSignal вместо Promise.race: race не
+          // отменял сам запрос, и он висел в сети после «таймаута».
           const gamesResponse = await fetch(
             `https://polemicagame.com/profile/default/get-games?userId=${userId}&page=1&limit=4`,
+            { signal: AbortSignal.timeout(15_000) },
           );
           if (!gamesResponse.ok) {
             log.warn("player-notes", `games API error: ${gamesResponse.status}`);
@@ -2788,12 +2853,15 @@ class PlayerNotesManager {
         }
       })();
 
-      const result = await Promise.race([dataPromise, timeoutPromise]);
-      // Кэшируем только непустой результат (как и оригинал не повторял запрос).
-      if (result.length > 0) {
-        this.lastGamesCache.set(key, result);
-        this.gamesFetchedAt.set(key, Date.now());
-      }
+      const result = await dataPromise;
+      // Кэшируем и ПУСТОЙ результат: у нового игрока без сыгранных игр каждый
+      // hover заново гнал запрос (аудит 01.08.2026, находка 7). Пустой ответ
+      // живёт по короткому TTL — появившиеся игры подтянутся.
+      this.lastGamesCache.set(key, result);
+      this.gamesFetchedAt.set(
+        key,
+        result.length > 0 ? Date.now() : Date.now() - STATS_TTL_MS + EMPTY_GAMES_TTL_MS,
+      );
       return result;
     } catch (e) {
       log.error("player-notes", "getLastGames failed", e);
@@ -2890,6 +2958,36 @@ class PlayerNotesManager {
   }
 
   // ─────────── Инъекция кнопок к игрокам ───────────
+
+  /**
+   * Задевает ли батч мутаций то, что мы декорируем: плитки игроков, список
+   * «Участники», шапку профиля. Атрибутные мутации игнорируются целиком —
+   * это шум звуковых индикаторов (class на .player) и анимаций; текст/узлы
+   * (childList) внутри интересных контейнеров — сигнал (смена ника,
+   * пересадка, пересборка Vue). Появление/удаление самих плиток ловим по
+   * содержимому added/removed-узлов. Пропущенное добирает страховочный
+   * 2с-проход.
+   */
+  private mutationsTouchPlayers(muts: MutationRecord[]): boolean {
+    const SCOPE_SEL =
+      ".player, .participants-item, .participants, .profileinfo__main-info, .profileinfo";
+    const CONTENT_SEL = ".player, .participants-item, .profileinfo__main-info";
+    for (const m of muts) {
+      if (m.type !== "childList") continue;
+      const t = m.target;
+      const el = t instanceof Element ? t : t.parentElement;
+      if (el?.closest(SCOPE_SEL)) return true;
+      for (const n of m.addedNodes) {
+        if (n instanceof Element && (n.matches(CONTENT_SEL) || n.querySelector(CONTENT_SEL)))
+          return true;
+      }
+      for (const n of m.removedNodes) {
+        if (n instanceof Element && (n.matches(CONTENT_SEL) || n.querySelector(CONTENT_SEL)))
+          return true;
+      }
+    }
+    return false;
+  }
 
   private processExistingElements(): void {
     if (this.settings.statistics_enabled === false) {
@@ -3012,8 +3110,9 @@ class PlayerNotesManager {
       delete vid.dataset.polemicaHidden;
     }
 
-    this.applyPlayerTag(container as HTMLElement, username);
-    this.applyNickColor(container as HTMLElement, username);
+    // (Повторных applyPlayerTag/applyNickColor здесь нет: пара в начале
+    // метода уже отработала, а лишний вызов делал getComputedStyle на каждый
+    // проход по каждой плитке — аудит 01.08.2026, находка 2.)
   }
 
   /**

@@ -211,3 +211,11 @@
     width: 0;
     height: 0;
 }
+
+/* Плитка с нашей рамкой обязана быть positioned: JS ставит inline relative
+   при создании рамки, но если сайт перезапишет style плитки, inline пропадёт —
+   это правило самолечит без getComputedStyle на каждый проход (перф-аудит
+   01.08.2026, ревью-находка 3). :has() допустим: минимумы Chrome 116/FF 121. */
+.player:has(> .pn-tag-ring) {
+    position: relative !important;
+}

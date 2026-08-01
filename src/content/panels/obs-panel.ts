@@ -223,6 +223,8 @@ let unsubDom: (() => void) | null = null;
 let gameUiDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 let timeOfDayCheckDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+/** Страховочный редкий опрос фазы (см. startDOMMonitoring). */
+let timeOfDayFallbackTimer: ReturnType<typeof setInterval> | null = null;
 let timeOfDayCheckQueued = false;
 let pendingTimeOfDay: TimeOfDay | null = null;
 let pendingTimeOfDayConfirmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -788,39 +790,40 @@ function startDOMMonitoring(): void {
 
   log.debug(SCOPE, "Starting DOM monitoring for automatic scene switching");
 
+  // Реагируем только на мутации, связанные с элементами стадий: раньше
+  // релевантной считалась ЛЮБАЯ childList/class/style-мутация документа
+  // (звуковые индикаторы!) — до 4 полных detectTimeOfDay в секунду, до
+  // 14 400 за часовую игру (аудит 01.08.2026, находка 5). Таймер «До смены
+  // этапа» живёт соседом списка стадий и может не попасть под селектор —
+  // его добирает редкий страховочный опрос ниже.
+  const PHASE_SCOPE = ".stage, .substage, .ended__title";
   unsubDom = onDomChange((mutations) => {
     let shouldCheckTime = false;
 
     for (const mutation of mutations) {
-      if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
+      const t = mutation.target;
+      const el = t instanceof Element ? t : t.parentElement;
+      if (el?.closest(PHASE_SCOPE)) {
         shouldCheckTime = true;
-      } else if (
-        mutation.type === "attributes" &&
-        (mutation.attributeName === "class" || mutation.attributeName === "style")
-      ) {
-        shouldCheckTime = true;
-      } else if (mutation.type === "characterData") {
-        const target = mutation.target;
-        let element: HTMLElement | null =
-          target instanceof HTMLElement ? target : target.parentElement;
-        while (element && element !== document.body) {
-          if (
-            element.classList &&
-            (element.classList.contains("stage") ||
-              element.classList.contains("substage") ||
-              element.classList.contains("ended__title"))
-          ) {
+        break;
+      }
+      if (mutation.type === "childList") {
+        for (const n of mutation.addedNodes) {
+          if (n instanceof Element && (n.matches(PHASE_SCOPE) || n.querySelector(PHASE_SCOPE))) {
             shouldCheckTime = true;
             break;
           }
-          element = element.parentElement;
         }
+        if (shouldCheckTime) break;
       }
-      if (shouldCheckTime) break;
     }
 
     if (shouldCheckTime) requestTimeOfDayCheck();
   });
+
+  // Страховочный редкий опрос (2с): ловит смену текста таймера вне
+  // .stage-скоупа и любые нестандартные раскладки вёрстки.
+  timeOfDayFallbackTimer = setInterval(() => requestTimeOfDayCheck(), 2000);
 
   // Начальная проверка времени суток.
   setTimeout(() => requestTimeOfDayCheck(), 1000);
@@ -830,6 +833,10 @@ function stopDOMMonitoring(): void {
   unsubDom?.();
   unsubDom = null;
 
+  if (timeOfDayFallbackTimer) {
+    clearInterval(timeOfDayFallbackTimer);
+    timeOfDayFallbackTimer = null;
+  }
   if (timeOfDayCheckDebounceTimer) {
     clearTimeout(timeOfDayCheckDebounceTimer);
     timeOfDayCheckDebounceTimer = null;

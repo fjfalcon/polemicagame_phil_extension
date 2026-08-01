@@ -302,7 +302,7 @@ class TwitchChatPanel extends FloatingPanel {
     });
     if (this.messages.length > MAX_MESSAGES) this.messages.shift();
     if (!this.atBottom) this.bumpUnseen();
-    this.renderMessages();
+    this.appendLastMessage();
   }
 
   addSystemMessage(message: string): void {
@@ -311,7 +311,30 @@ class TwitchChatPanel extends FloatingPanel {
     // Тоже «непрочитанное»: иначе системная строка сдвигала окно рендера,
     // не увеличив его (находка ревью №7).
     if (!this.atBottom) this.bumpUnseen();
-    this.renderMessages();
+    this.appendLastMessage();
+  }
+
+  /**
+   * Инкрементальное добавление ОДНОЙ строки вместо полной перерисовки окна:
+   * innerHTML-пересборка на каждое IRC-сообщение пересоздавала до 200 строк
+   * и держала общий DOM-наблюдатель насыщенным (аудит 01.08.2026, находка 3).
+   * Полный renderMessages остаётся для смены prefs/инициализации/show().
+   */
+  private appendLastMessage(): void {
+    const el = this.messagesEl;
+    const msg = this.messages[this.messages.length - 1];
+    if (!el || !msg) return;
+    // Заглушка «Чат пуст» — единственный не-message ребёнок; убираем перед
+    // первой настоящей строкой.
+    el.querySelector(".twitch-no-messages")?.remove();
+    el.insertAdjacentHTML("beforeend", this.messageHtml(msg));
+    // Инвариант окна: в DOM ровно min(messages.length, windowSize) строк.
+    const windowSize =
+      Math.max(this.prefs.visibleCount, 1) + (this.atBottom ? 0 : this.unseen);
+    const target = Math.min(this.messages.length, windowSize);
+    while (el.childElementCount > target) el.firstElementChild?.remove();
+    if (this.atBottom) el.scrollTop = el.scrollHeight;
+    this.updateNewBtn();
   }
 
   /** После show() чат должен стоять на дне, если пользователь его не листал:
@@ -347,42 +370,45 @@ class TwitchChatPanel extends FloatingPanel {
     // (находка ревью №2). После возврата вниз unseen=0 — окно обычное.
     const windowSize = Math.max(p.visibleCount, 1) + (this.atBottom ? 0 : this.unseen);
     const recent = this.messages.slice(-windowSize);
-    el.innerHTML = recent
-      .map((msg) => {
-        const time = p.timestamps
-          ? `<span class="twitch-timestamp" style="color:rgba(255,255,255,.45);font-size:${base - 2}px;margin-left:4px;">${escapeHtml(formatTime(msg.timestamp))}</span>`
-          : "";
-        if (msg.type === "system") {
-          return `
-            <div class="twitch-system-message" style="color:rgba(255,255,255,.55);font-size:${base - 1}px;font-style:italic;text-align:center;padding:4px;margin:4px 0;">
-              ${escapeHtml(msg.message)}${time}
-            </div>`;
-        }
-        const color = msg.color || fallbackNickColor(msg.username ?? "");
-        // Бейджи — только наши эмодзи-константы из BADGE_ICONS, не ввод сети.
-        const badges = (msg.badges ?? [])
-          .map((b) => `<span style="font-size:${base - 2}px;margin-right:3px;">${b}</span>`)
-          .join("");
-        const highlight =
-          msg.mention && p.highlightMentions
-            ? "background:rgba(255,170,0,.16);border-left:2px solid rgba(255,170,0,.65);padding-left:4px;border-radius:3px;"
-            : "";
-        return `
-          <div class="twitch-message" style="margin-bottom:2px;padding:2px 0;${highlight}">
-            ${badges}<span class="twitch-username" style="font-weight:600;color:${color};font-size:${base}px;margin-right:6px;">${escapeHtml(
-              msg.username ?? "",
-            )}:</span>
-            <span class="twitch-message-text" style="color:#fff;font-size:${base}px;word-wrap:break-word;line-height:1.4;">${escapeHtml(
-              msg.message,
-            )}</span>
-            ${time}
-          </div>`;
-      })
-      .join("");
+    el.innerHTML = recent.map((msg) => this.messageHtml(msg)).join("");
 
     if (this.atBottom) el.scrollTop = el.scrollHeight;
     else el.scrollTop = keepScrollTop;
     this.updateNewBtn();
+  }
+
+  /** HTML одной строки чата. ВСЁ пользовательское — через escapeHtml. */
+  private messageHtml(msg: ChatMessage): string {
+    const p = this.prefs;
+    const base = FONT_PX[p.fontSize];
+    const time = p.timestamps
+      ? `<span class="twitch-timestamp" style="color:rgba(255,255,255,.45);font-size:${base - 2}px;margin-left:4px;">${escapeHtml(formatTime(msg.timestamp))}</span>`
+      : "";
+    if (msg.type === "system") {
+      return `
+        <div class="twitch-system-message" style="color:rgba(255,255,255,.55);font-size:${base - 1}px;font-style:italic;text-align:center;padding:4px;margin:4px 0;">
+          ${escapeHtml(msg.message)}${time}
+        </div>`;
+    }
+    const color = msg.color || fallbackNickColor(msg.username ?? "");
+    // Бейджи — только наши эмодзи-константы из BADGE_ICONS, не ввод сети.
+    const badges = (msg.badges ?? [])
+      .map((b) => `<span style="font-size:${base - 2}px;margin-right:3px;">${b}</span>`)
+      .join("");
+    const highlight =
+      msg.mention && p.highlightMentions
+        ? "background:rgba(255,170,0,.16);border-left:2px solid rgba(255,170,0,.65);padding-left:4px;border-radius:3px;"
+        : "";
+    return `
+      <div class="twitch-message" style="margin-bottom:2px;padding:2px 0;${highlight}">
+        ${badges}<span class="twitch-username" style="font-weight:600;color:${color};font-size:${base}px;margin-right:6px;">${escapeHtml(
+          msg.username ?? "",
+        )}:</span>
+        <span class="twitch-message-text" style="color:#fff;font-size:${base}px;word-wrap:break-word;line-height:1.4;">${escapeHtml(
+          msg.message,
+        )}</span>
+        ${time}
+      </div>`;
   }
 
   /** unseen не может превышать буфер: дальше якорь окна всё равно теряется
