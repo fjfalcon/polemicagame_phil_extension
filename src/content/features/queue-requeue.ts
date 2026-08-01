@@ -19,13 +19,18 @@
  *
  * ЭТАП 2 — комната (/game, POST-переход после on_game_found): игроки жмут
  *   кнопку «Готов» (vote {type: game_start}); не все успели → сервер шлёт
- *   on_game_disbandment, комната умирает, показывается экран `.error` со
- *   ссылками, среди которых `a[href="/game-search"]` (структура снята с
- *   живой распущенной комнаты). Наша готовность видна на своей плитке:
- *   `.player.my-player .player__readiness`. Детект смерти + готовность →
- *   кликаем ИХ ЖЕ ссылку на поиск, оставив в sessionStorage одноразовый
- *   флаг; страница поиска при загрузке видит свежий флаг → взводит ту же
- *   машину клика «Играть» со всеми предохранителями.
+ *   on_game_disbandment, и комната показывает ОБРАТНЫЙ ОТСЧЁТ «Игра будет
+ *   распущена через MM:SS» (`.disbandment-timer`, бандл комнаты). Когда он
+ *   истекает, комната мертва, но экран сам по себе не меняется: игрок сидит
+ *   и ждёт (жалоба 01.08.2026), а кнопка сайта «На главную» ведёт на origin
+ *   (`finishGameLink: location.origin`) — оттуда до поиска ещё два клика.
+ *   Поэтому: отсчёт + наша готовность (`.player.my-player .player__readiness`)
+ *   → ставим одноразовый мост в sessionStorage → как отсчёт исчезнет и за
+ *   DISBAND_GRACE_MS не появится игровая стадия (значит не «все успели»),
+ *   сами уходим на /game-search. Если игрок ушёл раньше нас — мост
+ *   отработает на любой другой странице (elsewhereTick) и доведёт до поиска.
+ *   На странице поиска мост взводит ту же машину клика «Играть» со всеми
+ *   предохранителями.
  *
  * ГЛАВНЫЙ ПРЕДОХРАНИТЕЛЬ (оба этапа): возвращаем ТОЛЬКО того, кто сам
  * подтвердил игру (принял / нажал «Готов»). Кто не подтвердил — сам решил
@@ -72,7 +77,31 @@ const MY_READINESS_SELECTOR = ".player.my-player .player__readiness";
  * готовности (new-stage__readiness-count), а `.stage` — уже игра (день/ночь).
  */
 const GAME_STAGE_SELECTOR = ".stage";
-/** Экран смерти комнаты: ссылка на поиск (снято с живой распущенной комнаты). */
+/**
+ * Обратный отсчёт роспуска: сайт показывает его после нажатия «Готов», если
+ * готовы не все («Игра будет распущена через MM:SS»). Это ГЛАВНЫЙ признак
+ * сценария — раньше фича его не знала и ждала экран `.error` со ссылкой на
+ * поиск, которого в этом флоу не бывает (жалоба 01.08.2026: «нажал готов,
+ * жду — ничего не происходит; нажимаю „На главную“ — тоже ничего»).
+ * Класс снят с бандла комнаты (`{key:0, class:"disbandment-timer"}`).
+ */
+const DISBANDMENT_TIMER_SELECTOR = ".disbandment-timer";
+/**
+ * Сколько ждать после исчезновения отсчёта, прежде чем считать комнату
+ * распущенной. Отсчёт исчезает в ДВУХ случаях: время вышло (роспуск) и
+ * `gameDidStart` (все успели). Второй случай отсекается ДВАЖДЫ: по последнему
+ * показанному значению (ниже) и по появлению игровой стадии за эту паузу.
+ * 12с, а не 5: цена ошибки — выдернуть игрока из начавшегося матча, а первая
+ * стадия может прийти отдельным сообщением уже после старта.
+ */
+const DISBAND_GRACE_MS = 12_000;
+/**
+ * Отсчёт, исчезнувший на значении больше этого, — признак СТАРТА игры, а не
+ * роспуска: при роспуске он доходит до ~00:00. Три секунды запаса на то, что
+ * между последним увиденным тиком и исчезновением прошло время.
+ */
+const DISBAND_ZERO_TOLERANCE_S = 3;
+/** Экран смерти комнаты: ссылка на поиск (быстрый путь, если сайт его показал). */
 const ROOM_DEAD_LINK_SELECTOR = ".error a[href='/game-search']";
 /**
  * «Попробовать снова» — кнопка БЕЗ href на том же экране. Она есть ТОЛЬКО у
@@ -124,6 +153,16 @@ let roomReady = false;
 let gameStarted = false;
 /** Переход на поиск уже инициирован — не кликать ссылку повторно. */
 let roomExitDone = false;
+/** Видели обратный отсчёт роспуска в этой комнате. */
+let disbandmentSeen = false;
+/** Момент исчезновения отсчёта (0 — виден или ещё не появлялся). */
+let disbandmentGoneAt = 0;
+/** Последнее прочитанное значение отсчёта в секундах (-1 — не читали). */
+let disbandmentLastSeconds = -1;
+/** Отложенный тик: DOM в распущенной комнате замирает, мутаций больше нет. */
+let graceTimer: ReturnType<typeof setTimeout> | null = null;
+/** Уход с посторонней страницы уже инициирован. */
+let elsewhereDone = false;
 
 function isGameRoomPage(): boolean {
   return location.pathname === "/game" || location.pathname.startsWith("/game?");
@@ -136,6 +175,16 @@ function roomTick(): void {
 
   if (document.querySelector(GAME_STAGE_SELECTOR)) {
     gameStarted = true;
+    disbandmentSeen = false;
+    disbandmentGoneAt = 0;
+    disbandmentLastSeconds = -1;
+    if (graceTimer) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
+    // Игра всё-таки началась — мост обязан умереть, иначе он утащил бы
+    // игрока в поиск прямо из матча (или после его конца).
+    clearPending();
     log.debug(SCOPE, "матч начался — возвраты в поиск выключены до ухода со страницы");
     return;
   }
@@ -150,9 +199,55 @@ function roomTick(): void {
   }
   if (!roomReady || roomExitDone) return;
 
-  // Комната умерла: сайт показал экран ошибки со ссылкой на поиск.
-  const link = document.querySelector<HTMLElement>(ROOM_DEAD_LINK_SELECTOR);
-  if (!link || !isVisible(link)) return;
+  // ── обратный отсчёт роспуска ──
+  const timer = document.querySelector<HTMLElement>(DISBANDMENT_TIMER_SELECTOR);
+  if (timer && isVisible(timer)) {
+    if (!disbandmentSeen) {
+      disbandmentSeen = true;
+      log.info(SCOPE, "идёт обратный отсчёт роспуска — готовимся вернуться в поиск");
+      // Мост ставим СРАЗУ, а не в момент ухода: дальше игрока может увести
+      // сам сайт или он сам нажмёт «На главную» (кнопка ведёт на origin, а
+      // не на страницу поиска) — тогда наш код в комнате уже не выполнится.
+      armPending();
+    }
+    disbandmentLastSeconds = parseCountdownSeconds(timer.textContent);
+    disbandmentGoneAt = 0;
+    return;
+  }
+  // Отсчёт был и пропал: либо время вышло (роспуск), либо все успели и игра
+  // стартовала.
+  if (disbandmentSeen && !disbandmentGoneAt) {
+    // Первый дискриминатор — последнее показанное значение: при роспуске
+    // отсчёт доходит до ~00:00, при старте игры гаснет на произвольном.
+    if (disbandmentLastSeconds > DISBAND_ZERO_TOLERANCE_S) {
+      log.info(
+        SCOPE,
+        "отсчёт погас на",
+        disbandmentLastSeconds,
+        "с — игра стартует, не вмешиваемся",
+      );
+      gameStarted = true;
+      clearPending();
+      return;
+    }
+    disbandmentGoneAt = Date.now();
+    // DOM распущенной комнаты замирает: мутаций больше не будет, а tick()
+    // ходит только от них — без своего таймера пауза не истекла бы НИКОГДА
+    // (ровно то «ничего не происходит», ради чего фича и переписана).
+    if (graceTimer) clearTimeout(graceTimer);
+    graceTimer = setTimeout(() => {
+      graceTimer = null;
+      tick();
+    }, DISBAND_GRACE_MS + 250);
+    return;
+  }
+
+  const deadLink = document.querySelector<HTMLElement>(ROOM_DEAD_LINK_SELECTOR);
+  const errorScreenDead = !!deadLink && isVisible(deadLink);
+  const graceExpired =
+    disbandmentSeen && disbandmentGoneAt > 0 && Date.now() - disbandmentGoneAt > DISBAND_GRACE_MS;
+  if (!errorScreenDead && !graceExpired) return;
+
   // «Попробовать снова» = обрыв СВЯЗИ, а не распуск: комната может быть
   // жива, и наш уход в очередь бросил бы девятерых ждать десятого.
   const retry = document.querySelector<HTMLElement>(ROOM_RETRY_SELECTOR);
@@ -166,15 +261,73 @@ function roomTick(): void {
   if (Date.now() - lastTrustedInputAt < USER_BACKOFF_MS) return;
 
   roomExitDone = true;
+  armPending();
+  // Тост здесь не рисуем: страница сейчас сменится, плашка мелькнёт на
+  // миллисекунды. О возврате скажет тост на странице поиска (armedFromRoom).
+  log.info(SCOPE, "комната распущена после готовности — уходим на страницу поиска");
+  if (deadLink && isVisible(deadLink)) {
+    // Если сайт показал свою ссылку — идём по ней (обычная навигация сайта).
+    deadLink.click();
+  } else {
+    // Обычный случай: комната просто «умерла» без экрана ошибки, и уйти с
+    // неё может только тот, кто знает куда. Кнопка сайта «На главную» ведёт
+    // на origin, откуда игроку пришлось бы жать «Поиск» руками — ради этого
+    // фича и делалась.
+    location.assign("/game-search");
+  }
+}
+
+/** Одноразовый мост «комната распускается → страница поиска». */
+function armPending(): void {
   try {
     sessionStorage.setItem(PENDING_KEY, String(Date.now()));
   } catch {
     /* приватный режим — просто перейдём без автоклика на поиске */
   }
-  log.info(SCOPE, "комната распущена после готовности — уходим на страницу поиска");
-  showToast("Лобби распустили — возвращаю в поиск… 🔁");
-  // Кликаем ИХ ЖЕ ссылку: обычная навигация сайта, а не наш location-хак.
-  link.click();
+}
+
+function clearPending(): void {
+  try {
+    sessionStorage.removeItem(PENDING_KEY);
+  } catch {
+    /* приватный режим */
+  }
+}
+
+/** «MM:SS» → секунды; -1, если распарсить не удалось. */
+function parseCountdownSeconds(text: string | null): number {
+  const m = /(\d{1,2}):(\d{2})/.exec(text || "");
+  if (!m) return -1;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+/**
+ * Мы НЕ в комнате и НЕ на поиске (например, сайт увёл на главную или игрок
+ * сам нажал «На главную»), но мост из распускающейся комнаты свежий — значит
+ * человек нажал «Готов», лобби развалилось, и он ждёт возврата в поиск.
+ * Доводим его до страницы поиска; клик «Играть» сделает этап 1.
+ */
+function elsewhereTick(): void {
+  if (!settings || settings.requeue_after_lobby_fail_enabled === false) return;
+  if (elsewhereDone) return;
+  // ТОЛЬКО корень сайта — именно туда ведёт кнопка выхода из комнаты
+  // (`finishGameLink: location.origin`). На профиле, странице матча и прочих
+  // мост игнорируем: игрок ушёл туда сам и не ждёт, что его куда-то унесёт.
+  if (location.pathname !== "/") return;
+  if (document.hidden) return;
+  if (Date.now() - lastTrustedInputAt < USER_BACKOFF_MS) return;
+  let raw: string | null = null;
+  try {
+    raw = sessionStorage.getItem(PENDING_KEY);
+  } catch {
+    return;
+  }
+  if (!raw) return;
+  const age = Date.now() - Number(raw);
+  if (!Number.isFinite(age) || age < 0 || age > PENDING_TTL_MS) return;
+  elsewhereDone = true;
+  log.info(SCOPE, "мост из распущенной комнаты — ведём на страницу поиска");
+  location.assign("/game-search");
 }
 
 /**
@@ -250,8 +403,10 @@ function tick(): void {
   }
   if (!isSearchPage()) {
     reset();
-    // Этап 2: в комнате своя машина (готовность → смерть комнаты → уход).
+    // Этап 2: в комнате своя машина (готовность → роспуск → уход).
     if (isGameRoomPage()) roomTick();
+    // Прочие страницы (главная и т.п.): довести до поиска, если мост свежий.
+    else elsewhereTick();
     return;
   }
 
@@ -385,6 +540,14 @@ export const queueRequeueFeature: Feature = {
     roomReady = false;
     gameStarted = false;
     roomExitDone = false;
+    disbandmentSeen = false;
+    disbandmentGoneAt = 0;
+    disbandmentLastSeconds = -1;
+    elsewhereDone = false;
+    if (graceTimer) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
     removeToast();
     reset();
     settings = null;
