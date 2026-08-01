@@ -224,6 +224,12 @@ class PlayerNotesManager {
   private customTags: string[] = [];
   /** Кэш статистики по нику (lowercase) — не дёргаем API повторно на hover. */
   private playerStats = new Map<string, PlayerStatsEntry>();
+  /**
+   * id игроков, известные ПОМИМО статистики (страница профиля: id из URL).
+   * Отдельная карта, а не фейковая запись в playerStats: та несёт mmr/winrate,
+   * и заглушка с нулями отравила бы тултипы/инлайн-статистику.
+   */
+  private profileIdByNick = new Map<string, string>();
   /** Кэш последних игр по нику (lowercase). */
   private lastGamesCache = new Map<string, LastGameEntry[]>();
   /**
@@ -557,7 +563,8 @@ class PlayerNotesManager {
 
   /** userId игрока, если статистика его уже резолвила (иначе undefined). */
   private noteUserId(username: string): number | string | undefined {
-    const id = this.playerStats.get(username.toLowerCase())?.id;
+    const lower = username.toLowerCase();
+    const id = this.playerStats.get(lower)?.id ?? this.profileIdByNick.get(lower);
     // БЕЛЫЙ список вместо чёрного: принимаем только положительное целое.
     // Чёрный список («???», "") пропустил бы плейсхолдеры заглушек — так
     // "—" из unavailablePlayerStats чуть не отправил заметки ВСЕХ
@@ -787,6 +794,96 @@ class PlayerNotesManager {
         const container = btn.closest<HTMLElement>(SITE.player);
         if (u && container) this.applyPlayerTag(container, u);
       });
+  }
+
+  /**
+   * Страница профиля (/profile/<id>): цвет ника, рамка метки на аватаре и
+   * кнопка «Заметка» с жёлтой точкой-индикатором. id известен из URL, поэтому
+   * запись идёт сразу на вечный u:-ключ (и модалка по пути поглощает
+   * ник-легаси этого игрока). Идемпотентно: вызывается из DOM-прохода.
+   */
+  private ensureProfileNoteUI(): void {
+    const m = location.pathname.match(/^\/profile\/(\d+)/);
+    if (!m) return;
+    const id = m[1];
+    const nickEl = document.querySelector<HTMLElement>(".profileinfo__main-info-username");
+    const nick = nickEl?.textContent?.trim() || "";
+    if (!nickEl || !nick) return;
+
+    this.profileIdByNick.set(nick.toLowerCase(), id);
+
+    // Цвет ника (учитывает nick_colors_enabled и приоритет id-записи).
+    paintNickEl(nickEl, this.colorForPlayer(id, nick), nick);
+
+    // Рамка метки вокруг аватара.
+    const avatar = document.querySelector<HTMLElement>("img.profileinfo__main-info-avatar");
+    const avatarBox = avatar?.parentElement instanceof HTMLElement ? avatar.parentElement : null;
+    if (avatar && avatarBox) this.applyProfileTagRing(avatarBox, avatar, nick);
+
+    // Кнопка «Заметка» рядом с ником.
+    let btn = document.querySelector<HTMLButtonElement>(".pn-profile-note-btn");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.className = "pn-profile-note-btn";
+      btn.textContent = "Заметка";
+      btn.title = `Заметка, метка и цвет ника для ${nick}`;
+      // Без margin-left: шапка — flex с gap 1rem, свой отступ удвоил бы зазор.
+      btn.style.cssText =
+        "padding:3px 12px;border:1px solid rgba(99,102,241,.6);" +
+        "border-radius:8px;background:rgba(99,102,241,.2);color:#fff;cursor:pointer;" +
+        "font:600 12px system-ui,sans-serif;";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.showNoteModal(nick);
+      });
+      nickEl.insertAdjacentElement("afterend", btn);
+    }
+    this.updateNoteIndicator(btn, nick);
+  }
+
+  /**
+   * Рамка метки на аватаре профиля. Отдельно от applyPlayerTag: радиус
+   * скругления копируется с самой картинки (аватар круглый/скруглённый, а
+   * его обёртка — нет, и border-radius: inherit дал бы квадрат).
+   */
+  private applyProfileTagRing(box: HTMLElement, avatar: HTMLElement, username: string): void {
+    const tag = this.getNoteTag(username);
+    let ring = box.querySelector<HTMLElement>(".pn-tag-ring");
+    if (!tag) {
+      ring?.remove();
+      return;
+    }
+    if (getComputedStyle(box).position === "static") {
+      box.style.position = "relative";
+    }
+    if (!ring) {
+      ring = document.createElement("div");
+      ring.className = "pn-tag-ring";
+      box.appendChild(ring);
+    }
+    const width = this.frameWidthPx();
+    const radius = getComputedStyle(avatar).borderRadius || "8px";
+    if (
+      ring.dataset.tag === tag &&
+      ring.dataset.pnFor === username &&
+      ring.dataset.pnWidth === width &&
+      ring.dataset.pnRadius === radius
+    )
+      return;
+    ring.dataset.tag = tag;
+    ring.dataset.pnFor = username;
+    ring.dataset.pnWidth = width;
+    ring.dataset.pnRadius = radius;
+    ring.style.cssText = `
+      position: absolute; inset: 0; border-radius: ${radius}; pointer-events: none; z-index: 5;
+      padding: ${width}; background: ${tag};
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      filter: drop-shadow(0 0 4px rgba(0,0,0,.4));
+    `;
   }
 
   /** Покрасить ник игрока на плитке (лобби и игра — разметка одна). */
@@ -1441,6 +1538,10 @@ class PlayerNotesManager {
         const u = btn.dataset.username;
         if (u) this.updateNoteIndicator(btn, u);
       });
+    // Профиль: после сохранения из модалки обновить точку/цвет/рамку сразу
+    // (DOM-проход дошёл бы и сам, но с задержкой дросселя). Вне /profile/ —
+    // мгновенный no-op по regex внутри.
+    this.ensureProfileNoteUI();
   }
 
   private createHideVideoButton(
@@ -2803,6 +2904,8 @@ class PlayerNotesManager {
         .forEach((el) => this.processElement(el));
       // Сайтовый список «Участники» — не плитки, обходится отдельно.
       this.applyParticipantColors();
+      // Страница профиля — тоже отдельно (плиток .player там нет).
+      this.ensureProfileNoteUI();
     } catch (e) {
       log.error("player-notes", "processExistingElements failed", e);
     }
@@ -2931,8 +3034,14 @@ class PlayerNotesManager {
   }
 
   private removeStatisticsElements(): void {
+    // .pn-profile-note-btn обязана сниматься вместе с остальным: пережившая
+    // выключение кнопка держит замыкание на СТАРЫЙ инстанс менеджера, и её
+    // модалка писала бы всю карту заметок из замороженного this.notes,
+    // затирая всё, что добавлено после выключения (находка ревью 01.08.2026).
     document
-      .querySelectorAll(`${OWN_BUTTON_SELECTOR}, .${OWN.playerStats}, .${OWN.tooltip}`)
+      .querySelectorAll(
+        `${OWN_BUTTON_SELECTOR}, .${OWN.playerStats}, .${OWN.tooltip}, .pn-profile-note-btn`,
+      )
       .forEach((el) => el.remove());
     document.querySelectorAll(".pn-tag-ring").forEach((r) => r.remove());
     document

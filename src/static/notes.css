@@ -66,6 +66,15 @@
     margin: 0 !important; /* убираем любые внешние отступы у кнопок */
 }
 
+/* Кнопка заметки — якорь жёлтой точки-индикатора (.pn-note-dot). static из
+   общего правила выше перебивал inline relative из updateNoteIndicator, и
+   абсолютная точка позиционировалась от всего ряда .player-icons — рисовалась
+   над ПОСЛЕДНЕЙ кнопкой (мьютом), а не над заметкой (багрепорт 01.08.2026).
+   relative без смещений в flex-потоке ведёт себя как static — раскладка та же. */
+.player-icons > .note-button {
+    position: relative !important;
+}
+
 /* Стили для иконок при наведении */
 .stats-button:hover,
 .note-button:hover,
@@ -188,4 +197,17 @@
         -0.1px 0.1px 0 #000,
         0.1px 0.1px 0 #000 !important;
     font-weight: 400 !important;
+}
+
+/* Твич-чат: невидимый скроллбар (просьба владельца, 01.08.2026). Прокрутка
+   колесом/тачпадом работает как раньше (overflow-y остаётся auto) — не
+   рисуется только сама полоса. */
+.twitch-chat-messages {
+    scrollbar-width: none; /* Firefox, Chrome 121+ */
+    -ms-overflow-style: none;
+}
+.twitch-chat-messages::-webkit-scrollbar {
+    display: none; /* Chromium до 121, Safari-движки */
+    width: 0;
+    height: 0;
 }
