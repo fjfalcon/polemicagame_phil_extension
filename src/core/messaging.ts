@@ -33,6 +33,20 @@ export async function sendToActiveTab<T = unknown>(msg: ExtMessage): Promise<T |
   return tab?.id != null ? sendToTab<T>(tab.id, msg) : undefined;
 }
 
+/**
+ * СТРОГАЯ отправка в активную вкладку: бросает, если получателя нет.
+ *
+ * Обычный sendToTab гасит ошибку и возвращает undefined — для рассылок это
+ * правильно, но для КОМАНД («открой менеджер цветов») попап считал их
+ * доставленными и закрывался, хотя в старой вкладке (после обновления
+ * расширения) content-скрипта уже нет (аудит lifecycle 01.08.2026, №10).
+ */
+export async function sendToActiveTabStrict<T = unknown>(msg: ExtMessage): Promise<T> {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id == null) throw new Error("no active tab");
+  return (await browser.tabs.sendMessage(tab.id, msg)) as T;
+}
+
 /** Разослать сообщение во все вкладки игры. */
 export async function broadcastToGameTabs(msg: ExtMessage): Promise<void> {
   const tabs = await browser.tabs.query(GAME_TABS);

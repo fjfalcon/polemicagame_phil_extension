@@ -17,11 +17,21 @@ const OBS_WATCHDOG_ALARM = "polemica:obs-watchdog";
  * Будильник «вкладка поиска в фоне». Живёт в background осознанно: setTimeout
  * в самой скрытой вкладке душится тем же троттлингом, что и ping сайта
  * (docs/queue-timeout-report.md), и предупреждение опоздало бы к разрыву.
- * Минимум chrome.alarms — 0.5 минуты; берём 1 минуту: разрыв наступает
+ * Минимум периода chrome.alarms на НАШЕМ минимуме (Chrome 116) — 1 минута
+ * (0.5 появились только в Chrome 120); берём 1 минуту: разрыв наступает
  * примерно на 100-й секунде, значит у игрока остаётся ~40 секунд на реакцию.
  */
 const QUEUE_GUARD_ALARM = "polemica:queue-guard";
 const QUEUE_GUARD_DELAY_MIN = 1;
+/**
+ * Насколько опоздавший будильник ещё считаем полезным (см. onAlarm).
+ * 90с: по замеру docs/queue-timeout-report.md сервер рвёт сессию на ~126-й
+ * секунде, значит после этой границы предупреждать не о чем — а вкладка
+ * сразу после пробуждения ещё не обработала WS-close и ответила бы «ищу».
+ * Прежние 15с были слишком строгими (загруженная машина опаздывает на
+ * десятки секунд), 3 минуты — слишком мягкими.
+ */
+const STALE_ALARM_CUTOFF_MS = 90_000;
 const OBS_MANUAL_DISCONNECT_KEY = "obs_manual_disconnect";
 let obsQueue: Promise<void> = Promise.resolve();
 
@@ -274,7 +284,16 @@ async function runUpgradeMigrations(): Promise<void> {
       "pn_twitch_panel_restored_v1",
     )) as { pn_twitch_panel_restored_v1?: boolean };
     if (!done) {
-      await browser.storage.sync.set({ twitch_floating_panel_enabled: true });
+      // Пишем ТОЛЬКО если значения в sync ещё нет: local-флаг живёт на
+      // устройстве, поэтому новая установка на втором компьютере считала
+      // «миграция не делалась» и возвращала панель тому, кто её осознанно
+      // выключил на первом (аудит lifecycle 01.08.2026, находка 15).
+      const existing = (await browser.storage.sync.get("twitch_floating_panel_enabled")) as {
+        twitch_floating_panel_enabled?: boolean;
+      };
+      if (existing.twitch_floating_panel_enabled === undefined) {
+        await browser.storage.sync.set({ twitch_floating_panel_enabled: true });
+      }
       await browser.storage.local.set({ pn_twitch_panel_restored_v1: true });
     }
     await browser.storage.sync.remove([
@@ -297,8 +316,13 @@ browser.alarms.onAlarm.addListener((alarm) => {
     // Просроченный будильник (крышку ноутбука закрыли на два часа) стреляет
     // сразу на пробуждении, когда WS-close ещё не долетел и на странице пока
     // виден секундомер — вкладка честно ответит «ищу», и мы соврали бы про
-    // очередь, которой давно нет. Опаздавшие срабатывания игнорируем.
-    if (Date.now() - alarm.scheduledTime > 15_000) {
+    // очередь, которой давно нет.
+    //
+    // Порог поднят с 15с (см. STALE_ALARM_CUTOFF_MS): загруженная машина
+    // задерживает минутный будильник на десятки секунд, очередь при этом жива
+    // и предупреждение ещё полезно, а content уже держит armed=true и нового
+    // будильника не закажет (аудит lifecycle 01.08.2026, находка 12).
+    if (Date.now() - alarm.scheduledTime > STALE_ALARM_CUTOFF_MS) {
       void browser.alarms.clear(alarm.name);
       return;
     }
@@ -327,20 +351,68 @@ browser.runtime.onInstalled.addListener(() => {
 // Диагностика: перехват ошибок + гейт персиста логов по настройке.
 installErrorCapture("bg");
 void getSetting("debug_logging_enabled").then((on) => log.setPersist(on));
+/**
+ * Последние известные background'у значения настроек OBS.
+ *
+ * Страховка к фиксу находки 5: фильтр old/new в onSettingsChanged помогает
+ * только если Firefox присылает oldValue. Если он пришлёт «прицепом»
+ * неизменившийся `obs_enabled: true` без oldValue, фильтр его пропустит — и
+ * без этой сверки background снова принял бы его за намеренное включение и
+ * отменил ручное отключение. Здесь переход считается только при РЕАЛЬНОЙ
+ * смене значения относительно того, что background уже видел.
+ */
+const lastObsIntent: { enabled?: boolean; host?: string; password?: string; master?: boolean } = {};
+/**
+ * Готовность снимка. storage.onChanged — одно из событий, которыми браузер
+ * БУДИТ уснувший фоновый скрипт: слушатель отработает синхронно, когда
+ * getSettings() ещё в полёте, и пустой снимок (`undefined`) выглядел бы как
+ * «значение изменилось» — ровно в том сценарии, ради которого страховка и
+ * вводилась (ревью аудита lifecycle). Поэтому переходы считаются ТОЛЬКО
+ * после await этого промиса, внутри очереди OBS.
+ */
+const obsIntentReady = getSettings()
+  .then((s) => {
+    lastObsIntent.enabled = s.obs_enabled;
+    lastObsIntent.host = s.obs_host;
+    lastObsIntent.password = s.obs_password;
+    lastObsIntent.master = s.extension_enabled;
+  })
+  .catch((e) => log.error("background", "OBS intent snapshot failed", e));
+
 onSettingsChanged((patch) => {
   if ("debug_logging_enabled" in patch) log.setPersist(patch.debug_logging_enabled === true);
   // Живая реакция на тумблер OBS: раньше выключение obs_enabled (в т.ч. с
   // другого устройства через sync) не рвало соединение — background смотрел
   // на настройку только при onStartup/onInstalled.
-  if (
+  const touchesObs =
     "obs_enabled" in patch ||
     "obs_host" in patch ||
     "obs_password" in patch ||
-    "extension_enabled" in patch
-  ) {
+    "extension_enabled" in patch;
+
+  if (touchesObs) {
     void enqueueObs(async () => {
+      // Снимок гарантированно заполнен: см. obsIntentReady.
+      await obsIntentReady;
+      const enabledChanged =
+        "obs_enabled" in patch && patch.obs_enabled !== lastObsIntent.enabled;
+      const masterChanged =
+        "extension_enabled" in patch && patch.extension_enabled !== lastObsIntent.master;
+      const hostChanged = "obs_host" in patch && patch.obs_host !== lastObsIntent.host;
+      const passwordChanged =
+        "obs_password" in patch && patch.obs_password !== lastObsIntent.password;
+      if ("obs_enabled" in patch) lastObsIntent.enabled = patch.obs_enabled;
+      if ("extension_enabled" in patch) lastObsIntent.master = patch.extension_enabled;
+      if ("obs_host" in patch) lastObsIntent.host = patch.obs_host;
+      if ("obs_password" in patch) lastObsIntent.password = patch.obs_password;
+      // Ни одного РЕАЛЬНОГО перехода — событие «прицепное» (Firefox шлёт все
+      // ключи области), делать нечего.
+      if (!enabledChanged && !masterChanged && !hostChanged && !passwordChanged) return;
       // Мастер-выключатель рвёт OBS так же, как выключение obs_enabled.
-      if (patch.obs_enabled === false || patch.extension_enabled === false) {
+      if (
+        (enabledChanged && patch.obs_enabled === false) ||
+        (masterChanged && patch.extension_enabled === false)
+      ) {
         try {
           await Promise.all([
             setManualDisconnect(false),
@@ -352,11 +424,14 @@ onSettingsChanged((patch) => {
         }
         return;
       }
-      if (patch.obs_enabled === true || patch.extension_enabled === true) {
+      if (
+        (enabledChanged && patch.obs_enabled === true) ||
+        (masterChanged && patch.extension_enabled === true)
+      ) {
         await setManualDisconnect(false);
         await obs.allowAutoReconnect();
       }
-      if ("obs_host" in patch || "obs_password" in patch) {
+      if (hostChanged || passwordChanged) {
         // Правка кредов снимает и ручную паузу: пользователь исправил пароль
         // и ждёт подключения — held manual-disconnect тут только мешает.
         await obs.allowAutoReconnect();

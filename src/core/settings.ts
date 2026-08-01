@@ -132,13 +132,28 @@ export type SettingsChangeHandler = (changed: Partial<Settings>) => void;
  */
 export function onSettingsChanged(handler: SettingsChangeHandler): () => void {
   const listener = (
-    changes: Record<string, { newValue?: unknown }>,
+    changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
     area: string,
   ) => {
     if (area !== "sync" && area !== "local") return;
     const patch: Record<string, unknown> = {};
     for (const [k, c] of Object.entries(changes)) {
-      if (k in DEFAULT_SETTINGS) patch[k] = c.newValue;
+      if (!(k in DEFAULT_SETTINGS)) continue;
+      // Firefox присылает ВСЕ ключи области после set() и может вызвать
+      // слушателя, когда данные не менялись (MDN, Bug 1621162). Без сверки
+      // old/new «неизменившийся» obs_enabled: true читался как намеренное
+      // включение и отменял ручное отключение OBS (аудит lifecycle
+      // 01.08.2026, находка 5).
+      const next =
+        c.newValue === undefined
+          ? // Ключ удалён — это возврат к ДЕФОЛТУ, а не undefined в рантайме
+            // (иначе фича с дефолтом true молча выключалась до перезагрузки;
+            // находка 18).
+            DEFAULT_SETTINGS[k as SettingKey]
+          : c.newValue;
+      const prev = c.oldValue === undefined ? DEFAULT_SETTINGS[k as SettingKey] : c.oldValue;
+      if (Object.is(prev, next)) continue;
+      patch[k] = next;
     }
     if (Object.keys(patch).length) handler(patch as Partial<Settings>);
   };

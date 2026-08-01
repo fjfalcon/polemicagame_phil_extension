@@ -94,7 +94,11 @@ function resolveGameKey(): string | null {
   return null;
 }
 
+/** Чтение упало — писать нельзя (иначе затрём чужую историю). */
+let readOnly = false;
+
 function scheduleSave(): void {
+  if (readOnly) return;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     // Ограничиваем число хранимых игр.
@@ -102,7 +106,11 @@ function scheduleSave(): void {
     if (keys.length > MAX_GAMES) {
       for (const k of keys.slice(0, keys.length - MAX_GAMES)) delete storeAll[k];
     }
-    void browser.storage.local.set({ [STORAGE_KEY]: storeAll });
+    // Результат записи проверяем: молчаливый отказ (квота) оставлял метку
+    // на экране, но после перезагрузки она исчезала (находка 8).
+    void browser.storage.local.set({ [STORAGE_KEY]: storeAll }).catch((e) => {
+      log.error("role-marker", "save failed", e);
+    });
   }, 400);
 }
 
@@ -248,7 +256,11 @@ export const roleMarkerFeature: Feature = {
     try {
       res = (await browser.storage.local.get({ [STORAGE_KEY]: {} })) as typeof res;
     } catch (e) {
+      // Тот же гейт, что у заметок: пустая карта после СБОЯ чтения — не
+      // «истории нет». Без него первая же метка записывала пустой снимок
+      // поверх всей истории (до 50 игр) — аудит lifecycle 01.08.2026, №8.
       log.error("role-marker", "load failed", e);
+      readOnly = true;
       res = { [STORAGE_KEY]: {} };
     }
     storeAll = res[STORAGE_KEY] || {};
@@ -294,6 +306,7 @@ export const roleMarkerFeature: Feature = {
     log.info("role-marker", "enabled", Object.keys(storeAll).length, "games stored");
   },
   disable() {
+    readOnly = false;
     offDom?.();
     offDom = null;
     closeMenu?.();

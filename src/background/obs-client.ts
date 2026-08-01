@@ -40,7 +40,13 @@ export class ObsClient {
   private readonly maxReconnectAttempts = 10;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastHeartbeat = 0;
-  private readonly heartbeatInterval = 30_000;
+  /**
+   * 20с, а не 30: Chrome убивает service worker после 30 секунд без
+   * активности, и heartbeat, назначенный ровно на границу, конкурировал с
+   * завершением воркера (официальный пример Chrome тоже шлёт keepalive раз в
+   * 20с). Аудит lifecycle 01.08.2026, находка 4.
+   */
+  private readonly heartbeatInterval = 20_000;
   private readonly connectionTimeout = 10_000;
   private connecting = false;
   private connectionTimer: ReturnType<typeof setTimeout> | null = null;

@@ -24,6 +24,9 @@ import {
   MAX_IMPORT_ENTRIES,
 } from "@core/notes-store";
 
+/** Сколько игр с метками ролей принимаем из чужого файла (у фичи лимит 50). */
+const MAX_IMPORT_ROLE_GAMES = 50;
+
 /** Потолок размера файла бэкапа (наши 200 заметок ≈ 40 КБ). */
 const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
 
@@ -55,6 +58,7 @@ import type { NotesMap } from "@core/notes-store";
 import {
   sendRuntime,
   sendToActiveTab,
+  sendToActiveTabStrict,
   broadcastToGameTabs,
   onMessage,
 } from "@core/messaging";
@@ -384,10 +388,16 @@ document.addEventListener("DOMContentLoaded", () => {
           showPopupToast("Открой вкладку polemicagame.com", "error");
           return;
         }
-        await sendToActiveTab({ type: "openNickColors" });
+        // СТРОГАЯ отправка: обычная гасит «нет получателя», и попап
+        // закрывался, ничего не открыв (после обновления расширения в старой
+        // вкладке контент-скрипта уже нет) — аудит lifecycle 01.08.2026, №10.
+        await sendToActiveTabStrict({ type: "openNickColors" });
         window.close(); // попап закрываем — диалог уже на странице
       } catch {
-        showPopupToast("Не удалось открыть менеджер на странице", "error");
+        showPopupToast(
+          "Страница не отвечает — обнови вкладку игры (F5) и попробуй снова",
+          "error",
+        );
       }
     });
 
@@ -419,6 +429,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const extra = (await browser.storage.local.get({
           [TAGS_KEY]: [],
           pn_muted_players: [],
+          // Метки ролей — тоже устойчивый ввод пользователя (история до 50
+          // игр); без них обещание «импорт вернёт всё как было» врало
+          // (аудит lifecycle 01.08.2026, находка 17).
+          roleMarks: {},
         })) as Record<string, unknown>;
         const payload = {
           app: "polemica-notes",
@@ -429,6 +443,8 @@ document.addEventListener("DOMContentLoaded", () => {
           notes,
           customTags: Array.isArray(extra[TAGS_KEY]) ? extra[TAGS_KEY] : [],
           mutedPlayers: Array.isArray(extra.pn_muted_players) ? extra.pn_muted_players : [],
+          roleMarks:
+            extra.roleMarks && typeof extra.roleMarks === "object" ? extra.roleMarks : {},
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -546,11 +562,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 (m): m is string => typeof m === "string" && m.length > 0 && m.length <= 200,
               )
             : [];
-          if (!tags.length && !muted.length) return;
+          const hasMarks =
+            !!data?.roleMarks && typeof data.roleMarks === "object" && !Array.isArray(data.roleMarks);
+          if (!tags.length && !muted.length && !hasMarks) return;
           try {
             const cur = (await browser.storage.local.get({
               [TAGS_KEY]: [],
               pn_muted_players: [],
+              roleMarks: {},
             })) as Record<string, unknown>;
             const patch: Record<string, unknown> = {};
             if (tags.length) {
@@ -562,6 +581,37 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? (cur.pn_muted_players as string[])
                 : [];
               patch.pn_muted_players = [...new Set([...curMuted, ...muted])].slice(0, 1000);
+            }
+            // Метки ролей: слияние по играм, существующие записи в приоритете
+            // (импорт не должен затирать метки текущей сессии).
+            const incomingMarks = data?.roleMarks;
+            if (incomingMarks && typeof incomingMarks === "object" && !Array.isArray(incomingMarks)) {
+              const curMarks =
+                cur.roleMarks && typeof cur.roleMarks === "object"
+                  ? (cur.roleMarks as Record<string, unknown>)
+                  : {};
+              const merged: Record<string, unknown> = { ...curMarks };
+              // Лимит игр: MAX_GAMES роль-маркера подрезает хранилище только
+              // при следующей записи метки, а присланный файл мог влить
+              // тысячи ключей в storage.local, квота которого общая с
+              // заметками (ревью аудита lifecycle, находка 3).
+              let addedGames = 0;
+              for (const [game, marks] of Object.entries(incomingMarks as Record<string, unknown>)) {
+                if (addedGames >= MAX_IMPORT_ROLE_GAMES) break;
+                if (typeof game !== "string" || game.length > 200) continue;
+                if (!marks || typeof marks !== "object" || Array.isArray(marks)) continue;
+                if (game in merged) continue;
+                // Значения — только строки-идентификаторы ролей.
+                const clean: Record<string, string> = {};
+                for (const [player, role] of Object.entries(marks as Record<string, unknown>)) {
+                  if (typeof player !== "string" || player.length > 200) continue;
+                  if (typeof role !== "string" || role.length > 40) continue;
+                  clean[player] = role;
+                }
+                merged[game] = clean;
+                addedGames++;
+              }
+              patch.roleMarks = merged;
             }
             await browser.storage.local.set(patch);
           } catch (e) {
@@ -859,7 +909,9 @@ document.addEventListener("DOMContentLoaded", () => {
       // не должен рисовать «⚠️ Откройте страницу игры» в twitch-статус.
       void browser.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
         if (tab?.url?.includes("polemicagame.com")) {
-          void sendMessageToContentScript({ type: "twitch_get_status" });
+          // Тихо: попап открывают и просто посмотреть настройки, а контент
+          // мог ещё не загрузиться — предупреждение тут пугает зря.
+          void sendMessageToContentScript({ type: "twitch_get_status" }, false);
         }
       });
     }
@@ -1096,21 +1148,27 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ───────────────────────── Отправка простых сообщений в content ─────────────────────────
-  async function sendMessageToContentScript(msg: ExtMessage): Promise<boolean> {
+  async function sendMessageToContentScript(
+    msg: ExtMessage,
+    /** false — не показывать пользователю ошибку (тихий пробник статуса). */
+    showErrors = true,
+  ): Promise<boolean> {
     log.debug(SCOPE, "send to content", msg);
     const isTwitch = "type" in msg && msg.type.startsWith("twitch_");
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && tab.url.includes("polemicagame.com")) {
       try {
-        await sendToActiveTab(msg);
+        // Тоже строгая: раньше отказ гасился внутри sendToActiveTab, и
+        // команда считалась доставленной (находка 10).
+        await sendToActiveTabStrict(msg);
         return true;
       } catch (error) {
         log.debug(SCOPE, "content script not available", error);
-        showContentScriptError(isTwitch);
+        if (showErrors) showContentScriptError(isTwitch);
         return false;
       }
     } else {
-      showWrongPageError(isTwitch);
+      if (showErrors) showWrongPageError(isTwitch);
       return false;
     }
   }
