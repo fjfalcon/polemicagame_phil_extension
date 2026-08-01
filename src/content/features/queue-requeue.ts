@@ -40,7 +40,7 @@
  * состоянию — ровно тот сюрприз, которого быть не должно.
  */
 import { onDomChange, safeClick, isVisible } from "@core/dom";
-import { SITE } from "@core/selectors";
+import { SITE, TEXT } from "@core/selectors";
 import { log } from "@core/log";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
@@ -68,24 +68,6 @@ const SITE_MODAL_SELECTOR = ".modal-break-search, .v--modal-overlay, .vm--overla
 
 // ── этап 2: комната ──
 
-/** Отметка готовности на СВОЕЙ плитке (бандл room: player__topleftmenu). */
-const MY_READINESS_SELECTOR = ".player.my-player .player__readiness";
-/**
- * Игровая стадия началась — матч идёт, никаких возвратов в поиск (экран
- * `.error` со ссылкой на поиск бывает и при обрыве ЖИВОЙ игры — туда лезть
- * нельзя). ВАЖНО: `.new-stage` сюда не входит — это ПРЕДИГРОВОЙ экран
- * готовности (new-stage__readiness-count), а `.stage` — уже игра (день/ночь).
- */
-const GAME_STAGE_SELECTOR = ".stage";
-/**
- * Обратный отсчёт роспуска: сайт показывает его после нажатия «Готов», если
- * готовы не все («Игра будет распущена через MM:SS»). Это ГЛАВНЫЙ признак
- * сценария — раньше фича его не знала и ждала экран `.error` со ссылкой на
- * поиск, которого в этом флоу не бывает (жалоба 01.08.2026: «нажал готов,
- * жду — ничего не происходит; нажимаю „На главную“ — тоже ничего»).
- * Класс снят с бандла комнаты (`{key:0, class:"disbandment-timer"}`).
- */
-const DISBANDMENT_TIMER_SELECTOR = ".disbandment-timer";
 /**
  * Сколько ждать после исчезновения отсчёта, прежде чем считать комнату
  * распущенной. Отсчёт исчезает в ДВУХ случаях: время вышло (роспуск) и
@@ -101,16 +83,6 @@ const DISBAND_GRACE_MS = 12_000;
  * между последним увиденным тиком и исчезновением прошло время.
  */
 const DISBAND_ZERO_TOLERANCE_S = 3;
-/** Экран смерти комнаты: ссылка на поиск (быстрый путь, если сайт его показал). */
-const ROOM_DEAD_LINK_SELECTOR = ".error a[href='/game-search']";
-/**
- * «Попробовать снова» — кнопка БЕЗ href на том же экране. Она есть ТОЛЬКО у
- * ошибок ПОДКЛЮЧЕНИЯ (сверено с бандлом: массив кнопок распуска в
- * on_self_strike — home + search без try_again; connection-ошибки — search +
- * try_again). Если она видна — комната, возможно, ЖИВА и девять игроков ждут:
- * уводить человека в очередь нельзя, пусть пробует переподключиться.
- */
-const ROOM_RETRY_SELECTOR = ".error a.error__main-buttons-item:not([href])";
 /** Одноразовый мост «комната умерла → страница поиска»: sessionStorage. */
 const PENDING_KEY = "pn_requeue_pending";
 /** Свежесть флага: переход + загрузка страницы поиска должны уложиться. */
@@ -147,6 +119,14 @@ let visibilityListener: (() => void) | null = null;
 
 // ── состояние этапа 2 (комната) ──
 
+/**
+ * Состояние комнаты живёт до `disable()`, а роутер (content/index.ts)
+ * queue-requeue не перезапускает: вход в комнату — это полная загрузка
+ * страницы. Если сайт когда-нибудь сделает комнату SPA-маршрутом, вторая
+ * комната в той же вкладке унаследует `gameStarted = true` — то есть ровно тот
+ * баг, который чинили 02.08.2026. Тогда состояние надо будет сбрасывать по
+ * смене URL.
+ */
 /** Игрок нажал «Готов» в ЭТОЙ комнате (отметка на своей плитке). */
 let roomReady = false;
 /** Видели игровую стадию — матч состоялся, возвраты запрещены до ухода. */
@@ -155,6 +135,8 @@ let gameStarted = false;
 let roomExitDone = false;
 /** Видели обратный отсчёт роспуска в этой комнате. */
 let disbandmentSeen = false;
+/** Про отсчёт уже написали в лог (пишем один раз на комнату, даже без готовности). */
+let disbandmentLogged = false;
 /** Момент исчезновения отсчёта (0 — виден или ещё не появлялся). */
 let disbandmentGoneAt = 0;
 /** Последнее прочитанное значение отсчёта в секундах (-1 — не читали). */
@@ -170,12 +152,67 @@ function isGameRoomPage(): boolean {
   return location.pathname === "/game" || location.pathname.startsWith("/game?");
 }
 
+function norm(text: string | null | undefined): string {
+  return (text || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Матч ИДЁТ (день/ночь/голосование), а не «комната только что открылась».
+ *
+ * Проверять сам `.stage` нельзя — и это была причина, по которой этап 2 не
+ * работал НИКОГДА (жалоба 01.08.2026, разбор лога 02.08.2026). Роллер сайта
+ * выбирает ветку `.new-stage` ровно при `stage.type === voting_for_game_start`,
+ * а во ВСЕХ остальных случаях рисует `.stage` — включая первые секунды после
+ * загрузки комнаты, пока состояние игры ещё не пришло по сокету. Узел в этот
+ * момент пустой, но он ЕСТЬ: фича видела его на первом же тике, ставила
+ * `gameStarted` и молча выключала себя на всю жизнь страницы.
+ */
+function matchIsRunning(): boolean {
+  // Пауза/промах/итог игры рисуются вместо роллера, стадии там нет вообще —
+  // но все три бывают только после старта матча (ревью 02.08.2026).
+  if (document.querySelector(SITE.roomFixedState)) return true;
+  // Экран набора игроков — доказательство, что матч ещё не начался.
+  if (document.querySelector(SITE.pregameScreen)) return false;
+  // Непустой текст обязателен: в свежезагруженной комнате сайт рисует ТРИ
+  // пустых `.substage` (массив substages в data фиксирован: current/next/temp,
+  // а текст берётся из ещё не пришедшей стадии).
+  return Array.from(document.querySelectorAll<HTMLElement>(SITE.runningStageMarkers)).some(
+    (el) => norm(el.textContent).length > 0,
+  );
+}
+
+/**
+ * Игрок подтвердил готовность в этой комнате. Два независимых признака:
+ *  1. отметка «Готов» на своей плитке;
+ *  2. кнопка готовности в контролах с классом `active` — сайт вешает его
+ *     ровно при `votingForGameStart.voted`.
+ * Второй нужен потому, что первый держится на вёрстке плитки и на её
+ * ВИДИМОСТИ: старая проверка брала первый узел в документе и требовала
+ * offsetWidth > 0 — то есть молча отвечала «не готов» на любую разметку, где
+ * отметка отрисована иначе.
+ */
+function readyConfirmed(): boolean {
+  const marks = Array.from(document.querySelectorAll<HTMLElement>(SITE.myReadinessMark));
+  if (marks.some((el) => el.offsetWidth > 0 || isVisible(el))) return true;
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>(SITE.readyButton))) {
+    // Текст опознаёт КНОПКУ (точное совпадение, §4 п.2 — никаких подстрок:
+    // «Не готов» содержит «готов»), класс active — НАЖАТА ли готовность. Обе
+    // подписи кнопки одинаковы («Готов»), без класса состояние не отличить.
+    // Хрупкость: в шаблоне ControlsButton есть спан хоткея button__command,
+    // сейчас ЗАКОММЕНТИРОВАННЫЙ. Если сайт его включит, textContent станет
+    // «RГотов» и признак молча умрёт — останется только отметка на плитке.
+    if (!(TEXT.readyButton as readonly string[]).includes(norm(el.textContent))) continue;
+    if (el.classList.contains(SITE.readyButtonActiveClass)) return true;
+  }
+  return false;
+}
+
 /** Тик комнаты: следим за готовностью и смертью комнаты. */
 function roomTick(): void {
   if (!settings || settings.requeue_after_lobby_fail_enabled === false) return;
   if (gameStarted) return;
 
-  if (document.querySelector(GAME_STAGE_SELECTOR)) {
+  if (matchIsRunning()) {
     gameStarted = true;
     disbandmentSeen = false;
     disbandmentGoneAt = 0;
@@ -187,23 +224,28 @@ function roomTick(): void {
     // Игра всё-таки началась — мост обязан умереть, иначе он утащил бы
     // игрока в поиск прямо из матча (или после его конца).
     clearPending();
-    log.debug(SCOPE, "матч начался — возвраты в поиск выключены до ухода со страницы");
+    log.info(SCOPE, "матч начался — возвраты в поиск выключены до ухода со страницы");
     return;
   }
 
-  // Отметка готовности на своей плитке — «я подтвердил игру».
-  if (!roomReady) {
-    const mark = document.querySelector<HTMLElement>(MY_READINESS_SELECTOR);
-    if (mark && mark.offsetWidth > 0) {
-      roomReady = true;
-      log.debug(SCOPE, "готовность подтверждена (отметка на своей плитке)");
-    }
+  if (!roomReady && readyConfirmed()) {
+    roomReady = true;
+    log.info(SCOPE, "готовность подтверждена — этап 2 на страже");
+  }
+
+  // ── обратный отсчёт роспуска ──
+  const timer = document.querySelector<HTMLElement>(SITE.disbandmentTimer);
+  const timerVisible = !!timer && isVisible(timer);
+  // Отсчёт логируем ДО гейта готовности: иначе по логу пользователя нельзя
+  // отличить «сайт не показал отсчёт» от «мы не увидели готовность», и
+  // разбор жалобы упирается в догадки (разбор лога 02.08.2026).
+  if (timerVisible && !disbandmentLogged) {
+    disbandmentLogged = true;
+    log.info(SCOPE, "виден обратный отсчёт роспуска; готовность подтверждена:", roomReady);
   }
   if (!roomReady || roomExitDone) return;
 
-  // ── обратный отсчёт роспуска ──
-  const timer = document.querySelector<HTMLElement>(DISBANDMENT_TIMER_SELECTOR);
-  if (timer && isVisible(timer)) {
+  if (timer && timerVisible) {
     if (!disbandmentSeen) {
       disbandmentSeen = true;
       log.info(SCOPE, "идёт обратный отсчёт роспуска — готовимся вернуться в поиск");
@@ -250,7 +292,7 @@ function roomTick(): void {
     return;
   }
 
-  const deadLink = document.querySelector<HTMLElement>(ROOM_DEAD_LINK_SELECTOR);
+  const deadLink = document.querySelector<HTMLElement>(SITE.roomDeadLink);
   const errorScreenDead = !!deadLink && isVisible(deadLink);
   const graceExpired =
     disbandmentSeen && disbandmentGoneAt > 0 && Date.now() - disbandmentGoneAt > DISBAND_GRACE_MS;
@@ -258,7 +300,7 @@ function roomTick(): void {
 
   // «Попробовать снова» = обрыв СВЯЗИ, а не распуск: комната может быть
   // жива, и наш уход в очередь бросил бы девятерых ждать десятого.
-  const retry = document.querySelector<HTMLElement>(ROOM_RETRY_SELECTOR);
+  const retry = document.querySelector<HTMLElement>(SITE.roomRetryButton);
   if (retry && isVisible(retry)) {
     log.debug(SCOPE, "экран с «Попробовать снова» — обрыв связи, не вмешиваемся");
     return;
@@ -569,6 +611,7 @@ export const queueRequeueFeature: Feature = {
     gameStarted = false;
     roomExitDone = false;
     disbandmentSeen = false;
+    disbandmentLogged = false;
     disbandmentGoneAt = 0;
     disbandmentLastSeconds = -1;
     elsewhereDone = false;

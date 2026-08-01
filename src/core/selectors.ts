@@ -47,6 +47,45 @@ export const SITE = {
     '.p-play__profile-accept.cursor-pointer, .p-play__profile-game.p-play__profile-accept, .p-play-profile__wr div[class*="cursor-pointer"]',
   acceptGameWrapperDiv: ".p-play-profile__wr div",
   cursorPointerDiv: "div.cursor-pointer",
+  // ── комната до старта игры: развал лобби (queue-requeue, этап 2) ──
+  /**
+   * Экран «Идет набор игроков»: роллер рисует его РОВНО при
+   * `gameView.stage.type === "voting_for_game_start"`. Значит его присутствие —
+   * доказательство, что матч ещё НЕ начался.
+   */
+  pregameScreen: ".new-stage",
+  /**
+   * Признаки ИДУЩЕГО матча внутри `.stage`. Проверять сам `.stage` нельзя:
+   * роллер рисует эту ветку всегда, когда стадия не «набор игроков» — в том
+   * числе СРАЗУ ПОСЛЕ ЗАГРУЗКИ комнаты, пока состояние игры ещё не пришло по
+   * сокету. Тогда узел пустой (внутри — пустой `.substages`), и матча за ним
+   * нет (жалоба 01.08.2026: автовозврат не срабатывал в комнате НИКОГДА).
+   */
+  runningStageMarkers: ".stage .stage__name, .stage .time-of-day, .stage .substage",
+  /**
+   * Пауза, промах мафии и итог игры рисуются ВМЕСТО роллера
+   * (`fixedState` → RollerFixedState), поэтому там нет ни `.stage`, ни
+   * `.new-stage`. Все три состояния бывают только ПОСЛЕ старта матча — значит
+   * этот экран сам по себе доказывает, что игра идёт (ревью 02.08.2026).
+   */
+  roomFixedState: ".roller .ended",
+  /** Обратный отсчёт роспуска: «Игра будет распущена через MM:SS». */
+  disbandmentTimer: ".disbandment-timer",
+  /** Отметка «Готов» на СВОЕЙ плитке (player__topleftmenu). */
+  myReadinessMark: ".player.my-player .player__readiness",
+  /**
+   * Кнопка готовности в игровых контролах. Это ControlsButton
+   * (`div.button.preset-1.<size>`) с подписью «Готов» и классом `active`,
+   * когда игрок УЖЕ нажал (`:class="{active: votingForGameStart.voted}"`).
+   * Иконку как признак использовать нельзя: сайт отдаёт svg по хешу без имени
+   * файла (см. CAMERA_ICON_HASHES в auto-start).
+   */
+  readyButton: ".controls .button",
+  readyButtonActiveClass: "active",
+  /** Экран смерти комнаты: ссылка на поиск. */
+  roomDeadLink: ".error a[href='/game-search']",
+  /** «Попробовать снова» — это ошибка СВЯЗИ, комната может быть жива. */
+  roomRetryButton: ".error a.error__main-buttons-item:not([href])",
   // Игровая страница: стартовый экран, лобби, веб-камера (auto-start)
   welcomeModal: ".common-room-modal",
   lobbyStageName: ".new-stage__name",
@@ -197,6 +236,13 @@ export const TEXT = {
   // Пункты меню «показать/скрыть роли» (auto-start, day/night switch)
   showRoles: ["показать роли", "show roles"],
   hideRoles: ["скрыть роли", "hide roles"],
+  /**
+   * Подпись кнопки готовности в комнате до старта игры. Она ОДНА И ТА ЖЕ в
+   * обоих состояниях (start_game_readiness_button_ready и _not_ready — оба
+   * «Готов»/«Ready»), поэтому текст опознаёт кнопку, а нажата ли готовность —
+   * говорит класс `active` (SITE.readyButtonActiveClass).
+   */
+  readyButton: ["готов", "ready"],
 } as const;
 
 /** CSS-классы/идентификаторы, создаваемые САМИМ расширением (наши, не сайта). */
