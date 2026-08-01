@@ -61,6 +61,16 @@ const CONTENT_SESSION_ID =
     : "";
 const STORAGE_KEY =
   CTX === "content" ? `${CONTENT_LOG_PREFIX}${CONTENT_SESSION_ID}` : `${LOG_PREFIX}${CTX}`;
+/**
+ * Короткая метка документа в поле контекста: `content#a1b2`.
+ *
+ * Уникальный id сессии жил только в ИМЕНИ ключа хранилища и терялся при
+ * склейке экспорта — строки двух одновременно открытых игр перемешивались под
+ * одинаковым `content`, и разобрать «одна вкладка владеет сценой, вторая
+ * получает отказ» было нельзя (аудит наблюдаемости 02.08.2026, LOG-2).
+ */
+const ENTRY_CTX =
+  CTX === "content" ? `content#${CONTENT_SESSION_ID.slice(-4)}` : CTX;
 const CAP = 600;
 const MAX_MSG = 600;
 
@@ -105,6 +115,17 @@ const SECRET_RE =
 export function redactSecrets(input: string, maxLen = 400): string {
   return input.replace(SECRET_RE, (_m, k: string) => `${k}…`).slice(0, maxLen);
 }
+
+/**
+ * Что мы ОСОЗНАННО не вычищаем (решение владельца, 02.08.2026).
+ *
+ * Аудит наблюдаемости предлагал заменять имена сцен OBS и название твич-канала
+ * на «задано/пусто». Оставили как есть: без имени сцены жалобу «переключилось
+ * не туда» разобрать нечем, а риск невелик — это собственный лог пользователя,
+ * который он сам решает отправить. Секреты (ключи, токены, пароли) чистятся
+ * всегда и на стоке; адрес OBS — только схема+хост+порт, причина обрыва — наша
+ * категория вместо текста от сервера.
+ */
 
 function fmtArgs(args: unknown[]): string {
   return args
@@ -228,6 +249,58 @@ if (typeof document !== "undefined" && typeof window !== "undefined") {
   window.addEventListener("pagehide", () => log.flushNow());
 }
 
+/**
+ * Здоровье журнала: удалось ли вообще сохранить/прочитать записи.
+ *
+ * Если storage.local отказал (квота, временный сбой), пользователь выгружал
+ * старый или почти пустой файл и принимал его за полный — а поддержка делала
+ * выводы по журналу, которого нет (аудит наблюдаемости 02.08.2026, LOG-1,
+ * КРИТИЧНО). Сообщать об этом через сам log.* нельзя: строка о том, что
+ * запись не работает, ушла бы в ту же неработающую запись.
+ */
+const health = { failed: false, lost: false, operation: "", lastReportAt: 0, failStreak: 0 };
+const HEALTH_REPORT_THROTTLE_MS = 60_000;
+/**
+ * Потолок самостоятельных повторов записи. Квота — состояние стойкое, и ничто
+ * в цикле её не освобождает: без потолка воркер долбился бы в хранилище вечно
+ * (24 обращения в минуту при полном бездействии) и, что хуже, НЕ ЗАСЫПАЛ бы —
+ * вызовы extension API сбрасывают таймер простоя (ревью 02.08.2026).
+ * После потолка ждём следующей записи в лог — она запланирует флеш сама.
+ */
+const MAX_FLUSH_RETRIES = 4;
+const FLUSH_RETRY_BASE_MS = 5000;
+const FLUSH_RETRY_CAP_MS = 60_000;
+/**
+ * Общая на все контексты отметка «журнал повреждён».
+ *
+ * Флага в памяти мало: файл собирает ПОПАП, а отказ записи случается прежде
+ * всего в игровой вкладке — там объём. Попап о чужой беде не знал и печатал
+ * `complete: yes` ровно в том случае, ради которого пометка и заводилась
+ * (ревью 02.08.2026). Запись крошечная: при исчерпании квоты она обычно
+ * проходит там, где падает запись шестисот строк.
+ */
+const HEALTH_KEY = `${LOG_PREFIX}health`;
+
+function reportStorageFailure(operation: string, e: unknown): void {
+  const first = !health.failed;
+  health.failed = true;
+  health.operation = operation;
+  // Отметку пишем ТОЛЬКО на входе в состояние: на повторах она уже стоит, а
+  // лишняя запись — это ещё одно обращение к сломанному хранилищу.
+  if (first) {
+    void browser.storage.local
+      .set({ [HEALTH_KEY]: { ctx: ENTRY_CTX, at: Date.now(), operation } })
+      .catch(() => undefined);
+  }
+  const now = Date.now();
+  if (now - health.lastReportAt < HEALTH_REPORT_THROTTLE_MS) return;
+  health.lastReportAt = now;
+  // Только консоль: рекурсия через log.* тут запрещена — строка о том, что
+  // запись не работает, ушла бы в ту же неработающую запись и закольцевалась.
+  // eslint-disable-next-line no-console
+  console.error("[polemica:log] журнал не сохранён", ENTRY_CTX, operation, e);
+}
+
 async function primeFromStorage(): Promise<void> {
   await cleanupStaleContentLogs();
   try {
@@ -236,8 +309,8 @@ async function primeFromStorage(): Promise<void> {
     if (Array.isArray(prev) && prev.length) {
       buffer = [...(prev as Entry[]), ...buffer].slice(-CAP);
     }
-  } catch {
-    /* недоступно — пишем что есть */
+  } catch (e) {
+    reportStorageFailure("prime", e);
   }
   primed = true;
 }
@@ -261,8 +334,24 @@ async function doFlush(): Promise<void> {
   dirty = false;
   try {
     await browser.storage.local.set({ [STORAGE_KEY]: buffer });
-  } catch {
-    /* квота / недоступно */
+    // Транзиентный сбой самоизлечим: dirty снят, но записи остались в буфере,
+    // и этот успешный flush записал их целиком. Поэтому флаг снимаем — но
+    // только если кольцо не проворачивалось (health.lost), иначе часть строк
+    // потеряна безвозвратно и журнал полным уже не станет.
+    if (!health.lost) health.failed = false;
+    health.failStreak = 0;
+  } catch (e) {
+    reportStorageFailure("flush", e);
+    // Следующей строки может не быть (тихий контекст) — планируем повтор сами,
+    // иначе хвост не доедет вообще. Но с откатом и потолком: см. MAX_FLUSH_RETRIES.
+    health.failStreak++;
+    if (health.failStreak <= MAX_FLUSH_RETRIES) {
+      const delay = Math.min(
+        FLUSH_RETRY_BASE_MS * 2 ** (health.failStreak - 1),
+        FLUSH_RETRY_CAP_MS,
+      );
+      scheduleFlush(delay);
+    }
   }
 }
 
@@ -277,8 +366,25 @@ function scheduleFlush(minDelay: number, urgent = false): void {
 
 function record(level: Level, scope: string, args: unknown[]): void {
   if (ORDER[level] < ORDER[bufferLevel]) return;
-  buffer.push({ t: Date.now(), c: CTX, l: level, s: scope, m: fmtArgs(args) });
-  if (buffer.length > CAP) buffer.splice(0, buffer.length - CAP);
+  // Чистка секретов НА СТОКЕ, а не на каждом вызывающем: helper существовал,
+  // но применять его нужно было руками, и безопасность строки зависела от
+  // того, вспомнил ли о нём автор. В файл поддержки уходит только то, что
+  // прошло здесь (аудит наблюдаемости 02.08.2026, LOG-3). Консоль оставлена
+  // сырой намеренно: это инструмент разработчика, он никуда не уезжает.
+  buffer.push({
+    t: Date.now(),
+    c: ENTRY_CTX,
+    l: level,
+    s: scope,
+    m: redactSecrets(fmtArgs(args), MAX_MSG),
+  });
+  if (buffer.length > CAP) {
+    // Кольцо провернулось, пока запись не работала: вытесненные строки не
+    // доедут уже никогда, и «починившийся» flush не делает журнал полным
+    // (ревью 02.08.2026). Липкая отметка — до очистки логов.
+    if (health.failed) health.lost = true;
+    buffer.splice(0, buffer.length - CAP);
+  }
   if (persist) scheduleFlush(level === "error" ? 400 : 3000, level === "error");
 }
 
@@ -287,6 +393,23 @@ function emit(level: Exclude<Level, "silent">, scope: string, args: unknown[]): 
   if (ORDER[level] < ORDER[consoleLevel]) return;
   // eslint-disable-next-line no-console
   (console[level] ?? console.log)(`[polemica:${scope}]`, ...args);
+}
+
+/** Приписать в конец файла честную пометку о неполноте (одну, не больше). */
+function withCompletenessNote(entries: Entry[]): Entry[] {
+  if (!health.failed) return entries;
+  return [
+    ...entries,
+    {
+      t: Date.now(),
+      c: ENTRY_CTX,
+      l: "error",
+      s: "log",
+      m:
+        `Журнал собран НЕ ПОЛНОСТЬЮ: storage.local отказал (${health.operation}). ` +
+        "Часть записей потеряна — судить по этому файлу как по полному нельзя.",
+    },
+  ];
 }
 
 export const log = {
@@ -313,16 +436,43 @@ export const log = {
   getBuffer(): Entry[] {
     return buffer.slice();
   },
+  /**
+   * Полон ли журнал. false — часть записей не сохранилась или не прочиталась,
+   * и выгруженный файл НЕЛЬЗЯ считать полной картиной (LOG-1).
+   */
+  isComplete(): boolean {
+    return !health.failed && !health.lost;
+  },
   /** Собрать логи всех контекстов из storage.local, отсортировать по времени. */
   async collectAll(): Promise<Entry[]> {
     try {
       const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
       const merged: Entry[] = [];
+      // Отметку о сбое мог оставить ДРУГОЙ контекст (обычно игровая вкладка —
+      // там объём). Без её чтения попап печатал бы «complete: yes» ровно в том
+      // случае, ради которого пометка и заводилась (ревью 02.08.2026).
+      const marker = all[HEALTH_KEY] as
+        | { ctx?: string; at?: number; operation?: string }
+        | undefined;
+      // TTL обязателен: один случайный сбой в три часа ночи иначе НАВСЕГДА
+      // клеймил бы каждый будущий экспорт как неполный — и признак перестали
+      // бы читать ровно тогда, когда он настоящий (ревью 02.08.2026). Логи
+      // content живут сутки, поэтому и отметка старше суток о сегодняшнем
+      // файле не говорит ничего.
+      const fresh =
+        !!marker &&
+        typeof marker === "object" &&
+        typeof marker.at === "number" &&
+        Date.now() - marker.at < CONTENT_LOG_TTL_MS;
+      if (fresh) {
+        health.failed = true;
+        health.operation = `${marker.operation ?? "?"} в ${marker.ctx ?? "?"}`;
+      }
       for (const [k, v] of Object.entries(all)) {
         // Служебный индекс ключей — тоже массив под LOG_PREFIX, но строк, а
         // не Entry: без исключения его содержимое попадало в экспорт мусором
         // с «Invalid Date».
-        if (k === LOG_KEYS_INDEX) continue;
+        if (k === LOG_KEYS_INDEX || k === HEALTH_KEY) continue;
         if (k.startsWith(LOG_PREFIX) && Array.isArray(v)) merged.push(...(v as Entry[]));
       }
       // Плюс несброшенные записи текущего контекста. Дедуп по содержимому:
@@ -332,14 +482,24 @@ export const log = {
       for (const e of buffer) {
         if (!seen.has(`${e.t}|${e.c}|${e.s}|${e.m}`)) merged.push(e);
       }
-      return merged.sort((a, b) => a.t - b.t);
-    } catch {
-      return buffer.slice();
+      return withCompletenessNote(merged.sort((a, b) => a.t - b.t));
+    } catch (e) {
+      // Сюда попадаем, когда прочитать чужие контексты не удалось: в файл
+      // уходит ТОЛЬКО буфер текущего попапа, и без пометки это выглядит как
+      // «у пользователя почти пустой лог» (LOG-1).
+      reportStorageFailure("collect", e);
+      return withCompletenessNote(buffer.slice());
     }
   },
   /** Очистить логи всех контекстов. */
   async clearAll(): Promise<void> {
     buffer = [];
+    // Чистая история — чистое здоровье: отметка сбоя удаляется вместе с
+    // логами (ключ под тем же префиксом), снимаем и локальные флаги.
+    health.failed = false;
+    health.lost = false;
+    health.operation = "";
+    health.failStreak = 0;
     try {
       const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
       const keys = Object.keys(all).filter((k) => k.startsWith(LOG_PREFIX));

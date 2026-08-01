@@ -15,6 +15,31 @@ interface ConnSettings {
   password: string;
 }
 
+/**
+ * Адрес OBS для лога: только схема, хост и порт.
+ *
+ * В `obs_host` пользователь может вписать `ws://user:pass@host:4455/?token=…`
+ * — логин, пароль и query оттуда в файл поддержки уезжать не должны (аудит
+ * наблюдаемости 02.08.2026, LOG-3).
+ */
+export function safeEndpoint(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ""}`;
+  } catch {
+    return "(некорректный адрес)";
+  }
+}
+
+/** Человеческая категория кода закрытия WebSocket — вместо текста от сервера. */
+export function closeCategory(code: number): string {
+  if (code === 1000) return "штатное закрытие";
+  if (code === 4009 || code === 4008) return "аутентификация отклонена";
+  if (code === 4010 || code === 4011) return "несовместимая версия obs-websocket";
+  if (code === 1006) return "обрыв связи";
+  return "прочее";
+}
+
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 export const OBS_RETRY_BLOCKED_KEY = "obs_retry_blocked";
 /**
@@ -147,14 +172,17 @@ export class ObsClient {
             this.lastHeartbeat = Date.now();
             this.startHeartbeat();
             void this.saveConnectionState(true);
-            log.info("obs", "подключено", url);
+            log.info("obs", "подключено", safeEndpoint(url));
             this.notifyAll("obs_connected");
             resolve(true);
           }
           this.handleMessage(msg);
         };
         socket.onclose = (event) => {
-          log.info("obs", "disconnected", event.code, event.reason);
+          // Причину закрытия шлёт СЕРВЕР — в неё может попасть что угодно,
+          // включая секреты. В файл поддержки уходит только код и наша
+          // категория (аудит наблюдаемости 02.08.2026, LOG-3).
+          log.info("obs", "соединение закрыто, код", event.code, closeCategory(event.code));
           const wasConnected = this.isConnected;
           this.teardownSocket();
           const authBlocked = [4008, 4009].includes(event.code);

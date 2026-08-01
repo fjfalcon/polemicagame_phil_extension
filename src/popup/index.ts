@@ -12,7 +12,13 @@
 import { browser, isStoreInstall } from "@core/env";
 import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
-import { getSettings, setSettings, onSettingsChanged, DEFAULT_SETTINGS } from "@core/settings";
+import {
+  getSetting,
+  getSettings,
+  setSettings,
+  onSettingsChanged,
+  DEFAULT_SETTINGS,
+} from "@core/settings";
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
 import { escapeHtml } from "@core/escape";
 import {
@@ -81,6 +87,11 @@ const SCOPE = "popup";
 document.addEventListener("DOMContentLoaded", () => {
   installErrorCapture("popup");
 
+  // Настройка «вести логи» управляет и попапом тоже. Раньше он её не читал, и
+  // у выключившего логирование ошибки попапа всё равно оседали в хранилище —
+  // тумблер врал (аудит наблюдаемости 02.08.2026, LOG-4).
+  void getSetting("debug_logging_enabled").then((on) => log.setPersist(on));
+
   // ───────────────────────── Версия в шапке ─────────────────────────
   const verEl = $("popup_version");
   if (verEl) verEl.textContent = `v${browser.runtime.getManifest().version}`;
@@ -88,11 +99,15 @@ document.addEventListener("DOMContentLoaded", () => {
   // ───────────────────────── Логи: скачать / очистить ─────────────────────────
   $("download_logs")?.addEventListener("click", async () => {
     const entries = await log.collectAll();
+    const complete = log.isComplete();
     const head = [
       `Polemica Notes ${browser.runtime.getManifest().version}`,
       `UA: ${navigator.userAgent}`,
       `exported: ${new Date().toISOString()}`,
       `entries: ${entries.length}`,
+      // Шапка должна отвечать на вопрос «можно ли верить этому файлу» до того,
+      // как по нему начнут делать выводы (аудит наблюдаемости, LOG-1).
+      `complete: ${complete ? "yes" : "NO — часть записей потеряна, storage.local отказал"}`,
       "",
     ].join("\n");
     const body = entries
@@ -105,7 +120,16 @@ document.addEventListener("DOMContentLoaded", () => {
     a.download = `polemica-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`;
     a.click();
     URL.revokeObjectURL(url);
-    showPopupToast(`Логов: ${entries.length}`);
+    if (complete) {
+      showPopupToast(`Логов: ${entries.length}`);
+    } else {
+      showPopupToast(
+        `Логов: ${entries.length}. Журнал НЕПОЛНЫЙ — хранилище браузера отказало, ` +
+          "часть записей потеряна",
+        "error",
+        8000,
+      );
+    }
   });
   $("clear_logs")?.addEventListener("click", async () => {
     await log.clearAll();
@@ -855,6 +879,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // Точечные писатели из content (закрытие панели крестиком) и другие
   // устройства теперь видны попапу сразу.
   onSettingsChanged((patch) => {
+    // Тумблер логирования применяем сразу, в том числе когда его переключили
+    // прямо здесь: иначе попап продолжал бы писать в хранилище (LOG-4).
+    if ("debug_logging_enabled" in patch) {
+      log.setPersist(patch.debug_logging_enabled === true);
+    }
     if (!lastKnown) return;
     lastKnown = { ...lastKnown, ...patch };
     reflectPatch(patch);

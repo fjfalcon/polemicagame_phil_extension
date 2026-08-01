@@ -92,19 +92,26 @@ describe("AGENTS §4 storage and data ownership", () => {
       for (const match of source.matchAll(/(?<![.\w])(saveNotes|saveNotesToStore)\s*\(/g)) {
         const line = source.split("\n")[lineOf(source, match.index) - 1];
         if (/\b(private|public|protected)\b/.test(line)) continue;
-        directCalls.push(`${file}:${lineOf(source, match.index)}`);
+        directCalls.push(file);
       }
     }
 
-    const allowed = [
-      "src/background/notes-coordinator.ts:68",
-      "src/background/notes-coordinator.ts:82",
+    // Файл + КОЛИЧЕСТВО, а не file:line: пин на номера строк ломался от любой
+    // правки выше по файлу (трижды за сутки) и приучал «просто обновить
+    // число» — при этом новый прямой писатель В ТОМ ЖЕ файле всё равно
+    // ловится, потому что растёт счётчик.
+    const counted = directCalls.reduce<Record<string, number>>((acc, file) => {
+      acc[file] = (acc[file] ?? 0) + 1;
+      return acc;
+    }, {});
+    const allowed = {
+      "src/background/notes-coordinator.ts": 2,
       // Reviewed compatibility fallback for a stale live content realm after update.
-      "src/content/features/player-notes.ts:669",
+      "src/content/features/player-notes.ts": 1,
       // Reviewed popup import fallback when the background coordinator has no receiver.
-      "src/popup/index.ts:720",
-    ];
-    expect(directCalls, "§4.3: new whole-map writer bypasses the single background queue").toEqual(allowed);
+      "src/popup/index.ts": 1,
+    };
+    expect(counted, "§4.3: new whole-map writer bypasses the single background queue").toEqual(allowed);
   });
 
   test("§4.3/§4.11: frozen note bridge is read-only in storage.sync", () => {
@@ -326,6 +333,20 @@ describe("logging and popup invariants", () => {
     expect(owner, "отказ по владению автосценой обязан быть виден в логе").toMatch(
       /log\.info\([^)]*"background",\s*\n?\s*"смена сцены пропущена/,
     );
+  });
+
+  test("OBS не логирует сырой адрес и текст причины от сервера", () => {
+    // Проводка санитизации, а не сами функции: `safeEndpoint`/`closeCategory`
+    // проверены отдельно, но вызов мимо них не поймала бы ни одна их проверка
+    // — тот же разрыв «функция протестирована, а её место вызова нет».
+    const source = read("src/background/obs-client.ts");
+    const logCalls = [...source.matchAll(/log\.(?:info|warn|error|debug)\(([\s\S]{0,200}?)\);/g)].map(
+      (m) => m[1],
+    );
+    const withRawReason = logCalls.filter((call) => /event\.reason/.test(call));
+    expect(withRawReason, "текст причины присылает сервер — в файл поддержки он не идёт").toEqual([]);
+    const withRawUrl = logCalls.filter((call) => /\burl\b/.test(call) && !/safeEndpoint/.test(call));
+    expect(withRawUrl, "в obs_host бывает ws://user:pass@host — только safeEndpoint()").toEqual([]);
   });
 
   test("§4.4: popup save path writes the diff patch, not a full DOM snapshot", () => {
