@@ -124,15 +124,105 @@ async function handleObsCommand(cmd: ObsCommandMsg["command"], data: ObsCommandM
   });
 }
 
-async function handleObsQuery(cmd: ObsCommandMsg["command"], data: ObsCommandMsg["data"]) {
+/**
+ * Владелец автосцены OBS.
+ *
+ * Сцена в OBS одна на профиль, а вкладок игры может быть несколько — и
+ * каждая независимо определяла фазу и слала set_scene: вторая вкладка
+ * (например, чужая игра, открытая посмотреть) перебивала сцену активной
+ * трансляции (аудит lifecycle 01.08.2026, находка 6). Владение хранится в
+ * storage.local, поэтому переживает выгрузку service worker; отдаётся
+ * первой вкладке, попросившей сцену, и переходит к другой, если владелец
+ * умолк дольше OWNER_TTL_MS (закрыл вкладку, ушёл со страницы) или его
+ * вкладки больше не существует.
+ */
+const OBS_SCENE_OWNER_KEY = "obs_scene_owner";
+/**
+ * Фолбэк-таймаут владения. НЕ 90 секунд: автосцена шлётся только на СМЕНЕ
+ * фазы, а дневная фаза со всеми речами длится минуты — короткий TTL отдавал
+ * бы владение соседней вкладке в середине игры и возвращал пинг-понг сцен
+ * (ревью пакета D). Главный признак владения — ЖИВОСТЬ вкладки; таймаут
+ * нужен лишь на случай, когда вкладку проверить не удалось.
+ */
+const OWNER_TTL_MS = 20 * 60_000;
+
+async function claimSceneOwnership(
+  tabId: number | undefined,
+  manual = false,
+): Promise<boolean> {
+  // Команда не от вкладки (попап) — ручное действие пользователя.
+  if (tabId == null) return true;
+  try {
+    const st = (await browser.storage.local.get({ [OBS_SCENE_OWNER_KEY]: null })) as Record<
+      string,
+      unknown
+    >;
+    const cur = st[OBS_SCENE_OWNER_KEY] as { tabId?: number; ts?: number } | null;
+    const now = Date.now();
+    // Ручной клик в панели ВСЕГДА проходит и забирает владение: пользователь
+    // явно управляет сценой именно из этой вкладки (ревью пакета D, блокер —
+    // раньше такой клик молча игнорировался у не-владельца).
+    if (!manual && cur && typeof cur.tabId === "number" && cur.tabId !== tabId) {
+      const stale = typeof cur.ts !== "number" || now - cur.ts > OWNER_TTL_MS;
+      if (!stale) {
+        try {
+          await browser.tabs.get(cur.tabId);
+          log.debug("background", "scene command ignored: not the owner tab", tabId);
+          return false;
+        } catch {
+          /* вкладки владельца больше нет — владение свободно */
+        }
+      }
+    }
+    await browser.storage.local.set({ [OBS_SCENE_OWNER_KEY]: { tabId, ts: now } });
+    return true;
+  } catch (e) {
+    // Хранилище недоступно — не блокируем автоматику.
+    log.debug("background", "scene ownership check failed", e);
+    return true;
+  }
+}
+
+// Владелец закрыл вкладку — освобождаем владение сразу, не дожидаясь TTL:
+// иначе сцена не обновится до следующей смены фазы в другой вкладке.
+browser.tabs.onRemoved.addListener((closedId) => {
+  void (async () => {
+    try {
+      const st = (await browser.storage.local.get({ [OBS_SCENE_OWNER_KEY]: null })) as Record<
+        string,
+        unknown
+      >;
+      const cur = st[OBS_SCENE_OWNER_KEY] as { tabId?: number } | null;
+      if (cur && cur.tabId === closedId) {
+        await browser.storage.local.remove(OBS_SCENE_OWNER_KEY);
+        log.debug("background", "scene ownership released (owner tab closed)");
+      }
+    } catch {
+      /* не критично: владение протухнет по TTL */
+    }
+  })();
+});
+
+async function handleObsQuery(
+  cmd: ObsCommandMsg["command"],
+  data: ObsCommandMsg["data"],
+  tabId?: number,
+) {
   // Лёгкие операции НЕ сериализуются с reconcile/connect: probe watchdog'а
   // держит очередь до 10-20с, и get_status попапа / set_scene автомода
   // стояли бы за ним — «сцена переключилась через 15 секунд после фазы».
   switch (cmd) {
     case "get_status":
       return obs.getStatus();
-    case "set_scene":
+    case "set_scene": {
+      // Только владелец автосцены; ручной клик проходит всегда.
+      if (!(await claimSceneOwnership(tabId, data?.manual === true))) {
+        // ЯВНЫЙ отказ, а не false: иначе content принимал его за успех и
+        // подсвечивал сцену, которой в OBS нет (ревью пакета D, блокер).
+        return { ignored: "not_owner" };
+      }
       return obs.setCurrentScene(data?.sceneName ?? "");
+    }
     case "get_scenes":
       return obs.requestSceneList();
     default:
@@ -142,7 +232,7 @@ async function handleObsQuery(cmd: ObsCommandMsg["command"], data: ObsCommandMsg
 
 onMessage((msg: ExtMessage, sender) => {
   if ("type" in msg && msg.type === "obs_command") {
-    return handleObsQuery(msg.command, msg.data)
+    return handleObsQuery(msg.command, msg.data, sender.tab?.id)
       .then((data) => ({ success: true, data }))
       .catch((e: Error) => ({ success: false, error: e.message }));
   }

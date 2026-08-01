@@ -223,6 +223,38 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  /**
+   * Проверка «вкладка игры работает на актуальной версии».
+   *
+   * После обновления расширения открытая игра продолжает исполнять СТАРЫЙ
+   * content-скрипт (браузер не переинжектит его в загруженный документ) —
+   * новые фиксы там не работают, а понять это было нельзя (аудит lifecycle
+   * 01.08.2026, находка 3). Проверяем тихо, при открытии попапа, и
+   * сообщаем только если версии реально разошлись. Баннер поверх игры не
+   * показываем — это мешало бы прямо во время матча.
+   */
+  void (async () => {
+    try {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id || !tab.url?.includes("polemicagame.com")) return;
+      const res = (await browser.tabs.sendMessage(tab.id, { type: "getContentVersion" })) as
+        | { version?: string }
+        | undefined;
+      const mine = browser.runtime.getManifest().version;
+      if (res?.version && res.version !== mine) {
+        // Обычный тост, не ошибка: всё работает, просто на старом коде.
+        showPopupToast(
+          `Вкладка игры работает на версии ${res.version}, а расширение уже ${mine} — обнови вкладку (F5), чтобы заработали новые исправления`,
+          "success",
+          12000,
+        );
+      }
+    } catch {
+      // Нет получателя — это тоже «старая вкладка», но там уже сработает
+      // честная ошибка при первой же команде (см. sendToActiveTabStrict).
+    }
+  })();
+
   // ───────────────────────── Вкладки ─────────────────────────
   const tabs = Array.from(document.querySelectorAll<HTMLElement>(".tab"));
   const panels = Array.from(document.querySelectorAll<HTMLElement>(".panel"));
@@ -1340,12 +1372,15 @@ document.addEventListener("DOMContentLoaded", () => {
       obsEnabled.addEventListener("change", async (e) => {
         const enabled = (e.target as HTMLInputElement).checked;
         if (obsSettings) obsSettings.style.display = enabled ? "block" : "none";
+        // Сначала сохраняем НАМЕРЕНИЕ, потом рвём соединение: закрытие
+        // попапа во время await оставляло background с ручным отключением,
+        // но с obs_enabled=true в настройках (находка 14).
+        saveSettings();
         if (!enabled) {
           await sendOBSCommand("disconnect");
           updateOBSStatus("Не подключено", false);
           updateScenesList([]);
         }
-        saveSettings();
       });
     }
 
@@ -1357,6 +1392,12 @@ document.addEventListener("DOMContentLoaded", () => {
           obsConnect.disabled = true;
           obsConnect.textContent = "Подключение...";
           updateOBSStatus("Подключение...", false);
+          // НАМЕРЕНИЕ фиксируем ДО длинной операции: попап закрывается при
+          // потере фокуса, и если это случилось за время ожидания (до 10с),
+          // background подключался по данным команды, а host/пароль в
+          // настройках оставались прежними — следующий reconcile рвал
+          // соединение (аудит lifecycle 01.08.2026, находка 14).
+          saveSettings();
 
           const result = await sendOBSCommand("connect", { url: host, password });
           if (result) {
@@ -1368,7 +1409,6 @@ document.addEventListener("DOMContentLoaded", () => {
             }
           }
           obsConnect.textContent = "Подключиться";
-          saveSettings();
         } catch (error) {
           log.error(SCOPE, "OBS connection failed", error);
           updateOBSStatus(`Ошибка: ${(error as Error)?.message}`, false);

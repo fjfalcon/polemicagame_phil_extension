@@ -97,20 +97,51 @@ function resolveGameKey(): string | null {
 /** Чтение упало — писать нельзя (иначе затрём чужую историю). */
 let readOnly = false;
 
+/** Немедленная запись (используется и таймером, и flush'ем). */
+function writeNow(): void {
+  if (readOnly) return;
+  // Ограничиваем число хранимых игр.
+  const keys = Object.keys(storeAll);
+  if (keys.length > MAX_GAMES) {
+    for (const k of keys.slice(0, keys.length - MAX_GAMES)) delete storeAll[k];
+  }
+  // Результат записи проверяем: молчаливый отказ (квота) оставлял метку
+  // на экране, но после перезагрузки она исчезала (находка 8).
+  void browser.storage.local.set({ [STORAGE_KEY]: storeAll }).catch((e) => {
+    log.error("role-marker", "save failed", e);
+  });
+}
+
+/**
+ * Метка — пользовательский ввод, и терять её нельзя.
+ *
+ * Раньше запись откладывалась на 400 мс, а хвост дописывался по `pagehide`,
+ * который «браузерами доставляется НЕнадёжно» (MDN): резкое закрытие вкладки
+ * в эти 400 мс теряло метку (аудит lifecycle 01.08.2026, находка 19).
+ * Теперь пишем сразу, а дебаунс оставлен только как коалесценция подряд
+ * идущих кликов — но первая запись уходит немедленно.
+ */
+let dirtyMarks = false;
+
 function scheduleSave(): void {
   if (readOnly) return;
-  if (saveTimer) clearTimeout(saveTimer);
+  dirtyMarks = true;
+  if (saveTimer) {
+    // Серия кликов: окно уже открыто — допишем по его истечении.
+    clearTimeout(saveTimer);
+  } else {
+    // Первое изменение пишем НЕМЕДЛЕННО, не дожидаясь окна.
+    writeNow();
+    dirtyMarks = false;
+  }
   saveTimer = setTimeout(() => {
-    // Ограничиваем число хранимых игр.
-    const keys = Object.keys(storeAll);
-    if (keys.length > MAX_GAMES) {
-      for (const k of keys.slice(0, keys.length - MAX_GAMES)) delete storeAll[k];
+    saveTimer = null;
+    // Без флага одиночный клик писал в storage ДВАЖДЫ (и дважды будил
+    // storage.onChanged во всех контекстах) — ревью пакета D.
+    if (dirtyMarks) {
+      writeNow();
+      dirtyMarks = false;
     }
-    // Результат записи проверяем: молчаливый отказ (квота) оставлял метку
-    // на экране, но после перезагрузки она исчезала (находка 8).
-    void browser.storage.local.set({ [STORAGE_KEY]: storeAll }).catch((e) => {
-      log.error("role-marker", "save failed", e);
-    });
   }, 400);
 }
 

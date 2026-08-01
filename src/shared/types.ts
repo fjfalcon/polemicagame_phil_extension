@@ -113,7 +113,14 @@ export interface ObsConnectionState extends ObsSceneData {
 export interface ObsCommandMsg {
   type: "obs_command";
   command: "connect" | "disconnect" | "get_status" | "set_scene" | "get_scenes";
-  data?: { url?: string; password?: string; sceneName?: string };
+  data?: {
+    url?: string;
+    password?: string;
+    sceneName?: string;
+    /** true — сцену переключает САМ пользователь (клик в панели): такая
+     *  команда всегда проходит и забирает владение автосценой этой вкладке. */
+    manual?: boolean;
+  };
 }
 
 /** background → popup/content: события OBS. */
@@ -198,6 +205,16 @@ export interface NotesResultMsg {
   replaced?: number;
 }
 
+/**
+ * popup → content: «какая версия расширения тебя запустила?»
+ * После обновления открытая вкладка продолжает работать на СТАРОМ
+ * content-скрипте (браузер не переинжектит его в уже загруженный документ),
+ * и пользователь этого не видит (аудит lifecycle 01.08.2026, находка 3).
+ */
+export interface GetContentVersionMsg {
+  type: "getContentVersion";
+}
+
 /** content → background: автопринятие игры. */
 export interface StartSearchMsg {
   action: "startSearch";
@@ -229,6 +246,7 @@ export type ExtMessage =
   | TwitchStatusMsg
   | GetNicknameLengthsMsg
   | OpenNickColorsMsg
+  | GetContentVersionMsg
   | NotesApplyOpsMsg
   | NotesMergeMsg
   | StartSearchMsg

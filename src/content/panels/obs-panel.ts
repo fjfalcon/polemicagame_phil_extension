@@ -270,13 +270,26 @@ let isVisible = false;
 
 async function obsCommand(
   command: "get_status" | "set_scene",
-  data?: { sceneName?: string },
+  data?: { sceneName?: string; manual?: boolean },
 ): Promise<any> {
   return sendRuntime<any>({ type: "obs_command", command, data });
 }
 
-async function switchScene(sceneName: string): Promise<void> {
-  const response = await obsCommand("set_scene", { sceneName });
+/**
+ * Переключить сцену. manual=true — это КЛИК ПОЛЬЗОВАТЕЛЯ в панели: такая
+ * команда проходит мимо проверки владельца автосцены и забирает владение
+ * этой вкладке.
+ */
+async function switchScene(sceneName: string, manual = false): Promise<void> {
+  const response = await obsCommand("set_scene", { sceneName, manual });
+  // Отказ по владению приходит как success с data.ignored: сцену НЕ трогали,
+  // поэтому ни currentScene, ни подсветку обновлять нельзя — иначе панель
+  // показывала бы сцену, которой в OBS нет, а автопуть переставал бы
+  // повторять попытки (ревью пакета D, блокер).
+  if (response?.success && response.data?.ignored === "not_owner") {
+    log.debug(SCOPE, "scene switch skipped: another tab owns auto-scene");
+    return;
+  }
   if (response && response.success) {
     // Именно sceneName: раньше сюда передавалась модульная currentScene,
     // т.е. подсвечивалась ПРОШЛАЯ сцена, а не только что установленная.
@@ -916,7 +929,8 @@ function doShow(): void {
   if (!panel) {
     panel = new ObsPanel();
     panel.onSceneClick = (sceneName) => {
-      void switchScene(sceneName);
+      // Ручной клик: приоритетнее автоматики (см. switchScene).
+      void switchScene(sceneName, true);
     };
     panel.onClose = () => {
       doHide();

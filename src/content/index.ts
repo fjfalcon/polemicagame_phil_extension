@@ -8,6 +8,8 @@ import { installErrorCapture } from "@core/errors";
 import { getSetting, onSettingsChanged } from "@core/settings";
 import { FeatureManager } from "@core/feature";
 import { getMatchId, parseMatchOnPage } from "./match-data";
+import { onMessage } from "@core/messaging";
+import { browser } from "@core/env";
 import { setupNicknameLengthsResponder } from "./nickname-lengths";
 import { setupDiagnostics } from "./diag";
 
@@ -135,6 +137,22 @@ void getSetting("extension_enabled")
   .then((on) => setupUrlRouter(on));
 setupNicknameLengthsResponder();
 setupDiagnostics();
+
+/**
+ * Ответ на вопрос «на какой версии ты работаешь».
+ *
+ * Браузер НЕ переинжектит content-скрипт в уже открытый документ после
+ * обновления расширения: игра продолжает работать на старом коде, и понять
+ * это со стороны попапа было нельзя (аудит lifecycle 01.08.2026, находка 3).
+ * Баннер поверх игры мы намеренно НЕ показываем — сообщение появляется
+ * только в попапе, когда пользователь сам его открыл.
+ */
+onMessage((msg) => {
+  if ("type" in msg && msg.type === "getContentVersion") {
+    return Promise.resolve({ version: browser.runtime.getManifest().version });
+  }
+  return undefined;
+});
 
 // Только origin+pathname: query/fragment могут нести приглашения и ключи, а
 // лог выгружается в файл для поддержки (аудит безопасности 01.08.2026, №13).
