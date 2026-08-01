@@ -9,7 +9,12 @@ import { installErrorCapture } from "@core/errors";
 import { onMessage } from "@core/messaging";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
 import { applyNoteOps, mergeNotesViaCoordinator } from "./notes-coordinator";
-import { OBS_RETRY_BLOCKED_KEY, ObsClient } from "./obs-client";
+import {
+  OBS_RETRY_BLOCKED_KEY,
+  OBS_RETRY_BLOCK_REASON_KEY,
+  OBS_RECONNECT_ATTEMPTS_KEY,
+  ObsClient,
+} from "./obs-client";
 import type { ExtMessage, ObsCommandMsg } from "@shared/types";
 
 const obs = new ObsClient();
@@ -353,7 +358,29 @@ browser.runtime.onStartup.addListener(() => {
 });
 browser.runtime.onInstalled.addListener(() => {
   void runUpgradeMigrations();
-  restoreObsConnection();
+  // Обновление могло привезти исправление ПРОТОКОЛА OBS: держать блокировку
+  // 4010/4011 после апдейта бессмысленно — она снималась только перезапуском
+  // браузера (аудит lifecycle 01.08.2026, находка 13). Блокировку по паролю
+  // (4008/4009) не трогаем: креды апдейт не чинит.
+  void (async () => {
+    try {
+      const st = (await browser.storage.local.get({
+        [OBS_RETRY_BLOCKED_KEY]: false,
+        [OBS_RETRY_BLOCK_REASON_KEY]: null,
+      })) as Record<string, unknown>;
+      if (st[OBS_RETRY_BLOCKED_KEY] === true && st[OBS_RETRY_BLOCK_REASON_KEY] === "protocol") {
+        await browser.storage.local.set({
+          [OBS_RETRY_BLOCKED_KEY]: false,
+          [OBS_RETRY_BLOCK_REASON_KEY]: null,
+          [OBS_RECONNECT_ATTEMPTS_KEY]: 0,
+        });
+        log.info("background", "protocol retry block cleared by update");
+      }
+    } catch (e) {
+      log.debug("background", "retry block reset failed", e);
+    }
+    restoreObsConnection();
+  })();
   void clearStaleQueueGuards();
 });
 

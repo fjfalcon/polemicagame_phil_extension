@@ -212,10 +212,44 @@ let obsSessionId: string | null = null;
 let currentTimeOfDay: TimeOfDay | null = null;
 let lastAppliedRoleVisibility: string | null = null;
 const roleVisibilityDelayMs = 3000;
-const roleVisibilityState = new WeakMap<
-  HTMLElement,
-  { visibility: string; opacity: string; pointerEvents: string }
->();
+/**
+ * Реестр изменённых нами элементов ролей.
+ *
+ * Set, а не только WeakMap: WeakMap нельзя обойти, поэтому при выключении
+ * авто-режима мы не могли вернуть исходные стили — роль оставалась скрытой
+ * (или наоборот, принудительно показанной) до перерисовки страницы сайтом
+ * (аудит lifecycle 01.08.2026, находка 7). Храним и приоритет: мы пишем
+ * !important, и «просто снять значение» недостаточно.
+ */
+interface RoleStyleSnapshot {
+  visibility: string;
+  visibilityPriority: string;
+  opacity: string;
+  opacityPriority: string;
+  pointerEvents: string;
+  pointerEventsPriority: string;
+}
+const roleVisibilityState = new WeakMap<HTMLElement, RoleStyleSnapshot>();
+const touchedRoleElements = new Set<HTMLElement>();
+
+/** Вернуть роли ровно те inline-стили (и приоритеты), что были до нас. */
+function restoreRoleVisibility(): void {
+  for (const el of touchedRoleElements) {
+    const snap = roleVisibilityState.get(el);
+    if (!snap) continue;
+    restoreProp(el, "visibility", snap.visibility, snap.visibilityPriority);
+    restoreProp(el, "opacity", snap.opacity, snap.opacityPriority);
+    restoreProp(el, "pointer-events", snap.pointerEvents, snap.pointerEventsPriority);
+    roleVisibilityState.delete(el);
+  }
+  touchedRoleElements.clear();
+  lastAppliedRoleVisibility = null;
+}
+
+function restoreProp(el: HTMLElement, prop: string, value: string, priority: string): void {
+  el.style.removeProperty(prop);
+  if (value) el.style.setProperty(prop, value, priority || "");
+}
 
 // Таймеры/подписки (всё должно быть снято в disable()).
 let unsubMessage: (() => void) | null = null;
@@ -394,9 +428,18 @@ function applyRoleVisibility(isRoleVisible: boolean): boolean {
     if (!roleVisibilityState.has(element)) {
       roleVisibilityState.set(element, {
         visibility: element.style.visibility,
+        visibilityPriority: element.style.getPropertyPriority("visibility"),
         opacity: element.style.opacity,
+        opacityPriority: element.style.getPropertyPriority("opacity"),
         pointerEvents: element.style.pointerEvents,
+        pointerEventsPriority: element.style.getPropertyPriority("pointer-events"),
       });
+    }
+    touchedRoleElements.add(element);
+    // Сайт пересобирает плитки на каждой смене фазы: без уборки реестр
+    // держал бы сильные ссылки на отсоединённые поддеревья (ревью пакета C).
+    for (const tracked of touchedRoleElements) {
+      if (!tracked.isConnected) touchedRoleElements.delete(tracked);
     }
 
     const originalState = roleVisibilityState.get(element)!;
@@ -833,6 +876,10 @@ function startDOMMonitoring(): void {
 function stopDOMMonitoring(): void {
   unsubDom?.();
   unsubDom = null;
+  // Возвращаем роли сайта в исходный вид: авто-режим мог оставить их
+  // скрытыми (день) или принудительно показанными (ночь), и без этого они
+  // застывали в таком виде до перерисовки страницы сайтом (находка 7).
+  restoreRoleVisibility();
 
   if (timeOfDayFallbackTimer) {
     clearInterval(timeOfDayFallbackTimer);

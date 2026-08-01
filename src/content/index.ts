@@ -21,8 +21,8 @@ import { pauseHotkeyFeature } from "./features/pause-hotkey";
 import { f5RefreshFeature } from "./features/f5-refresh";
 import { roleMarkerFeature } from "./features/role-marker";
 import { updateNotifyFeature } from "./features/update-notify";
-import { connectionDiagFeature } from "./features/connection-diag";
-import { queueGuardFeature } from "./features/queue-guard";
+import { connectionDiagFeature, syncConnectionDiagRoute } from "./features/connection-diag";
+import { queueGuardFeature, syncQueueGuardRoute } from "./features/queue-guard";
 import { queuePeekFeature } from "./features/queue-peek";
 import { queueRequeueFeature } from "./features/queue-requeue";
 import { obsPanelFeature } from "./panels/obs-panel";
@@ -62,6 +62,13 @@ function setupUrlRouter(extensionEnabledAtBoot: boolean): void {
     const matchId = getMatchId();
     syncPlayerNotesRoute(matchId !== null);
     syncMatchStatsRoute(matchId);
+    // Фичи страницы поиска: раньше они решали свою судьбу один раз в
+    // enable() и при переходе ВНУТРИ сайта не поднимались до F5 (аудит
+    // lifecycle 01.08.2026, находка 16). Функции идемпотентны и симметричны.
+    const onSearch =
+      location.pathname === "/game-search" || location.pathname.startsWith("/game-search/");
+    syncQueueGuardRoute(onSearch);
+    syncConnectionDiagRoute(onSearch);
     if (matchId !== lastMatchId) {
       lastMatchId = matchId;
       // Мастер-выключатель: не качаем страницу матча впустую — все

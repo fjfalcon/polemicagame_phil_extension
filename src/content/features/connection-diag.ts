@@ -46,12 +46,38 @@ function injectPageScript(): void {
   injected = true;
 }
 
-export const connectionDiagFeature: Feature = {
-  id: "connection-diag",
-  settingKey: "connection_diag_enabled",
-  enable(_ctx: FeatureContext) {
-    if (!isSearchPage()) return;
+/** Две независимые оси: фича включена настройкой И мы на нужном маршруте. */
+let featureEnabled = false;
+let onRoute = false;
+/** Ресурсы реально подняты (идемпотентность). */
+let routeActive = false;
 
+/**
+ * Конъюнкция осей. Критично: диагностика выключена по умолчанию, и без
+ * гейта по настройке роутер инжектил бы page-зонд (подмена WebSocket) ВСЕМ
+ * пользователям на странице поиска — ровно то, что мы сознательно отвергли
+ * в находке 16 аудита устойчивости (ревью пакета C, блокер).
+ */
+function applyConnectionDiagState(): void {
+  const want = featureEnabled && onRoute;
+  if (want === routeActive) return;
+  routeActive = want;
+  if (want) setupConnectionDiag();
+  else teardownConnectionDiag();
+}
+
+/**
+ * Поднять/снять диагностику по маршруту: заход на страницу поиска переходом
+ * ВНУТРИ сайта раньше оставлял её выключенной до F5 (аудит lifecycle
+ * 01.08.2026, находка 16). Зонд в мире страницы снять нельзя — при уходе
+ * просим его замолчать, при возврате инжектим снова (он идемпотентен).
+ */
+export function syncConnectionDiagRoute(active: boolean): void {
+  onRoute = active;
+  applyConnectionDiagState();
+}
+
+function setupConnectionDiag(): void {
     injectPageScript();
 
     messageListener = (e: MessageEvent) => {
@@ -82,8 +108,9 @@ export const connectionDiagFeature: Feature = {
     driftTimer = setTimeout(tick, 5000);
 
     log.info(SCOPE, "enabled on", location.pathname, "hidden=", document.hidden);
-  },
-  disable() {
+}
+
+function teardownConnectionDiag(): void {
     if (messageListener) {
       window.removeEventListener("message", messageListener);
       messageListener = null;
@@ -96,13 +123,26 @@ export const connectionDiagFeature: Feature = {
       clearTimeout(driftTimer);
       driftTimer = null;
     }
-    // Прокси WebSocket в мире страницы снять нельзя — просим его замолчать.
-    if (injected) {
-      try {
-        window.postMessage({ source: "pn-conn-diag-stop" }, location.origin);
-      } catch {
-        /* страница закрывается */
-      }
+  // Прокси WebSocket в мире страницы снять нельзя — просим его замолчать.
+  if (injected) {
+    try {
+      window.postMessage({ source: "pn-conn-diag-stop" }, location.origin);
+    } catch {
+      /* страница закрывается */
     }
+  }
+}
+
+export const connectionDiagFeature: Feature = {
+  id: "connection-diag",
+  settingKey: "connection_diag_enabled",
+  enable(_ctx: FeatureContext) {
+    featureEnabled = true;
+    onRoute = isSearchPage();
+    applyConnectionDiagState();
+  },
+  disable() {
+    featureEnabled = false;
+    applyConnectionDiagState();
   },
 };

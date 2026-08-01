@@ -17,6 +17,16 @@ interface ConnSettings {
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 export const OBS_RETRY_BLOCKED_KEY = "obs_retry_blocked";
+/**
+ * Причина блокировки: "auth" — неверный пароль (сбрасывать можно только при
+ * смене кредов или ручном подключении), "protocol" — несовместимость версий
+ * (её чинит обновление расширения, поэтому onInstalled вправе сбросить).
+ * Раньше причина не хранилась, и после апдейта, исправившего протокол,
+ * блокировка держалась до перезапуска браузера (аудит lifecycle, находка 13).
+ */
+export const OBS_RETRY_BLOCK_REASON_KEY = "obs_retry_block_reason";
+/** Пережившее выгрузку число попыток переподключения (см. reconnectAttempts). */
+export const OBS_RECONNECT_ATTEMPTS_KEY = "obs_reconnect_attempts";
 
 /** base64(SHA-256(text)) — примитив challenge-response аутентификации v5. */
 async function sha256b64(text: string): Promise<string> {
@@ -36,6 +46,12 @@ export class ObsClient {
   private currentScene: string | null = null;
   private settings: ConnSettings | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Счётчик попыток переподключения. Живёт в памяти + в storage: при
+   * выгрузке service worker он обнулялся, и лимит в 10 попыток фактически
+   * становился бесконечным — недоступный OBS долбился вечно (аудит
+   * lifecycle 01.08.2026, находка 13).
+   */
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 10;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -53,7 +69,22 @@ export class ObsClient {
   private connectionReject: ((error: Error) => void) | null = null;
   private retryBlocked = false;
 
+  /** Подтянуть счётчик попыток с диска (воркер мог выгружаться). */
+  private async restoreReconnectAttempts(): Promise<void> {
+    try {
+      const r = (await browser.storage.local.get({ [OBS_RECONNECT_ATTEMPTS_KEY]: 0 })) as Record<
+        string,
+        unknown
+      >;
+      const n = Number(r[OBS_RECONNECT_ATTEMPTS_KEY]);
+      if (Number.isFinite(n) && n > this.reconnectAttempts) this.reconnectAttempts = n;
+    } catch {
+      /* недоступно — работаем со счётчиком в памяти */
+    }
+  }
+
   async connect(url: string, password = ""): Promise<boolean> {
+    await this.restoreReconnectAttempts();
     if (this.connecting) {
       if (this.settings?.url === url && this.settings.password === password) return false;
       this.closeCurrentSocket("Superseded by new connection");
@@ -109,6 +140,9 @@ export class ObsClient {
             this.isConnected = true;
             this.sessionId = this.makeSessionId();
             this.reconnectAttempts = 0;
+            void browser.storage.local
+              .set({ [OBS_RECONNECT_ATTEMPTS_KEY]: 0 })
+              .catch(() => undefined);
             void this.setRetryBlocked(false);
             this.lastHeartbeat = Date.now();
             this.startHeartbeat();
@@ -122,8 +156,11 @@ export class ObsClient {
           log.info("obs", "disconnected", event.code, event.reason);
           const wasConnected = this.isConnected;
           this.teardownSocket();
-          const retryBlocked = [4008, 4009, 4010, 4011].includes(event.code);
-          if (retryBlocked) void this.setRetryBlocked(true);
+          const authBlocked = [4008, 4009].includes(event.code);
+          const protocolBlocked = [4010, 4011].includes(event.code);
+          if (authBlocked || protocolBlocked) {
+            void this.setRetryBlocked(true, authBlocked ? "auth" : "protocol");
+          }
           void this.saveConnectionState(false);
           this.notifyAll("obs_disconnected");
           // До Identified закрытие — это ОТКАЗ подключения: реджектим сразу,
@@ -159,12 +196,25 @@ export class ObsClient {
   }
 
   /** Явное действие пользователя — свежий лимит реконнектов. */
+  /**
+   * Обнулить бюджет попыток — И В ПАМЯТИ, И НА ДИСКЕ.
+   *
+   * Без сброса персистентного счётчика ручное «Подключиться» после серии
+   * неудач становилось одноразовым: connect() подтягивал с диска старые 10
+   * попыток, и первый же неуспех (OBS ещё грузится — обычное дело) лишал
+   * автоповторов до перезапуска браузера (ревью пакета C, находка 2).
+   */
   resetReconnectAttempts(): void {
     this.reconnectAttempts = 0;
+    void browser.storage.local
+      .set({ [OBS_RECONNECT_ATTEMPTS_KEY]: 0 })
+      .catch(() => undefined);
   }
 
   async allowAutoReconnect(): Promise<void> {
     await this.setRetryBlocked(false);
+    // Пользователь исправил креды/хост — бюджет попыток обязан ожить.
+    this.resetReconnectAttempts();
   }
 
   private makeSessionId(): string {
@@ -216,6 +266,9 @@ export class ObsClient {
     }
     if (this.reconnectAttempts >= this.maxReconnectAttempts || !this.settings) return;
     this.reconnectAttempts++;
+    void browser.storage.local
+      .set({ [OBS_RECONNECT_ATTEMPTS_KEY]: this.reconnectAttempts })
+      .catch(() => undefined);
     const delay = Math.min(2000 * this.reconnectAttempts, 30_000);
     log.info("obs", `reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
     this.reconnectTimer = setTimeout(async () => {
@@ -449,10 +502,13 @@ export class ObsClient {
     }
   }
 
-  private async setRetryBlocked(blocked: boolean): Promise<void> {
+  private async setRetryBlocked(blocked: boolean, reason?: "auth" | "protocol"): Promise<void> {
     this.retryBlocked = blocked;
     try {
-      await browser.storage.local.set({ [OBS_RETRY_BLOCKED_KEY]: blocked });
+      await browser.storage.local.set({
+        [OBS_RETRY_BLOCKED_KEY]: blocked,
+        [OBS_RETRY_BLOCK_REASON_KEY]: blocked ? (reason ?? "auth") : null,
+      });
     } catch (e) {
       log.error("obs", "failed to persist retry state", e);
     }

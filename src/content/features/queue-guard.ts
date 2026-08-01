@@ -58,12 +58,39 @@ function arm(): void {
   log.info(SCOPE, "armed: вкладка скрыта во время поиска");
 }
 
-export const queueGuardFeature: Feature = {
-  id: "queue-guard",
-  settingKey: "queue_background_warning_enabled",
-  enable() {
-    if (!isSearchPage()) return;
+/** Две независимые оси: фича включена настройкой И мы на нужном маршруте. */
+let featureEnabled = false;
+let onRoute = false;
+/** Ресурсы реально подняты (идемпотентность). */
+let routeActive = false;
 
+/**
+ * Ресурсы живут только при конъюнкции осей. Без гейта по настройке роутер
+ * поднимал бы фичу в обход тумблера и мастер-выключателя (ревью пакета C).
+ */
+function applyQueueGuardState(): void {
+  const want = featureEnabled && onRoute;
+  if (want === routeActive) return;
+  routeActive = want;
+  if (want) setupQueueGuard();
+  else teardownQueueGuard("фича выключена или ушли со страницы поиска");
+}
+
+/**
+ * Поднять/снять ресурсы по маршруту.
+ *
+ * enable() раньше делал ранний return вне /game-search, а FeatureManager всё
+ * равно считал фичу активной: зайдя на поиск переходом ВНУТРИ сайта (без
+ * перезагрузки), игрок оставался без предупреждения о вылете из очереди до
+ * F5 (аудит lifecycle 01.08.2026, находка 16). Теперь маршрут сверяет
+ * единый роутер content/index.ts, а функция идемпотентна в обе стороны.
+ */
+export function syncQueueGuardRoute(active: boolean): void {
+  onRoute = active;
+  applyQueueGuardState();
+}
+
+function setupQueueGuard(): void {
     visibilityListener = () => {
       // visibilitychange доставляется сразу и троттлингу не подвержен.
       if (document.hidden) {
@@ -113,8 +140,35 @@ export const queueGuardFeature: Feature = {
 
     // Страница могла открыться уже скрытой (восстановление сессии браузера).
     if (document.hidden && isSearching()) arm();
+}
+
+function teardownQueueGuard(reason: string): void {
+  disarm(reason);
+  unsubscribeDom?.();
+  unsubscribeDom = null;
+  if (visibilityListener) {
+    document.removeEventListener("visibilitychange", visibilityListener);
+    visibilityListener = null;
+  }
+  if (pageHideListener) {
+    window.removeEventListener("pagehide", pageHideListener);
+    pageHideListener = null;
+  }
+  unsubscribeMessages?.();
+  unsubscribeMessages = null;
+}
+
+export const queueGuardFeature: Feature = {
+  id: "queue-guard",
+  settingKey: "queue_background_warning_enabled",
+  enable() {
+    featureEnabled = true;
+    onRoute = isSearchPage();
+    applyQueueGuardState();
   },
   disable() {
+    featureEnabled = false;
+    applyQueueGuardState();
     unsubscribeDom?.();
     unsubscribeDom = null;
     if (visibilityListener) {
