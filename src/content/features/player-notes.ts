@@ -160,7 +160,11 @@ function fetchRatingList(): Promise<RatingPlayer[]> {
   }
   if (ratingListInFlight) return ratingListInFlight;
 
-  const request = fetch("https://polemicagame.com/rating/get-list?limit=1000")
+  // Множественное число и /default/: сайт переехал, старый singular-URL
+  // отдаёт 404 — фолбэк резолва игрока по рейтингу был мёртв (аудит
+  // устойчивости 01.08.2026, находка 2). Форма ответа прежняя (проверено
+  // живым запросом: массив с user_id/username/mmr/total_games).
+  const request = fetch("https://polemicagame.com/ratings/default/get-list?limit=1000")
     .then(async (response) => {
       if (!response.ok) throw new Error(`rating API error: ${response.status}`);
       const data: unknown = await response.json();
@@ -1832,9 +1836,11 @@ class PlayerNotesManager {
       // будила бы наблюдатель вхолостую); следующий hover перерисует сам.
       if (tooltip.dataset.pnShown !== "1") return;
       tooltip.innerHTML =
-        games.length > 0
-          ? this.formatGamesHistory(games)
-          : "Нет данных о последних играх";
+        games === null
+          ? "Не удалось загрузить историю игр"
+          : games.length > 0
+            ? this.formatGamesHistory(games)
+            : "Нет данных о последних играх";
       // Содержимое сменилось — размер тоже, пересчитываем позицию.
       this.showTooltip(tooltip, button);
     });
@@ -2871,7 +2877,8 @@ class PlayerNotesManager {
 
   // ─────────── История последних игр (с кэшем) ───────────
 
-  private async getLastGames(username: string): Promise<LastGameEntry[]> {
+  /** Список игр; null — загрузить НЕ УДАЛОСЬ (это не «игр нет»). */
+  private async getLastGames(username: string): Promise<LastGameEntry[] | null> {
     const key = username.toLowerCase();
     const cached = this.lastGamesCache.get(key);
     const fetchedAt = this.gamesFetchedAt.get(key) ?? 0;
@@ -2879,12 +2886,18 @@ class PlayerNotesManager {
     // Дедупликация: несколько mouseenter до первого ответа (или две плитки
     // одного игрока) запускали одинаковые запросы (аудит 01.08.2026, находка 7).
     const inFlight = this.lastGamesInFlight.get(key);
-    if (inFlight) return inFlight;
+    // .catch: с честным контрактом (ошибка = throw) общий промис может
+    // упасть, и ВТОРОЙ ожидающий получал бы reject мимо обработки ниже —
+    // тултип застревал на «Загрузка…» навсегда (ревью аудита устойчивости).
+    if (inFlight) return inFlight.catch(() => null);
 
     const promise = this.fetchLastGames(username, key);
     this.lastGamesInFlight.set(key, promise);
     try {
       return await promise;
+    } catch (e) {
+      log.warn("player-notes", "last games unavailable", e);
+      return null;
     } finally {
       this.lastGamesInFlight.delete(key);
     }
@@ -2898,16 +2911,27 @@ class PlayerNotesManager {
         if (stats && !stats.ratingUnavailable && stats.id) {
           userId = stats.id;
         } else {
+          // Сначала id, который у нас УЖЕ есть: из заметки на вечном ключе
+          // или со страницы профиля. Раньше единственным путём был запрос
+          // рейтинга, и после перехода статистики на ленивую загрузку
+          // (9.0.0) наведение сразу на «Последние игры» всегда упиралось в
+          // сеть — а адрес рейтинга к тому же был мёртв (жалоба 01.08.2026:
+          // «Нет данных о последних играх»).
+          userId = this.noteUserId(username);
+        }
+        if (userId === undefined) {
           try {
             const player = await findRatingPlayer(username);
             if (!player) {
+              // id не определён — честнее сказать «не удалось», чем врать,
+              // что у игрока нет игр (ревью, мелочь 3).
               log.warn("player-notes", `player ${username} not found in rating`);
-              return [];
+              throw new Error("player id unresolved");
             }
             userId = player.user_id;
           } catch (err) {
             log.warn("player-notes", "player ID lookup failed", err);
-            return [];
+            throw err;
           }
         }
 
@@ -2920,24 +2944,25 @@ class PlayerNotesManager {
           );
           if (!gamesResponse.ok) {
             log.warn("player-notes", `games API error: ${gamesResponse.status}`);
-            return [];
+            // Ошибка ≠ «игр нет»: бросаем, чтобы не закэшировать пустоту и
+            // показать честный текст (ревью аудита, мелочь 4).
+            throw new Error(`games API ${gamesResponse.status}`);
           }
           const data: any = await gamesResponse.json();
-          if (data && data.rows) {
-            return (data.rows as any[]).map((game): LastGameEntry => ({
-              role:
-                game.role?.type === "don"
-                  ? "godfather"
-                  : game.role?.type || "civilian",
-              isWin: game.result?.code === "success",
-              mmrChange: parseInt(game.mmr?.mmr_diff, 10) || 0,
-            }));
+          if (!Array.isArray(data?.rows)) {
+            // Сменившееся поле/объект ошибки — не «игр нет»: иначе снова
+            // покажем «Нет данных» и закэшируем пустоту (ревью, мелочь 2).
+            log.warn("player-notes", "games API: unexpected shape");
+            throw new Error("games API: unexpected shape");
           }
-          log.warn("player-notes", "games API returned empty data");
-          return [];
+          return (data.rows as any[]).map((game): LastGameEntry => ({
+            role: game.role?.type === "don" ? "godfather" : game.role?.type || "civilian",
+            isWin: game.result?.code === "success",
+            mmrChange: parseInt(game.mmr?.mmr_diff, 10) || 0,
+          }));
         } catch (err) {
           log.warn("player-notes", "fetching games history failed", err);
-          return [];
+          throw err;
         }
       })();
 
@@ -2952,8 +2977,10 @@ class PlayerNotesManager {
       );
       return result;
     } catch (e) {
-      log.error("player-notes", "getLastGames failed", e);
-      return [];
+      // Наверх летит ошибка: вызывающий отличит её от «игр нет» и НЕ будет
+      // кэшировать пустоту (ревью аудита устойчивости, мелочь 4).
+      log.debug("player-notes", "getLastGames failed", e);
+      throw e;
     }
   }
 
@@ -3119,7 +3146,7 @@ class PlayerNotesManager {
    * остальном работает быстрый путь синхронизации без пересоздания (иначе
    * мерцание тултипов и лишние API-запросы на каждом тике DOM).
    */
-  private buttonsSignature(username: string): string {
+  private buttonsSignature(username: string, hasMedia: boolean): string {
     const s = this.settings;
     return [
       username,
@@ -3127,6 +3154,9 @@ class PlayerNotesManager {
       s.btn_note_enabled === false ? 0 : 1,
       s.btn_last_games_enabled === false ? 0 : 1,
       s.btn_hide_video_enabled === false ? 0 : 1,
+      // Наличие медиа — часть состава ряда: камера может подключиться позже,
+      // и без пересборки кнопка «скрыть камеру» не появилась бы никогда.
+      hasMedia ? 1 : 0,
     ].join("|");
   }
 
@@ -3146,10 +3176,15 @@ class PlayerNotesManager {
     this.applyPlayerTag(container as HTMLElement, username);
     this.applyNickColor(container as HTMLElement, username);
 
-    const videoWrapper = container.querySelector(SITE.playerVideoWrapper);
-    if (!videoWrapper) return;
+    // Медиа-гейт СНЯТ с немедийных кнопок: video-wrapper рендерится сайтом
+    // только при hasVideo, и игрок без камеры вообще не получал заметку,
+    // статистику и историю игр (аудит устойчивости 01.08.2026, находка 10),
+    // а при пропаже wrapper'а ранний return пропускал ещё и синхронизацию
+    // уже созданных кнопок (находка 17). Кнопки, которым медиа реально
+    // нужно (скрыть видео, поворот, мьют), гейтятся по своим элементам ниже.
+    const hasMedia = !!container.querySelector(SITE.playerVideoWrapper);
 
-    const sig = this.buttonsSignature(username);
+    const sig = this.buttonsSignature(username, hasMedia);
     let iconsGroup = infoContainer.querySelector<HTMLElement>(`.${OWN.playerIcons}`);
 
     if (!iconsGroup || iconsGroup.dataset.pnSig !== sig) {
@@ -3171,14 +3206,16 @@ class PlayerNotesManager {
       if (s.btn_last_games_enabled !== false) {
         iconsGroup.appendChild(this.createLastGamesButton(username));
       }
-      if (s.btn_hide_video_enabled !== false) {
+      if (s.btn_hide_video_enabled !== false && hasMedia) {
         iconsGroup.appendChild(this.createHideVideoButton(username, container));
       }
     }
 
     // ── единый путь синхронизации (и для свежей группы, и для живой) ──
-    this.ensureRotateButton(iconsGroup, container, username);
-    this.ensureMuteButton(iconsGroup, container, username);
+    if (hasMedia) {
+      this.ensureRotateButton(iconsGroup, container, username);
+      this.ensureMuteButton(iconsGroup, container, username);
+    }
     const hideButton = iconsGroup.querySelector<HTMLElement>(`.${OWN.hideVideoButton}`);
     if (hideButton) this.syncHideVideoButton(hideButton, username);
     // Пересоздание video-элемента сайтом сбрасывает volume и переворот.

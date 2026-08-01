@@ -23,7 +23,7 @@ import { onDomChange } from "@core/dom";
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { onMessage, sendRuntime } from "@core/messaging";
-import { SITE, classifyPhaseText } from "@core/selectors";
+import { SITE, classifyPhaseText, endedScreenVisible } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { ObsConnectionState, ObsScene } from "@shared/types";
 
@@ -508,11 +508,12 @@ function getStageContainer(): Element | null {
  */
 function detectTimeOfDay(): TimeOfDay {
   try {
-    // 1. Надпись "Промах" — всегда день
-    const missElement = document.querySelector(SITE.endedTitle);
-    const missText = norm(missElement);
-    if (missElement && (missText.includes("промах") || missText.includes("miss"))) {
-      log.debug(SCOPE, "Detected MISS - forcing DAY scene");
+    // 1. Терминальный экран (.ended): промах, победа любой из сторон, пауза.
+    // Сайт перед gameOver стартует день, но фазовых маркеров на этом экране
+    // нет — раньше побеждала «память» и OBS оставался на ночной сцене после
+    // ночной победы (аудит устойчивости 01.08.2026, находка 5).
+    if (endedScreenVisible()) {
+      log.debug(SCOPE, "Detected ENDED screen - forcing DAY scene");
       return "day";
     }
 

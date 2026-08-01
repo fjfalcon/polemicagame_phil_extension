@@ -34,7 +34,14 @@ class RoleFaker {
   hideKeyCode = "KeyD";
 
   onFakeKey = () => {
-    this.changeRole();
+    // Своей роли может не быть вовсе (зритель, судья, роль ещё не
+    // смонтирована). Раньше в этом случае подмена не происходила, но чужие
+    // роли всё равно скрывались и D блокировался — поле оставалось пустым
+    // до E (аудит устойчивости 01.08.2026, находка 9).
+    if (!this.changeRole()) {
+      log.debug("role-faker", "своей роли нет — режим подмены не включаем");
+      return;
+    }
     this.hideOtherRoles();
     this.fixMenuPositions();
     this.setFaked(true);
@@ -167,11 +174,12 @@ class RoleFaker {
     this.setFaked(false);
   }
 
-  private changeRole() {
+  /** true — своя роль реально подменена. false — подменять было нечего. */
+  private changeRole(): boolean {
     const el = document.querySelector<HTMLElement>(SITE.myRole);
     if (!el) {
       log.debug("role-faker", "my role element not found");
-      return;
+      return false;
     }
     if (!el.hasAttribute("data-original-role")) {
       const use = el.querySelector("use");
@@ -197,6 +205,7 @@ class RoleFaker {
     }
     const tip = el.querySelector(".tooltip .content span");
     if (tip) tip.textContent = `Ваша роль - ${role.name}`;
+    return true;
   }
 
   teardown() {

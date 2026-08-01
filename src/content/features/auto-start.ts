@@ -18,7 +18,7 @@
 import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { keyboard } from "@core/keyboard";
 import { log } from "@core/log";
-import { SITE, TEXT, OWN, classifyPhaseText } from "@core/selectors";
+import { SITE, TEXT, OWN, classifyPhaseText, endedScreenVisible } from "@core/selectors";
 import { isAutoAcceptSuppressed } from "../auto-accept-gate";
 import type { Feature, FeatureContext } from "@core/feature";
 
@@ -618,6 +618,11 @@ function detectRolePhase(): "day" | "night" {
   const body = document.body;
   if (body?.classList.contains("night")) return "night";
   if (body?.classList.contains("day")) return "day";
+
+  // Игра закончилась: сайт перед этим стартует день, но экран результата
+  // фазовых маркеров не несёт — без этой ветки фаза оставалась ночной, и
+  // роль могла светиться на итоговом экране (аудит устойчивости, находка 5).
+  if (endedScreenVisible()) return "day";
 
   // 1) Текущий этап (.current) — высший приоритет
   const currentTexts = getTexts(SITE.substageCurrent);

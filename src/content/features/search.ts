@@ -19,7 +19,12 @@ export const searchFeature: Feature = {
       // открывал 10-секундное окно автопринятия в background-инжекте
       // (аудит безопасности 01.08.2026, находка 11).
       if (!e.isTrusted) return;
-      const t = e.target as HTMLElement;
+      // closest, а не matches: у кнопки закрытия внутри <img>, у «Играть» —
+      // <span>, поэтому target — вложенный узел, и события не отправлялись
+      // вовсе (аудит устойчивости 01.08.2026, находка 14).
+      const raw = e.target as HTMLElement | null;
+      const t = (raw?.closest?.(`${SITE.profileSearchButton}, ${SITE.profileSearchClose}`) ??
+        raw) as HTMLElement;
       if (t.matches?.(SITE.profileSearchButton)) {
         // Игрок сам начал поиск — его действие важнее нашей разведки очереди:
         // если стоп-кран ещё стоял, снимаем и работаем как обычно.

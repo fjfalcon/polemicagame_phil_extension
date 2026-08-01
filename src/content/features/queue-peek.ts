@@ -206,7 +206,13 @@ async function readCredentials(): Promise<Credentials | null> {
     return {
       id: Number(user.id),
       authKey: String(user.authKey),
-      pro: Number(user?.subscription?.type || 0) >= 2,
+      // Сайт считает Pro активной ТОЛЬКО при type>=2 И ненулевом duration
+      // (game-search: show-pro-purchase-link). Без второй проверки истёкшая
+      // подписка лезла в закрытый режим и получала отказ сервера вместо
+      // локального исключения (аудит устойчивости 01.08.2026, находка 12).
+      // Проверка истинности duration (как у сайта), а не Number(...) > 0:
+      // нечисловое значение вроде "P30D" дало бы NaN и понизило живого Pro.
+      pro: Number(user?.subscription?.type || 0) >= 2 && !!user?.subscription?.duration,
       prime: user?.prime_member === true || user?.primeMember === true,
     };
   } catch (e) {

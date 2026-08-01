@@ -39,8 +39,12 @@ export function setupDiagnostics(): void {
   // Пассивная проверка: если это похоже на игровую страницу, но игроков нет —
   // вероятно, изменилась разметка. Пишем предупреждение (видно на уровне warn).
   setTimeout(() => {
+    // ТОЧНЫЙ путь комнаты: "/game-search".includes("/game") === true, и
+    // штатная страница поиска (где плиток игроков нет и быть не должно)
+    // каждый раз писала ложное предупреждение, топя настоящие в шуме
+    // (аудит устойчивости 01.08.2026, находка 15).
     const looksLikeGame =
-      location.pathname.includes("/game") || !!document.querySelector(SITE.playerVideoWrapper);
+      location.pathname === "/game" || !!document.querySelector(SITE.playerVideoWrapper);
     if (looksLikeGame && document.querySelectorAll(SITE.player).length === 0) {
       log.warn(
         "diag",

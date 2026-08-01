@@ -190,7 +190,7 @@
 }
 
 /* Стили для текста в тултипе последних игр */
-.last-games-button .tooltip span {
+.last-games-button .pn-tooltip span {
     text-shadow:
         -0.1px -0.1px 0 #000,
         0.1px -0.1px 0 #000,

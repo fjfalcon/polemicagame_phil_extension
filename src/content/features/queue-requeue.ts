@@ -163,6 +163,8 @@ let disbandmentLastSeconds = -1;
 let graceTimer: ReturnType<typeof setTimeout> | null = null;
 /** Уход с посторонней страницы уже инициирован. */
 let elsewhereDone = false;
+/** Мост для этапа 1 уже поставлен в этом сборе лобби. */
+let acceptArmed = false;
 
 function isGameRoomPage(): boolean {
   return location.pathname === "/game" || location.pathname.startsWith("/game?");
@@ -366,6 +368,7 @@ function isSearchPage(): boolean {
 
 function reset(): void {
   accepted = false;
+  acceptArmed = false;
   armedFromRoom = false;
   disappearedAt = 0;
   attempts = 0;
@@ -419,6 +422,14 @@ function tick(): void {
     // НОВОЕ, не принятое лобби, и accepted обязан сброситься. Иначе клик
     // «Играть» ушёл бы за игрока, который решил B не принимать (ревью №2).
     accepted = !acceptEl.classList.contains("cursor-pointer");
+    // Мост переживает ПЕРЕЗАГРУЗКУ: сайт на `on_stop_game_search` с причиной
+    // game_not_accepted делает window.location.reload() (сверено с бандлом
+    // game-search), и наши accepted/disappearedAt умирали вместе со страницей
+    // — этап 1 не срабатывал вообще (аудит устойчивости 01.08.2026, №3).
+    if (accepted && !acceptArmed) {
+      acceptArmed = true;
+      armPending();
+    }
     return;
   }
   if (!accepted) return;
@@ -426,11 +437,15 @@ function tick(): void {
   // Блок принятия исчез — выясняем, куда всё повернулось.
   if (document.querySelector(SITE.searchInProgress)) {
     // Сайт сам вернул игрока в очередь — не дублируем.
+    clearPending();
     reset();
     return;
   }
   if (document.querySelector(GAME_STARTING_SELECTOR)) {
-    // Все приняли, игра запускается — сейчас уведут со страницы.
+    // Все приняли, игра запускается — сейчас уведут со страницы. Мост обязан
+    // умереть: иначе возврат на страницу поиска в пределах TTL (например,
+    // игрок вышел из начавшейся игры) принял бы его за развал лобби.
+    clearPending();
     disappearedAt = 0;
     return;
   }
@@ -544,6 +559,7 @@ export const queueRequeueFeature: Feature = {
     disbandmentGoneAt = 0;
     disbandmentLastSeconds = -1;
     elsewhereDone = false;
+    acceptArmed = false;
     if (graceTimer) {
       clearTimeout(graceTimer);
       graceTimer = null;

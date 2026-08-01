@@ -9,7 +9,6 @@ import { installErrorCapture } from "@core/errors";
 import { onMessage } from "@core/messaging";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
 import { OBS_RETRY_BLOCKED_KEY, ObsClient } from "./obs-client";
-import { handleGameSearch, handleStopSearch } from "./auto-accept";
 import type { ExtMessage, ObsCommandMsg } from "@shared/types";
 
 const obs = new ObsClient();
@@ -131,12 +130,13 @@ onMessage((msg: ExtMessage, sender) => {
       .then((data) => ({ success: true, data }))
       .catch((e: Error) => ({ success: false, error: e.message }));
   }
-  if ("action" in msg && msg.action === "startSearch") {
-    void handleGameSearch(sender.tab?.id);
-    return Promise.resolve({ ok: true });
-  }
-  if ("action" in msg && msg.action === "stopSearch") {
-    void handleStopSearch(sender.tab?.id);
+  // startSearch/stopSearch: дублирующий background-инжект автопринятия удалён
+  // в 9.0.2 (аудит устойчивости 01.08.2026, находка 13) — он был мёртв:
+  // искал <button>, тогда как карточка принятия у сайта <div>, и жил 10
+  // секунд при поиске, который длится минуты. Автопринятие делает
+  // content-скрипт (auto-start). Сообщения приходить ещё могут (старая
+  // вкладка до перезагрузки) — отвечаем и ничего не делаем.
+  if ("action" in msg && (msg.action === "startSearch" || msg.action === "stopSearch")) {
     return Promise.resolve({ ok: true });
   }
   // Возвращаем ПРОМИС операции, а не void: иначе service worker может уснуть

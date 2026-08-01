@@ -114,6 +114,10 @@ export const TEXT = {
     "проверк",
     // «Ход доктора»
     "доктор",
+    // «Аукцион» — ночная стадия в самом бандле:
+    // case "night": case "auction": case "card_distribution": e="night"
+    "аукцион",
+    "auction",
     "night",
     "card deal",
     "dealing",
@@ -135,6 +139,10 @@ export const TEXT = {
     "речь игрока",
     "доп. речь",
     "прощальная",
+    // «Промах» — реальный текст (mafia_miss), живёт на .ended-экране.
+    // «Лучший ход» НЕ добавлен: в локали это подсказка (guess_tooltip), а не
+    // название этапа — маркер был бы мёртвым (ревью аудита устойчивости).
+    "промах",
     "day",
     "morning",
     "vote",
@@ -183,8 +191,11 @@ export const TEXT = {
   // Режимы игры на карточке приёма
   gameMode: ["культурный", "обычный", "без цензуры"],
   // Приветственное окно / кнопка «НАЧАТЬ ИГРУ» (auto-start)
-  welcome: ["добро пожаловать", "welcome"],
-  startGameButton: ["начать игру", "start playing"],
+  welcome: ["добро пожаловать", "welcome", "режим зрителя"],
+  // «Начать просмотр» — кнопка того же .common-room-modal у ЗРИТЕЛЯ
+  // (viewer_mode/start_watching в локали): без неё «пропустить стартовый
+  // экран» молча не работало зрителям (аудит устойчивости, находка 7).
+  startGameButton: ["начать игру", "start playing", "начать просмотр", "start watching"],
   // Лобби: «Идет набор игроков»
   recruiting: ["идет набор игроков", "recruiting players"],
   // Пункты меню «показать/скрыть роли» (auto-start, day/night switch)
@@ -206,7 +217,10 @@ export const OWN = {
   /** Контейнер инлайновой статистики игрока. */
   playerStats: "player-stats",
   /** Тултип со статистикой. */
-  tooltip: "tooltip",
+  /** Тултип статистики. ПРЕФИКС ОБЯЗАТЕЛЕН: голый `tooltip` — живой класс
+   *  САЙТА (room/game-search/profile), и наш глобальный cleanup сносил его
+   *  Vue-тултипы (аудит устойчивости 01.08.2026, находка 1). */
+  tooltip: "pn-tooltip",
   /** <style> с правилами страницы матча, создаётся фичей. */
   matchPageStyle: "polemica-match-page-style",
 } as const;
@@ -242,6 +256,27 @@ export function hasPhaseMarker(text: string, markers: readonly string[]): boolea
  * внутри (в substage сайт дописывает только номер игрока, не ник — ники в
  * конфликт не попадают).
  */
+/**
+ * Терминальный экран игры (победа/поражение/промах/пауза): `.ended`.
+ *
+ * Сайт перед `gameOver` явно вызывает `on_start_day`, но результат рисует НЕ
+ * стадией, а отдельным блоком без фазовых маркеров — и наши фазы «залипали»
+ * на ночи: OBS оставался на ночной сцене, а роль могла остаться показанной
+ * на экране результата (аудит устойчивости 01.08.2026, находка 5).
+ */
+export const ENDED_SCREEN_SELECTOR = ".ended";
+
+/** Виден ли терминальный экран игры (см. ENDED_SCREEN_SELECTOR). */
+export function endedScreenVisible(): boolean {
+  const el = document.querySelector<HTMLElement>(ENDED_SCREEN_SELECTOR);
+  if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return false;
+  // ПАУЗА рисуется ТЕМ ЖЕ блоком (fixedState PAUSE → contClasses
+  // "ended-pause"), но игра не закончилась и фаза не «день». Без этой
+  // проверки ночная пауза — а с нашим же F8 они частые — уводила бы OBS на
+  // дневную сцену и обратно (поймано ревью аудита устойчивости 01.08.2026).
+  return !el.classList.contains("ended-pause");
+}
+
 export function classifyPhaseText(text: string): "day" | "night" | null {
   const day = hasPhaseMarker(text, TEXT.day);
   const night = hasPhaseMarker(text, TEXT.night);
