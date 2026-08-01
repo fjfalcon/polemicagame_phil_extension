@@ -57,8 +57,29 @@ const LEGACY_KEY = "notes";
  */
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
-export function isSafeNoteKey(key: string): boolean {
-  return key.length > 0 && !UNSAFE_KEYS.has(key);
+/**
+ * Ключ пригоден для ЗАПИСИ: строка, непустая, не прототипная, в пределах лимита
+ * хранилища. Проверки runtime, а не только типа: ключ приезжает из DOM сайта и
+ * из чужого файла бэкапа, где на месте строки бывает массив или null, — на
+ * такое helper раньше отвечал «безопасно» или падал на `.length`
+ * (тест-набор 01.08.2026, №1).
+ */
+export function isSafeNoteKey(key: unknown): key is string {
+  if (typeof key !== "string" || !key) return false;
+  if (key.length > MAX_NOTE_KEY) return false;
+  return !UNSAFE_KEYS.has(key);
+}
+
+/**
+ * Ключ пригоден для ПЕРЕНОСА из уже существующей карты. Здесь запрещён только
+ * `__proto__` — единственный ключ, присваивание по которому подменяет
+ * прототип. Ни лимит длины, ни `constructor`/`prototype` не применяем: такой
+ * ключ мог когда-то доехать до диска, и молча выбросить его при слиянии
+ * значит потерять заметку пользователя (создать новый всё равно не даст
+ * `isSafeNoteKey`).
+ */
+function isPlainKey(key: string): boolean {
+  return key.length > 0 && key !== "__proto__";
 }
 
 /**
@@ -93,14 +114,22 @@ export interface NickColorIndex {
 export function buildNickColorIndex(notes: NotesMap): NickColorIndex {
   const byId = new Map<string, string>();
   const byNick = new Map<string, string>();
-  for (const [key, rec] of Object.entries(notes)) {
-    if (!rec || typeof rec === "string" || !rec.nickColor) continue;
+  for (const [rawKey, rec] of Object.entries(notes)) {
+    if (!rec || typeof rec === "string") continue;
     // Записи со старых версий могли не проходить санитизацию — цвет уходит
     // в style-атрибут, поэтому фильтр обязателен и на чтении.
     if (!isSafeTag(rec.nickColor)) continue;
+    // Канонизация обязательна и здесь: под ключом "u:007" цвет не находился по
+    // id 7, хотя слияние такие ключи уже сводит к одному (тест-набор, №5).
+    const key = canonicalNoteKey(rawKey);
     if (isIdKey(key)) {
       byId.set(key.slice(ID_KEY_PREFIX.length), rec.nickColor);
-      if (rec.nick) byNick.set(rec.nick.toLowerCase(), rec.nickColor);
+      // nick из старого хранилища мог быть чем угодно (числом, объектом):
+      // .toLowerCase() на нём ронял ПОСТРОЕНИЕ ВСЕГО индекса — то есть цвета
+      // пропадали разом у всех игроков из-за одной битой записи.
+      if (typeof rec.nick === "string" && rec.nick) {
+        byNick.set(rec.nick.toLowerCase(), rec.nickColor);
+      }
     } else {
       byNick.set(key.toLowerCase(), rec.nickColor);
     }
@@ -183,52 +212,150 @@ export function normalizeNoteRecord(raw: unknown, maxText = MAX_NOTE_TEXT): Note
   return rec;
 }
 
+/**
+ * Поля записи для сравнения: легаси-строка — это запись без времени.
+ * На диске под ключом может лежать `null` или число (повреждённое хранилище,
+ * чужой файл): читать с них поля нельзя — раньше слияние на таком падало.
+ */
+function fieldsOf(note: NoteRecord | string | null | undefined): NoteRecord {
+  if (typeof note === "string") return { text: note, timestamp: 0 };
+  if (!note || typeof note !== "object") return { text: "", timestamp: 0 };
+  return note;
+}
+
+/**
+ * Свести две записи одного игрока в одну.
+ *
+ * Побеждает более свежая, но КАЖДОЕ пустое поле победителя добирается из
+ * проигравшей. Иначе слияние теряет данные, которых нет больше нигде: на
+ * втором устройстве игроку поставили только цвет (запись с пустым текстом и
+ * свежим временем) — и импорт такого бэкапа стирал написанную заметку.
+ * Правило симметрично: неважно, в каком аргументе приехала непустая запись
+ * (тест-набор 01.08.2026, №4).
+ */
+function combineNotes(a: NoteRecord | string, b: NoteRecord | string): NoteRecord {
+  const [winner, loser] = noteTimestamp(b) > noteTimestamp(a) ? [b, a] : [a, b];
+  const w = fieldsOf(winner);
+  const l = fieldsOf(loser);
+  const out: NoteRecord = { ...w };
+  if (!out.text && l.text) out.text = l.text;
+  if (!out.tag && l.tag) out.tag = l.tag;
+  if (!out.nickColor && l.nickColor) out.nickColor = l.nickColor;
+  if (!out.nick && l.nick) out.nick = l.nick;
+  if (!out.version && l.version) out.version = l.version;
+  return out;
+}
+
+/**
+ * Изменилось ли СОДЕРЖИМОЕ записи — чтобы счётчик «обновлено» не врал.
+ * Сравниваем по полям, а не по форме: легаси-строка и равнозначная ей запись
+ * — это не «обновление заметки», а просто другое представление.
+ */
+function sameNote(a: NoteRecord | string, b: NoteRecord | string): boolean {
+  const x = fieldsOf(a);
+  const y = fieldsOf(b);
+  // Object.is, а не ===: с NaN в поле запись «отличалась бы от самой себя» и
+  // счётчик обновлений рос бы при каждом импорте одного и того же файла.
+  return (
+    Object.is(x.text, y.text) &&
+    Object.is(x.timestamp, y.timestamp) &&
+    Object.is(x.tag, y.tag) &&
+    Object.is(x.nickColor, y.nickColor) &&
+    Object.is(x.nick, y.nick) &&
+    Object.is(x.version, y.version)
+  );
+}
+
 export function mergeNotes(
   base: NotesMap,
   incoming: NotesMap,
+  /**
+   * `onlyNew` — брать из incoming ТОЛЬКО отсутствующие ключи, не трогая
+   * существующие записи. Режим для замороженного моста storage.sync: тот
+   * снимок старше любой локальной заметки по построению (в sync не пишем с
+   * 8.1.29), а правило «непустое побеждает пустое» иначе возвращало бы из
+   * него снятые метки и стёртые тексты — молча, при первом запуске на каждом
+   * новом устройстве (ревью 02.08.2026).
+   */
+  { onlyNew = false }: { onlyNew?: boolean } = {},
 ): { merged: NotesMap; added: number; replaced: number } {
-  const merged: NotesMap = { ...base };
+  const merged: NotesMap = {};
+  for (const [rawKey, note] of Object.entries(base)) {
+    // Ключи базы канонизируем ТОЖЕ: "u:007" из старого хранилища и "u:7" из
+    // файла — один игрок. Раньше канонизировалась только входящая сторона, и
+    // пара ключей жила вечно (тест-набор 01.08.2026, №3).
+    const key = canonicalNoteKey(rawKey);
+    if (!isPlainKey(key)) continue;
+    // hasOwn, а не `=== undefined`: ник «toString» вернул бы унаследованный
+    // метод Object.prototype, и он поехал бы в слияние как запись.
+    merged[key] = Object.hasOwn(merged, key) ? combineNotes(merged[key], note) : note;
+  }
+
   // Ник → существующий id-ключ: старый бэкап с ник-ключами не должен
   // создавать ДУБЛЬ рядом с уже мигрированной u:-записью того же игрока
   // (дубль был бы невидим при чтении id-first и «воскресал» бы после
   // удаления). Сливаем в id-ключ по обычному правилу timestamp.
   const idKeyByNick = new Map<string, string>();
   const indexNick = (k: string, v: NoteRecord | string | undefined) => {
-    if (isIdKey(k) && v && typeof v !== "string" && v.nick) {
-      idKeyByNick.set(v.nick.toLowerCase(), k);
-    }
+    // typeof-гард на nick обязателен и здесь: со старого хранилища там могло
+    // оказаться число или массив, и слияние падало ЦЕЛИКОМ — импорт умирал, а
+    // миграция из sync ловила исключение, не выставляла флаг и повторялась при
+    // каждой загрузке навсегда (ревью 02.08.2026).
+    const nick = fieldsOf(v ?? "").nick;
+    if (isIdKey(k) && typeof nick === "string" && nick) idKeyByNick.set(nick.toLowerCase(), k);
   };
-  for (const [k, v] of Object.entries(base)) indexNick(k, v);
-  let added = 0;
-  let replaced = 0;
+  for (const [k, v] of Object.entries(merged)) indexNick(k, v);
+
+  // Входящие записи нормализуем ДО слияния, чтобы id-ключи попали в индекс
+  // ников раньше, чем встретится ник-ключ того же игрока. Иначе порядок ключей
+  // в файле решал, получится один игрок или два (тест-набор, №2).
+  const items: Array<[string, NoteRecord]> = [];
   for (const [rawKey, note] of Object.entries(incoming)) {
     // Канонизация id-ключа: "u:0123" и "u:123" — один игрок, иначе присланный
     // файл плодил вторую невидимую запись (аудит безопасности, №12).
     const key = canonicalNoteKey(rawKey);
-    if (!isSafeNoteKey(key) || key.length > MAX_NOTE_KEY) continue;
+    if (!isSafeNoteKey(key)) continue;
     // Запись пересобирается из разрешённых полей: сырой объект из чужого
     // файла в карту больше не попадает (№4).
     const safe = normalizeNoteRecord(note);
     if (!safe) continue;
-    const targetKey = !isIdKey(key) ? (idKeyByNick.get(key.toLowerCase()) ?? key) : key;
-    const existing = merged[targetKey];
-    if (existing === undefined) {
+    items.push([key, safe]);
+  }
+  for (const [key, safe] of items) indexNick(key, safe);
+
+  let added = 0;
+  let replaced = 0;
+  for (const [key, safe] of items) {
+    // Ник-ключ уводим в id-запись того же игрока ТОЛЬКО если такого ник-ключа
+    // ещё нет в карте. Иначе мы бы вливали заметку в чужую запись: ник на
+    // сайте освобождается и достаётся другому человеку, а id вечен — и у нас
+    // не было бы способа отличить «тот же игрок» от «тёзка». Пока запись под
+    // ником существует, она остаётся собой; новый дубль при этом не рождается
+    // (ради чего редирект и делался).
+    const targetKey =
+      isIdKey(key) || Object.hasOwn(merged, key)
+        ? key
+        : (idKeyByNick.get(key.toLowerCase()) ?? key);
+    if (!Object.hasOwn(merged, targetKey)) {
       merged[targetKey] = safe;
       added++;
-    } else if (noteTimestamp(safe) > noteTimestamp(existing)) {
-      // Слив в id-ключ сохраняет nick-поле существующей записи. Цвет и метка
-      // наследуются по правилу «непустое побеждает пустое»: более свежая
-      // запись без цвета — это обычно заметка, сохранённая, пока цвет жил в
-      // другой записи игрока, а не намеренное снятие цвета. Раньше замена
-      // молча теряла nickColor/tag существующей записи.
-      const keep: Partial<NoteRecord> = {};
-      if (typeof existing !== "string") {
-        if (existing.nick) keep.nick = existing.nick;
-        if (!safe.tag && existing.tag) keep.tag = existing.tag;
-        if (!safe.nickColor && existing.nickColor) keep.nickColor = existing.nickColor;
+    } else if (!onlyNew) {
+      const existing = merged[targetKey];
+      // `nick` — не пользовательский текст, а СВЯЗКА ИДЕНТИЧНОСТИ: по нему
+      // ищется id-запись игрока (noteKeyFor), по нему же строится индекс
+      // цветов и дедуп ник-ключей. Файл его переписывать не может: имея
+      // устаревший ник, он рвал связку — при следующем импорте того же файла
+      // ник-ключ создавался заново, цвет переставал находиться по нику, а
+      // модалка открывалась пустой (ревью 02.08.2026, блокер).
+      // typeof: битый нестроковый ник со старого хранилища цементировать не
+      // надо — пусть его вылечит запись из файла.
+      const existingNick = fieldsOf(existing).nick;
+      const next = combineNotes(existing, safe);
+      if (typeof existingNick === "string" && existingNick) next.nick = existingNick;
+      if (!sameNote(existing, next)) {
+        merged[targetKey] = next;
+        replaced++;
       }
-      merged[targetKey] = { ...safe, ...keep };
-      replaced++;
     }
     // Новая id-запись с ником должна попасть в индекс: иначе ник-ключ того же
     // игрока, идущий дальше по файлу, создавал бы дубль (№12).
@@ -279,7 +406,13 @@ async function migrateFromSync(
       return { notes: localNotes, customTags };
     }
 
-    const merged = mergeNotes(mergeNotes(localNotes, fromLegacy).merged, fromSync).merged;
+    // Два снимка из sync сводим между собой ОБЫЧНЫМИ правилами: `notes` —
+    // формат совсем старых версий, `playerNotes` заведомо новее, и с onlyNew
+    // на обоих слияниях древняя запись побеждала бы более новую (ревью
+    // 02.08.2026). А уже готовый мост вносим в local только новыми ключами:
+    // он старше любой локальной заметки и переписывать её не должен.
+    const bridge = mergeNotes(fromLegacy, fromSync).merged;
+    const merged = mergeNotes(localNotes, bridge, { onlyNew: true }).merged;
 
     await browser.storage.local.set({
       [NOTES_KEY]: merged,

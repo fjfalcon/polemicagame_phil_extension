@@ -23,6 +23,27 @@ function lineOf(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;
 }
 
+/**
+ * Тело функции по имени — через AST, а не регэкспом по файлу: проверка
+ * «teardown стоит внутри disableAutoAccept» иначе проходила бы и когда
+ * clearTimeout уехал в любую функцию ниже по файлу.
+ */
+function functionBody(source: string, name: string): string {
+  const sf = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let body: string | null = null;
+  const visit = (node: ts.Node) => {
+    if (body !== null) return;
+    if (ts.isFunctionDeclaration(node) && node.name?.text === name && node.body) {
+      body = node.body.getText(sf);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  if (body === null) throw new Error(`function ${name} not found; invariant test cannot run`);
+  return body;
+}
+
 function parseTs(relative: string): ts.SourceFile {
   return ts.createSourceFile(relative, read(relative), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
@@ -81,7 +102,7 @@ describe("AGENTS §4 storage and data ownership", () => {
       // Reviewed compatibility fallback for a stale live content realm after update.
       "src/content/features/player-notes.ts:669",
       // Reviewed popup import fallback when the background coordinator has no receiver.
-      "src/popup/index.ts:717",
+      "src/popup/index.ts:720",
     ];
     expect(directCalls, "§4.3: new whole-map writer bypasses the single background queue").toEqual(allowed);
   });
@@ -130,13 +151,21 @@ describe("AGENTS §4 source safety", () => {
       };
       visit(sf);
     }
-    expect(violations, "§4.1/§4.2: wildcard scans amplify MutationObserver loops and inherited text").toEqual([
-      // Known start-button fallback; tracked below instead of silently blessing future wildcard scans.
-      "src/content/features/auto-start.ts:808",
-    ]);
+    expect(violations, "§4.1/§4.2: wildcard scans amplify MutationObserver loops and inherited text").toEqual([]);
   });
 
-  test.todo("KNOWN BUG §4.1/§4.2: auto-start still scans querySelectorAll('*') in one fallback");
+  test("§4.2: every text-matched click list is deepest-only and visibility-gated", () => {
+    const source = read("src/content/features/auto-start.ts");
+    expect(source).toContain("START_CANDIDATE_SELECTOR");
+    expect(
+      count(source, /el\.contains\(other\)/g),
+      "§4.2: text filters match parent and child alike without a deepest-only pass",
+    ).toBe(3); // accept buttons, accept cards, start-game fallback
+    const startFallback = functionBody(source, "clickStartGameButton");
+    expect(startFallback, "§4.2: only visible elements may be clicked").toMatch(
+      /isVisible\([\s\S]{0,40}?\)[\s\S]{0,200}?safeClick\(/,
+    );
+  });
 
   test("§4.1: SharedDomObserver remains the only production MutationObserver", () => {
     const owners: string[] = [];
@@ -158,7 +187,18 @@ describe("AGENTS §4 source safety", () => {
     }
   });
 
-  test.todo("KNOWN BUG §4.5: role-faker's separate keydown blocker still lacks an e.repeat gate");
+  test("§4.5: role-faker's separate blocker keeps its gates in one tested predicate", () => {
+    const source = read("src/content/features/role-faker.ts");
+    for (const required of ["e.code !== hideKeyCode", "isTypingContext(e)", "e.ctrlKey", "e.metaKey", "e.altKey"]) {
+      expect(source, `§4.5: role-faker blocker lost required gate ${required}`).toContain(required);
+    }
+    // Сама политика (в т.ч. осознанно инвертированный repeat) проверяется
+    // поведением в tests/unit/role-faker.test.ts. Здесь — только то, что
+    // блокировщик не завёл вторую копию гейтов в обход предиката.
+    expect(source, "§4.5: the blocker must delegate to shouldSwallowRoleKey").toMatch(
+      /this\.dBlocker = \([^)]*\) => \{[\s\S]{0,200}?shouldSwallowRoleKey\(/,
+    );
+  });
 
   test("§4.6: reconnecting sockets detach all four old handlers", () => {
     for (const file of ["src/background/obs-client.ts", "src/content/panels/twitch-panel.ts"]) {
@@ -306,7 +346,7 @@ describe("§4.7 lifecycle heuristic", () => {
     "src/content/features/role-marker.ts": {
       listeners: 4,
       timers: 0,
-      reason: "menu-node handlers plus known delayed outside-listener tail tracked by a todo regression",
+      reason: "menu-node handlers are removed with the menu; the delayed arm timer is cleared by closeMenu",
     },
     "src/content/features/tooltip.ts": {
       listeners: 3,
@@ -320,8 +360,24 @@ describe("§4.7 lifecycle heuristic", () => {
     },
   };
 
-  test.todo("KNOWN BUG §4.7: role-marker can attach outside listeners after disable via setTimeout(0)");
-  test.todo("KNOWN BUG §4.7: auto-start webcam tail timeout can click after disable");
+  test("§4.7: delayed tails are held in named handles and cleared on teardown", () => {
+    const roleMarker = read("src/content/features/role-marker.ts");
+    expect(roleMarker, "§4.7: menu arm timer must be cancellable").toMatch(
+      /armTimer = setTimeout\(/,
+    );
+    expect(roleMarker, "§4.7: closeMenu must cancel the pending arm timer").toMatch(
+      /closeMenu = \(\) => \{[\s\S]*?clearTimeout\(armTimer\)/,
+    );
+
+    const autoStart = read("src/content/features/auto-start.ts");
+    expect(autoStart, "§4.7: webcam autoclick must be cancellable").toMatch(
+      /webcamClickTimer = setTimeout\(/,
+    );
+    expect(
+      functionBody(autoStart, "disableAutoAccept"),
+      "§4.7: disableAutoAccept must cancel the webcam autoclick",
+    ).toContain("clearTimeout(webcamClickTimer)");
+  });
 
   test("feature acquisitions have matching teardown or an exact reviewed allowance", () => {
     const problems: string[] = [];

@@ -47,6 +47,7 @@ let cfg = {
 let acceptInterval: ReturnType<typeof setInterval> | null = null;
 let unsubAcceptDom: (() => void) | null = null;
 let acceptScanTimer: ReturnType<typeof setTimeout> | null = null;
+let webcamClickTimer: ReturnType<typeof setTimeout> | null = null;
 let videoButtonClicked = false;
 
 // Игровая страница
@@ -220,9 +221,13 @@ function clickAcceptButtons() {
     log.debug(SCOPE, "click accept button", button.textContent);
     button.click();
 
-    // После старта — один раз пытаемся включить видео
-    if (!videoButtonClicked) {
-      setTimeout(() => {
+    // После старта — один раз пытаемся включить видео.
+    // Таймер именованный и гасится в disableAutoAccept: без ссылки на него
+    // клик по камере прилетал через секунду ПОСЛЕ выключения автопринятия —
+    // то есть расширение включало камеру уже выключенной фичей (§4.7).
+    if (!videoButtonClicked && webcamClickTimer === null) {
+      webcamClickTimer = setTimeout(() => {
+        webcamClickTimer = null;
         const videoButton = findWebcamButton();
         if (videoButton) {
           if (cfg.disableWebcam) {
@@ -279,6 +284,12 @@ function disableAutoAccept() {
   if (acceptScanTimer !== null) {
     clearTimeout(acceptScanTimer);
     acceptScanTimer = null;
+  }
+  // Отложенный клик по камере — тот же хвост: через секунду после выключения
+  // он бы включил видео от имени уже неактивной фичи.
+  if (webcamClickTimer !== null) {
+    clearTimeout(webcamClickTimer);
+    webcamClickTimer = null;
   }
 }
 
@@ -759,6 +770,10 @@ function queueRolePhaseCheck() {
  * любого действия игрока — окно, которое он открыл сам, остаётся открытым.
  */
 const MAX_START_CLICK_ATTEMPTS = 3;
+/** Кликабельные кандидаты на «НАЧАТЬ ИГРУ» — вместо обхода всего окна. */
+const START_CANDIDATE_SELECTOR =
+  'button, a, li, [role="button"], [tabindex], div.cursor-pointer, ' +
+  '[class*="btn"], [class*="button"], [class*="start"]';
 const USER_ACTION_BACKOFF_MS = 5000;
 let startClickAttempts = 0;
 let startModalSeen = false;
@@ -804,16 +819,27 @@ function clickStartGameButton() {
     startButtons[0].click();
   }
 
-  // Доп. элементы с точным текстом «НАЧАТЬ ИГРУ»
-  const startElements = Array.from(welcomeModal.querySelectorAll<HTMLElement>("*")).filter((el) => {
-    const t = norm(el);
-    return (
-      (TEXT.startGameButton as readonly string[]).includes(t) &&
-      !startButtons.includes(el as HTMLButtonElement)
-    );
-  });
+  // Доп. элементы с точным текстом «НАЧАТЬ ИГРУ». Только кликабельные
+  // кандидаты: querySelectorAll("*") обходил всё поддерево окна на каждой
+  // мутации, а textContent наследуется — под фильтр попадали и контейнеры
+  // (§4.1/§4.2, тест-набор 01.08.2026, №8).
+  let startElements = Array.from(
+    welcomeModal.querySelectorAll<HTMLElement>(START_CANDIDATE_SELECTOR),
+  ).filter(
+    (el) =>
+      (TEXT.startGameButton as readonly string[]).includes(norm(el)) &&
+      !startButtons.includes(el as HTMLButtonElement),
+  );
+  // Оставляем только самые глубокие совпадения — родитель и дитя с одним и тем
+  // же текстом иначе оба считались кандидатами.
+  startElements = startElements.filter(
+    (el) => !startElements.some((other) => other !== el && el.contains(other)),
+  );
 
-  if (startElements.length > 0) safeClick(startElements[0]);
+  // Только видимый элемент (§4.2): у окна сайта бывают заготовленные, но
+  // скрытые кнопки, а кнопочная ветка выше проходит через isVisible.
+  const startTarget = startElements.find((el) => isVisible(el));
+  if (startTarget) safeClick(startTarget);
 }
 
 /**

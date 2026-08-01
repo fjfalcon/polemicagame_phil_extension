@@ -90,8 +90,17 @@ let dirty = false;
 // \b вокруг коротких слов обязателен: без него «sid» съедал «considered».
 // Схема (Bearer/Basic) пропускается ПЕРЕД значением, иначе вырезалось слово
 // схемы, а сам токен оставался в логе.
+// Разделителей между ключом и значением до восьми: у форматированного JSON
+// (`"token" : "abcdef"`) их пять, и при лимите в четыре секрет оставался в
+// логе целиком (тест-набор 01.08.2026, №6). Перенос строки в разделители НЕ
+// входит: с ним слово на следующей строке лога вырезалось как «значение»
+// ключа с прошлой — JSON.stringify всё равно держит ключ и значение вместе.
+// Префикс `(?:[a-z0-9]+[_-])?` обязателен: `\b` перед словом не срабатывает
+// после подчёркивания, и наш СОБСТВЕННЫЙ ключ `obs_password` уходил в лог
+// нетронутым (ревью 02.08.2026). Слова вроде «considered» по-прежнему целы:
+// их защищает `\b` в конце («sidered» — не граница слова).
 const SECRET_RE =
-  /(\b(?:auth[_-]?key|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|session[_-]?id|sid|authorization)\b["'\s:=]{0,4}(?:(?:Bearer|Basic)\s+)?)([^\s,&"';]{4,})/gi;
+  /(\b(?:[a-z0-9]+[_-])?(?:auth[_-]?key|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|session[_-]?id|sid|authorization)\b["' \t:=]{0,8}(?:(?:Bearer|Basic)\s+)?)([^\s,&"';]{4,})/gi;
 
 export function redactSecrets(input: string, maxLen = 400): string {
   return input.replace(SECRET_RE, (_m, k: string) => `${k}…`).slice(0, maxLen);

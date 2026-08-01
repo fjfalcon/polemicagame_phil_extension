@@ -43,6 +43,8 @@ let marks: Marks = {};
 
 let offDom: (() => void) | null = null;
 let closeMenu: (() => void) | null = null;
+/** Отложенная (на тик) подписка меню на клик вне его — гасится вместе с меню. */
+let armTimer: ReturnType<typeof setTimeout> | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let scanTimer: ReturnType<typeof setTimeout> | null = null;
 let lastPath = "";
@@ -208,12 +210,21 @@ function openMenu(marker: HTMLElement, username: string): void {
     if (!menu.contains(e.target as Node) && e.target !== marker) closeMenu?.();
   };
   closeMenu = () => {
+    // Подписка могла ещё не состояться: гасим её вместе с меню, иначе
+    // disable() закрывал меню, а через тик мы вешали на document слушатели,
+    // которые снять уже некому (§4.7, тест-набор 01.08.2026, №10).
+    if (armTimer !== null) {
+      clearTimeout(armTimer);
+      armTimer = null;
+    }
     document.removeEventListener("click", onOutside, true);
     window.removeEventListener("scroll", closeMenu as () => void, true);
     menu.remove();
     closeMenu = null;
   };
-  setTimeout(() => {
+  // Тик задержки нужен, чтобы клик, открывший меню, не закрыл его сразу же.
+  armTimer = setTimeout(() => {
+    armTimer = null;
     document.addEventListener("click", onOutside, true);
     window.addEventListener("scroll", closeMenu as () => void, true);
   }, 0);

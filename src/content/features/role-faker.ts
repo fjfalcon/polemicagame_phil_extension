@@ -14,6 +14,27 @@ interface RoleDef {
   icon: string;
 }
 
+/**
+ * Глотать ли это нажатие клавиши скрытия роли, пока активна подмена.
+ * Вынесено из блокировщика отдельной функцией — чтобы политика гейтов §4.5
+ * проверялась тестом поведением, а не чтением исходника.
+ *
+ * Гейты те же, что у общего роутера: `event.code` (раскладко-независимо),
+ * typing-context и модификаторы. А вот `e.repeat` здесь ОСОЗНАННО инвертирован:
+ * роутер на автоповторе не действует, чтобы не выполнять действие десятки раз
+ * в секунду, но здесь «действие» — это подавление, и оно обязано быть
+ * непрерывным. Пропустив повтор, мы отдали бы D сайту, и он показал бы
+ * НАСТОЯЩУЮ роль прямо посреди подмены.
+ */
+export function shouldSwallowRoleKey(e: KeyboardEvent, hideKeyCode: string): boolean {
+  if (e.code !== hideKeyCode) return false;
+  // Пока пользователь печатает (KeyD = «в» в русской раскладке) или жмёт
+  // Cmd/Ctrl+D — не глотаем.
+  if (isTypingContext(e) && producesText(e.code)) return false;
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  return true;
+}
+
 class RoleFaker {
   private readonly roles: RoleDef[] = [
     { name: "undefined", icon: "player" },
@@ -61,11 +82,8 @@ class RoleFaker {
   private attachDBlocker() {
     if (this.dBlocker) return;
     this.dBlocker = (e: KeyboardEvent) => {
-      if (!this.isFaked || e.code !== this.hideKeyCode) return;
-      // Та же политика, что у общего роутера: пока пользователь печатает
-      // (KeyD = «в» в русской раскладке) или жмёт Cmd/Ctrl+D — не глотаем.
-      if (isTypingContext(e) && producesText(e.code)) return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!this.isFaked) return;
+      if (!shouldSwallowRoleKey(e, this.hideKeyCode)) return;
       e.preventDefault();
       e.stopPropagation();
     };
