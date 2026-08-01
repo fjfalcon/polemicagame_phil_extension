@@ -57,9 +57,19 @@ function usernameOf(player: Element): string | null {
 }
 
 function resolveGameKey(): string | null {
-  // 1) id матча/игры в URL
+  // 1) id матча/игры в URL. ВАЖНО: у комнаты путь просто "/game", а id
+  // приходит query-параметром (сайт сам строит "/game?role=viewer&game_id=N")
+  // — без этого ключ падал на подпись состава, и рематч тем же составом
+  // наследовал метки прошлой игры (аудит устойчивости 01.08.2026, №8).
+  const qId = new URLSearchParams(location.search).get("game_id");
+  if (qId && /^\d+$/.test(qId)) return `g:${qId}`;
   const mUrl = location.pathname.match(/\/(?:match|game|room)\/(\d+)/);
   if (mUrl) return `g:${mUrl[1]}`;
+  // 2) видимый номер игры в шапке комнаты (.game-info-block .game-id)
+  const infoText = document
+    .querySelector(".game-info-block .game-id, .game-info-block__section.game-id")
+    ?.textContent?.match(/\d+/)?.[0];
+  if (infoText) return `g:${infoText}`;
   // 2) data-game-id
   const byAttr = document.querySelector("[data-game-id]")?.getAttribute("data-game-id");
   if (byAttr && /^\d+$/.test(byAttr)) return `g:${byAttr}`;
@@ -74,7 +84,10 @@ function resolveGameKey(): string | null {
     }
   }
   // 4) фолбэк: подпись состава (отсортированные ники)
+  // Судья рендерится тем же компонентом .player (с классом .judge-player):
+  // он не игрок — не должен ни получать метку, ни менять подпись состава.
   const names = Array.from(document.querySelectorAll(SITE.player))
+    .filter((p) => !p.classList.contains("judge-player"))
     .map((p) => p.querySelector(SITE.playerName)?.textContent?.trim())
     .filter((n): n is string => !!n);
   if (names.length >= 4) return "l:" + names.slice().sort().join("|");
@@ -168,6 +181,9 @@ function openMenu(marker: HTMLElement, username: string): void {
 }
 
 function ensureMarker(player: HTMLElement): void {
+  // Судья — не игрок: метка «мой read» на нём бессмысленна (тот же компонент
+  // .player, отличается классом .judge-player).
+  if (player.classList.contains("judge-player")) return;
   const username = usernameOf(player);
   if (!username) return;
   let marker = player.querySelector<HTMLElement>(`.${MARKER_CLASS}`);

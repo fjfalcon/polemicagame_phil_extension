@@ -35,9 +35,23 @@ const RESUME_EXACT = new Set([
   "продолжить игру",
   "возобновить",
   "возобновить игру",
+  // Реальные подписи сайта: судья завершает паузу кнопкой «Завершить»
+  // (locale end_pause), без судьи игроки голосуют «Продолжить игру»
+  // (continue_game_button_not_ready) — обе живут в ИГРОВЫХ контролах, а не
+  // в меню настроек (аудит устойчивости 01.08.2026, находка 4).
+  "завершить",
+  "завершить паузу",
+  "end pause",
   "resume",
   "resume game",
 ]);
+
+/**
+ * Контейнеры игровых контролов: там живут кнопки завершения паузы и
+ * голосования за продолжение. Меню настроек (где живёт СТАРТ паузы) сюда
+ * намеренно не входит.
+ */
+const GAME_CONTROLS_SELECTOR = ".controls, .game-info-block, .roller";
 const CLICKABLE_SELECTOR =
   'button, [role="button"], [role="menuitem"], li, a, div.button, .button, .button-comp, .base-menu__item';
 const MENU_SELECTOR =
@@ -131,6 +145,9 @@ class PauseHotkey {
     if (candidate.closest('.game-room__settings, [class*="settings"], [class*="pause"]')) {
       return true;
     }
+    // Игровые контролы: «Завершить»/«Продолжить игру» рендерятся там, и без
+    // этого F8 никогда не мог снять паузу (находка 4).
+    if (candidate.closest(GAME_CONTROLS_SELECTOR)) return true;
     if (!this.activeOpener) return false;
     return this.getMenuRoots().some(
       (root) => isVisible(root) && !this.initialVisibleMenus.has(root) && root.contains(candidate),
@@ -269,6 +286,36 @@ class PauseHotkey {
               !this.isNavigatingAnchor(child) && isVisible(child) && this.matchesPause(child),
           ),
       );
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /**
+   * Видимая кнопка снятия паузы в ИГРОВЫХ контролах (не в меню настроек).
+   * Возвращает null, если паузы нет или кнопка не найдена.
+   */
+  private getResumeButton(): Element | null {
+    for (const root of Array.from(document.querySelectorAll(GAME_CONTROLS_SELECTOR))) {
+      const found = Array.from(root.querySelectorAll(CLICKABLE_SELECTOR)).find((candidate) => {
+        if (this.isNavigatingAnchor(candidate) || !isVisible(candidate)) return false;
+        if (this.isPauseDisabled(candidate)) return false;
+        // У кнопки голосования за продолжение ДВА текстовых span'а:
+        // .without-hover («Продолжить игру») и .with-hover («Подтвердить»),
+        // между ними нет пробела — textContent слипается в
+        // «продолжить игруподтвердить» и точный матч не срабатывал
+        // (ревью аудита устойчивости: без этого фикс работал только у
+        // судьи, а обычный игрок так и не мог снять паузу).
+        const label = candidate.querySelector(".without-hover")?.textContent;
+        const values = [
+          norm(label ?? candidate.textContent),
+          norm(candidate.getAttribute?.("aria-label")),
+          norm(candidate.getAttribute?.("title")),
+        ];
+        // ТОЛЬКО точные подписи: «Продолжить» — типовая кнопка любого
+        // диалога сайта, подстрочный матч здесь запрещён (инвариант §4 п.2).
+        return values.some((v) => RESUME_EXACT.has(v));
+      });
       if (found) return found;
     }
     return null;
@@ -447,6 +494,14 @@ class PauseHotkey {
     if (!this.hasGameContext()) return this.notify(TEXT.unavailable);
     this.handling = true;
     try {
+      // Снятие паузы ПЕРВЫМ: кнопка живёт в игровых контролах, и открывать
+      // ради неё меню настроек не нужно (в меню на паузе пункт «Пауза» ещё и
+      // disabled — раньше F8 упирался в него и говорил «недоступна»).
+      const resume = this.getResumeButton();
+      if (resume) {
+        this.dispatchClick(resume);
+        return;
+      }
       const pause = await this.ensureMenuOpen();
       if (this.disposed) return;
       if (!pause) return this.notify(TEXT.notFound);

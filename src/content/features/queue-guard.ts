@@ -15,6 +15,7 @@
  * же троттлингом, что и ping сайта, — предупреждение опоздало бы к разрыву.
  * chrome.alarms живёт в background и троттлингу вкладки не подвержен.
  */
+import { onDomChange } from "@core/dom";
 import { sendRuntime, onMessage } from "@core/messaging";
 import { log } from "@core/log";
 import { SITE } from "@core/selectors";
@@ -28,6 +29,7 @@ const SEARCH_ACTIVE_SELECTOR = SITE.searchInProgress;
 let visibilityListener: (() => void) | null = null;
 let pageHideListener: (() => void) | null = null;
 let unsubscribeMessages: (() => void) | null = null;
+let unsubscribeDom: (() => void) | null = null;
 let armed = false;
 
 function isSearchPage(): boolean {
@@ -73,6 +75,21 @@ export const queueGuardFeature: Feature = {
     document.addEventListener("visibilitychange", visibilityListener);
 
     /**
+     * Подтверждение поиска приходит АСИНХРОННО: сайт сначала шлёт
+     * start_game_search и только по ответу on_start_game_search рисует
+     * секундомер. Игрок, нажавший «Играть» и сразу ушедший на другую
+     * вкладку, попадал в дыру — visibilitychange уже случился, секундомера
+     * ещё не было, и будильник не взводился (аудит устойчивости 01.08.2026,
+     * находка 11). Следим за появлением/исчезновением секундомера, пока
+     * вкладка скрыта.
+     */
+    unsubscribeDom = onDomChange(() => {
+      if (!document.hidden) return;
+      if (isSearching()) arm();
+      else disarm("поиск закончился в скрытой вкладке");
+    });
+
+    /**
      * Опрос от background в момент срабатывания будильника. Ответ ЭТОЙ
      * вкладки — единственный достоверный источник: сам background судить не
      * может (tab.active истинно и у свёрнутого ОКНА, а его модульное
@@ -98,6 +115,8 @@ export const queueGuardFeature: Feature = {
     if (document.hidden && isSearching()) arm();
   },
   disable() {
+    unsubscribeDom?.();
+    unsubscribeDom = null;
     if (visibilityListener) {
       document.removeEventListener("visibilitychange", visibilityListener);
       visibilityListener = null;

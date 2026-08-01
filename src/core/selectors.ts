@@ -12,34 +12,39 @@ export const SITE = {
     ".player.desktop-version:not(.judge-player), .player.desktop-version.hidden:not(.judge-player)",
   playerInfo: ".player__info",
   playerName: ".player__info .info__name",
-  playerIcons: ".player-icons",
-  playerStats: ".player-stats",
   playerVideoWrapper: ".player__video-wrapper",
   playerVideo: ".player__video, .player__video-wrapper",
   playerVideoEl: "video.player__video",
+  /** МЁРТВЫЙ по текущей разметке (аудит 01.08.2026): у меню сайта классы
+   *  только `active`/`in-streamer-mode`. Потребитель (role-faker) при
+   *  отсутствии узла просто ничего не делает — оставлен как безопасный
+   *  фолбэк до правки самой фичи. */
   playerMenuWithRole: ".player__menu.with-role",
   // Роли (SVG-спрайты)
   roleUse: "use[href], use[xlink\\:href]",
+  /** МЁРТВЫЙ по текущей разметке: роли берутся из внешнего SVG-спрайта,
+   *  инлайновых <symbol> на странице нет. Потребители деградируют молча. */
   roleSymbols: "symbol#civilian, symbol#sheriff, symbol#mafia, symbol#godfather",
   myRole: ".player__role.role.role.my-role",
   anyRole: ".player__role.role.role",
   // Свои роли — все варианты разметки для скрытия/показа (auto-start)
+  // Сверено с бандлом (аудит устойчивости 01.08.2026): класс my-role стоит
+  // НА САМОМ элементе роли, отдельного предка .my-role сайт не создаёт —
+  // варианты с ним были мёртвыми.
   ownRoleTargets: [
     ".player__role.role.role.my-role",
-    ".my-role .player__role.role.role",
     ".my-player .player__role.role.role",
     ".my-player .player__role.my-role",
-    ".my-role .player__role.my-role",
   ] as readonly string[],
   // Стадии игры (день/ночь/голосование)
   stage: ".stage, .substage",
-  substageCurrent: ".substage.current, .stage.current",
-  substageActive: ".substage.active, .stage.active",
-  substageNext: ".substage.next, .stage.next",
+  substageCurrent: ".substage.current",
+  /** МЁРТВЫЙ: сайт рендерит подстадии только как current/next/temp. */
+  substageActive: ".substage.active",
+  substageNext: ".substage.next",
   // Автопринятие игры на странице поиска (auto-start)
   acceptGameDivPrimary:
     '.p-play__profile-accept.cursor-pointer, .p-play__profile-game.p-play__profile-accept, .p-play-profile__wr div[class*="cursor-pointer"]',
-  acceptGameDivLoose: 'div.cursor-pointer, div[class*="accept"]',
   acceptGameWrapperDiv: ".p-play-profile__wr div",
   cursorPointerDiv: "div.cursor-pointer",
   // Игровая страница: стартовый экран, лобби, веб-камера (auto-start)
@@ -58,7 +63,6 @@ export const SITE = {
   /** Обёртка кнопки «Играть» внутри панели: вставляемся сразу после неё. */
   searchPlayWrap: ".p-play-profile__wr",
   webcamButton: "div.button.preset-1.small.desktop-version",
-  webcamButtonStartIcon: ".button.preset-1.small.desktop-version",
   webcamButtonOffClass: "off",
   // Меню «показать/скрыть роли» (auto-start)
   roleMenuClickable: 'button, [role="button"], li, a, span, div',
@@ -76,7 +80,7 @@ export const SITE = {
   settingsButton: "div.button.preset-1.small.desktop-version",
   // OBS-панель: детекция активного игрового интерфейса и стадий
   obsGameControls:
-    ".button.preset-1.small.desktop-version, .game-room__settings, .player__menu.with-role, .player__role.role.role",
+    ".button.preset-1.small.desktop-version, .game-room__settings, .player__role.role.role",
   endedTitle: ".ended__title",
   // Пост-игровая статистика
   statsTable: ".game-stats-table .table",
@@ -87,13 +91,10 @@ export const SITE = {
   penaltyDots: ".penalty-dots",
   penaltyDot: ".penalty-dot",
   bestMoveDot: ".best-move-dot",
-  bestMoveTooltip: ".best-move-tooltip",
 } as const;
 
 /** Текстовые маркеры (сайт двуязычный). Используются для поиска кнопок/фаз по тексту. */
 export const TEXT = {
-  accept: ["начать игру", "готов", "подтвердить", "принять", "старт", "join", "ready", "accept"],
-  pause: ["пауза", "break", "перерыв"],
   // Сверено с room/bundle/locales/RU.js (31.07.2026): ночные этапы —
   // card_distribution «Раздача карт», familiarity_with_mafia «Знакомство
   // мафии», first_night «Первая ночь», night «Ночь», mafia_acts «Ход мафии»
@@ -157,7 +158,6 @@ export const TEXT = {
     "best move",
     "miss",
   ],
-  vote: ["голос", "vote"],
   /**
    * Сильные дневные маркеры — побеждают при конфликте день+ночь в ОДНОМ
    * тексте (см. classifyPhaseText). Слабое «голос» конфликт не решает:
@@ -188,16 +188,12 @@ export const TEXT = {
   ],
   // Текст «Принять игру» (точечный маркер div-ов приёма)
   acceptGameText: ["принять игру", "start playing"],
-  // Режимы игры на карточке приёма
-  gameMode: ["культурный", "обычный", "без цензуры"],
   // Приветственное окно / кнопка «НАЧАТЬ ИГРУ» (auto-start)
   welcome: ["добро пожаловать", "welcome", "режим зрителя"],
   // «Начать просмотр» — кнопка того же .common-room-modal у ЗРИТЕЛЯ
   // (viewer_mode/start_watching в локали): без неё «пропустить стартовый
   // экран» молча не работало зрителям (аудит устойчивости, находка 7).
   startGameButton: ["начать игру", "start playing", "начать просмотр", "start watching"],
-  // Лобби: «Идет набор игроков»
-  recruiting: ["идет набор игроков", "recruiting players"],
   // Пункты меню «показать/скрыть роли» (auto-start, day/night switch)
   showRoles: ["показать роли", "show roles"],
   hideRoles: ["скрыть роли", "hide roles"],
