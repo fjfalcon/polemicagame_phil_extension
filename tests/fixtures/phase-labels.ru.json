@@ -1,0 +1,24 @@
+{
+  "source": "https://polemicagame.com/room/bundle/locales/RU.js",
+  "capturedAt": "2026-08-01",
+  "labels": [
+    { "key": "card_distribution", "text": "Раздача карт", "phase": "night" },
+    { "key": "familiarity_with_mafia", "text": "Знакомство мафии", "phase": "night" },
+    { "key": "first_night", "text": "Первая ночь", "phase": "night" },
+    { "key": "night", "text": "Ночь", "phase": "night" },
+    { "key": "mafia_acts", "text": "Ход мафии", "phase": "night" },
+    { "key": "mafia_acts_legacy", "text": "Голосование мафии", "phase": "night" },
+    { "key": "checks", "text": "Проверки", "phase": "night" },
+    { "key": "doctor_acts", "text": "Ход доктора", "phase": "night" },
+    { "key": "auction", "text": "Аукцион", "phase": "night" },
+    { "key": "morning", "text": "Утро", "phase": "day" },
+    { "key": "day", "text": "День", "phase": "day" },
+    { "key": "discussion", "text": "Речь игрока", "phase": "day" },
+    { "key": "voting", "text": "Голосование", "phase": "day" },
+    { "key": "voting_start", "text": "Начало голосования", "phase": "day" },
+    { "key": "voting_summary", "text": "Итоги голосования", "phase": "day" },
+    { "key": "extra_speeches", "text": "Доп. речь", "phase": "day" },
+    { "key": "farewell_minute", "text": "Прощальная минута", "phase": "day" },
+    { "key": "mafia_miss", "text": "Промах", "phase": "day" }
+  ]
+}

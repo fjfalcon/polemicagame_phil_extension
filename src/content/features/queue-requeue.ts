@@ -297,7 +297,7 @@ function clearPending(): void {
 }
 
 /** «MM:SS» → секунды; -1, если распарсить не удалось. */
-function parseCountdownSeconds(text: string | null): number {
+export function parseCountdownSeconds(text: string | null): number {
   const m = /(\d{1,2}):(\d{2})/.exec(text || "");
   if (!m) return -1;
   return Number(m[1]) * 60 + Number(m[2]);

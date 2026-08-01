@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "bundles": {
+    "gameSearch": {
+      "url": "https://polemicagame.com/bundle/game-search.js",
+      "sha256": "57238ece03a6f583cbb5cfff1c54d0d3360b89d1c3e736a5b7a06c6f883b98d4"
+    },
+    "roomMain": {
+      "url": "https://polemicagame.com/room/bundle/main.js",
+      "sha256": "92b45577b8a2be9638f4cd7b2b44413a017939077960be448ecf0f125873a4b0"
+    },
+    "profile": {
+      "url": "https://polemicagame.com/bundle/profile.js",
+      "sha256": "58e2aa8dded8f2a3123bcad60300536b6626550411b75d5a00ce60db236c8f43"
+    },
+    "localeRu": {
+      "url": "https://polemicagame.com/room/bundle/locales/RU.js",
+      "sha256": "b5ce5268540d7fa5b4daa954618e4c48939e27510f46feaf1a5f2a730aaa6cec"
+    }
+  }
+}

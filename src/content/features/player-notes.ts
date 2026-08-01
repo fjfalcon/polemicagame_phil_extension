@@ -3434,7 +3434,7 @@ const TOOLTIP_CSS = `
  * CSS.escape экранирует по спецификации именно идентификатор, поэтому
  * подставлять результат нужно без обрамляющих кавычек.
  */
-function cssAttr(value: string): string {
+export function cssAttr(value: string): string {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
   // Фолбэк (движков без CSS.escape среди наших минимумов нет): экранируем
   // всё, что не [A-Za-z0-9_-] и не кириллица, по правилу CSS «\<hex> ».

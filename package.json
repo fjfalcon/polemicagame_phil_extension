@@ -13,6 +13,9 @@
     "build:firefox": "npm run build:js && npm run assemble:firefox",
     "build": "npm run clean && npm run build:js && npm run assemble:chrome && npm run assemble:firefox",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:contract": "vitest run --config vitest.contract.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
     "lint:ext:chrome": "web-ext lint -s dist/chrome",
     "lint:ext:firefox": "web-ext lint -s dist/firefox",
     "dev:firefox": "web-ext run -s dist/firefox",
@@ -23,10 +26,15 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",
+    "@types/node": "^26.1.2",
     "@types/webextension-polyfill": "^0.12.5",
+    "fast-check": "^4.9.0",
+    "fast-glob": "^3.3.3",
+    "jsdom": "^30.0.1",
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
+    "vitest": "^4.1.6",
     "web-ext": "^8.3.0"
   },
   "dependencies": {
