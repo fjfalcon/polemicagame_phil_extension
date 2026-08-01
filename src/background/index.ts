@@ -6,7 +6,7 @@
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
-import { onMessage } from "@core/messaging";
+import { onMessage, sendToTab } from "@core/messaging";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
 import { applyNoteOps, mergeNotesViaCoordinator } from "./notes-coordinator";
 import {
@@ -15,6 +15,12 @@ import {
   OBS_RECONNECT_ATTEMPTS_KEY,
   ObsClient,
 } from "./obs-client";
+import {
+  OWNER_TTL_MS,
+  decideSceneOwnership,
+  type OwnerTabState,
+  type SceneOwnerRecord,
+} from "./scene-owner";
 import type { ExtMessage, ObsCommandMsg } from "@shared/types";
 
 const obs = new ObsClient();
@@ -137,44 +143,100 @@ async function handleObsCommand(cmd: ObsCommandMsg["command"], data: ObsCommandM
  * вкладки больше не существует.
  */
 const OBS_SCENE_OWNER_KEY = "obs_scene_owner";
-/**
- * Фолбэк-таймаут владения. НЕ 90 секунд: автосцена шлётся только на СМЕНЕ
- * фазы, а дневная фаза со всеми речами длится минуты — короткий TTL отдавал
- * бы владение соседней вкладке в середине игры и возвращал пинг-понг сцен
- * (ревью пакета D). Главный признак владения — ЖИВОСТЬ вкладки; таймаут
- * нужен лишь на случай, когда вкладку проверить не удалось.
- */
-const OWNER_TTL_MS = 20 * 60_000;
 
-async function claimSceneOwnership(
-  tabId: number | undefined,
-  manual = false,
-): Promise<boolean> {
+/**
+ * Ведёт ли вкладка-владелец автосцену ПРЯМО СЕЙЧАС — спрашиваем у неё самой.
+ *
+ * Судить по `tabs.get` нельзя (ревью 02.08.2026, блокер): разрешения `tabs` у
+ * нас нет, поэтому `tab.url` приходит ТОЛЬКО для вкладок polemicagame.com — то
+ * есть у вкладки, ушедшей на другой сайт, url пустой, и проверка по нему
+ * работала бы наоборот. Кроме того, `tabs.get` успешен и для выгруженной
+ * вкладки, и для вкладки, чей content-скрипт осиротел после обновления
+ * расширения. Опрос самой вкладки закрывает всё это разом (§4.10).
+ */
+/** Сколько ждём ответа владельца. Молчание = «владения нет». */
+const OWNER_PING_TIMEOUT_MS = 1500;
+
+async function inspectOwnerTab(ownerTabId: number): Promise<OwnerTabState> {
+  // С таймаутом: sendToTab ловит отказ, но не ЗАВИСАНИЕ. Живая, но занятая
+  // вкладка иначе подвесила бы set_scene просящей вкладки навсегда — тихая
+  // заморозка автосмены (ревью 02.08.2026). «Нет ответа» здесь безопасно:
+  // настоящий владелец переспросит на следующей смене фазы.
+  const answer = await Promise.race([
+    sendToTab<{ owning?: boolean }>(ownerTabId, { type: "obs_scene_owner_ping" }),
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), OWNER_PING_TIMEOUT_MS)),
+  ]);
+  // Ответа нет — вкладки нет, она выгружена или её скрипт мёртв.
+  if (!answer) return { kind: "gone" };
+  return answer.owning ? { kind: "in-game" } : { kind: "left-game" };
+}
+
+/**
+ * Очередь решений о владении. Между чтением записи и её перезаписью теперь
+ * стоит МЕЖПРОЦЕССНЫЙ пинг (десятки мс вместо микросекунд): без сериализации
+ * две вкладки, сменившие фазу одновременно, прочитали бы одного владельца,
+ * обе получили бы «свободно» и обе переключили бы сцену — тот самый пинг-понг,
+ * ради которого владение и вводилось (ревью 02.08.2026).
+ *
+ * Очередь СВОЯ, не obsQueue: смешивать с подключением к OBS нельзя — его probe
+ * держит очередь до 10-20 секунд, и сцена переключалась бы с таким опозданием.
+ */
+let ownerQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueOwner<T>(task: () => Promise<T>): Promise<T> {
+  const result = ownerQueue.then(task, task);
+  ownerQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+async function claimSceneOwnership(tabId: number | undefined, manual = false): Promise<boolean> {
   // Команда не от вкладки (попап) — ручное действие пользователя.
   if (tabId == null) return true;
+  return enqueueOwner(() => decideAndClaim(tabId, manual));
+}
+
+async function decideAndClaim(tabId: number, manual: boolean): Promise<boolean> {
   try {
     const st = (await browser.storage.local.get({ [OBS_SCENE_OWNER_KEY]: null })) as Record<
       string,
       unknown
     >;
-    const cur = st[OBS_SCENE_OWNER_KEY] as { tabId?: number; ts?: number } | null;
+    const cur = st[OBS_SCENE_OWNER_KEY] as SceneOwnerRecord | null;
     const now = Date.now();
-    // Ручной клик в панели ВСЕГДА проходит и забирает владение: пользователь
-    // явно управляет сценой именно из этой вкладки (ревью пакета D, блокер —
-    // раньше такой клик молча игнорировался у не-владельца).
-    if (!manual && cur && typeof cur.tabId === "number" && cur.tabId !== tabId) {
-      const stale = typeof cur.ts !== "number" || now - cur.ts > OWNER_TTL_MS;
-      if (!stale) {
-        try {
-          await browser.tabs.get(cur.tabId);
-          log.debug("background", "scene command ignored: not the owner tab", tabId);
-          return false;
-        } catch {
-          /* вкладки владельца больше нет — владение свободно */
-        }
-      }
+    // Опрашиваем владельца ТОЛЬКО когда от его ответа что-то зависит: чужая
+    // живая запись и не ручной клик. Иначе передаём null — «не спрашивали».
+    const stale = !cur || typeof cur.ts !== "number" || now - cur.ts > OWNER_TTL_MS;
+    const needTab =
+      !manual && !stale && cur && typeof cur.tabId === "number" && cur.tabId !== tabId;
+    const ownerTab: OwnerTabState | null = needTab
+      ? await inspectOwnerTab(cur.tabId as number)
+      : null;
+    const decision = decideSceneOwnership({ current: cur, tabId, manual, now, ownerTab });
+    if (!decision.allow) {
+      // info, а не debug: в файл лога пишется только info, и разобрать жалобу
+      // «автосмена сцен перестала работать» было нечем (02.08.2026).
+      log.info(
+        "background",
+        "смена сцены пропущена: автосценой владеет другая вкладка",
+        `owner=${cur?.tabId}`,
+        `asked=${tabId}`,
+      );
+      return false;
     }
-    await browser.storage.local.set({ [OBS_SCENE_OWNER_KEY]: { tabId, ts: now } });
+    if (decision.reason === "owner-left-game" || decision.reason === "owner-stale") {
+      log.info(
+        "background",
+        "владение автосценой перешло к этой вкладке:",
+        decision.reason === "owner-left-game" ? "прежний владелец ушёл с игры" : "прежний умолк",
+        tabId,
+      );
+    }
+    if (decision.claim) {
+      await browser.storage.local.set({ [OBS_SCENE_OWNER_KEY]: { tabId, ts: now } });
+    }
     return true;
   } catch (e) {
     // Хранилище недоступно — не блокируем автоматику.

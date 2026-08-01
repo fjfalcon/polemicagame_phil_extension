@@ -9,6 +9,7 @@
  */
 import { browser } from "@core/env";
 import { log } from "@core/log";
+import { isGameRoomPath } from "@shared/routes";
 import { SITE } from "@core/selectors";
 
 function snapshot(): Record<string, number> {
@@ -44,7 +45,7 @@ export function setupDiagnostics(): void {
     // каждый раз писала ложное предупреждение, топя настоящие в шуме
     // (аудит устойчивости 01.08.2026, находка 15).
     const looksLikeGame =
-      location.pathname === "/game" || !!document.querySelector(SITE.playerVideoWrapper);
+      isGameRoomPath(location.pathname) || !!document.querySelector(SITE.playerVideoWrapper);
     if (looksLikeGame && document.querySelectorAll(SITE.player).length === 0) {
       log.warn(
         "diag",

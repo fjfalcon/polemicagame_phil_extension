@@ -41,6 +41,7 @@
  */
 import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { SITE, TEXT } from "@core/selectors";
+import { isGameRoomPath, isSearchPath } from "@shared/routes";
 import { log } from "@core/log";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
@@ -149,7 +150,7 @@ let elsewhereDone = false;
 let acceptArmed = false;
 
 function isGameRoomPage(): boolean {
-  return location.pathname === "/game" || location.pathname.startsWith("/game?");
+  return isGameRoomPath(location.pathname);
 }
 
 function norm(text: string | null | undefined): string {
@@ -418,7 +419,7 @@ function consumePendingFromRoom(): void {
 const USER_BACKOFF_MS = 2000;
 
 function isSearchPage(): boolean {
-  return location.pathname === "/game-search" || location.pathname.startsWith("/game-search/");
+  return isSearchPath(location.pathname);
 }
 
 function reset(): void {

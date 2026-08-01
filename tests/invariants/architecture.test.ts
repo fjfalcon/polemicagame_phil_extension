@@ -309,6 +309,25 @@ describe("logging and popup invariants", () => {
     expect(violations, "Secrets in support logs violate AGENTS §4 and site-api authKey rules").toEqual([]);
   });
 
+  test("OBS auto-scene decisions are logged at info, not debug", () => {
+    // В файл лога попадает только info. Весь путь автосмены сцен был на
+    // debug — жалоба «сцены перестали переключаться» приходила с логом, в
+    // котором об этом НИ СЛОВА (разбор 02.08.2026). Каждая ветка, которая
+    // решает «переключаю» / «не переключаю», обязана быть видимой.
+    const body = functionBody(read("src/content/panels/obs-panel.ts"), "autoSwitchScene");
+    const decisions = body.split("\n").filter((line) => /log\.(info|debug)\(/.test(line));
+    expect(decisions.length).toBeGreaterThanOrEqual(3);
+    const debugOnly = decisions.filter((line) => line.includes("log.debug("));
+    // Единственный допустимый debug — «сцена и так уже нужная»: это не
+    // решение, а отсутствие работы, и оно повторяется на каждой фазе.
+    expect(debugOnly.length, "OBS auto-scene branch logs below info are invisible in support logs").toBeLessThanOrEqual(1);
+
+    const owner = read("src/background/index.ts");
+    expect(owner, "отказ по владению автосценой обязан быть виден в логе").toMatch(
+      /log\.info\([^)]*"background",\s*\n?\s*"смена сцены пропущена/,
+    );
+  });
+
   test("§4.4: popup save path writes the diff patch, not a full DOM snapshot", () => {
     const source = read("src/popup/index.ts");
     expect(source).toContain("if (!lastKnown) return");

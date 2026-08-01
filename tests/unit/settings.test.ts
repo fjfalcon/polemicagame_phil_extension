@@ -28,6 +28,21 @@ beforeEach(() => {
   state.listener = null;
 });
 
+describe("дефолты, от которых зависит поддержка", () => {
+  test("запись логов включена по умолчанию", () => {
+    // Решение владельца (02.08.2026): лог — единственный способ разобрать
+    // жалобу «перестало работать», а просить пользователя включить запись и
+    // ВОСПРОИЗВЕСТИ проблему заново получается далеко не всегда. Буфер
+    // кольцевой (600 записей на контекст), секреты вычищаются redactSecrets.
+    expect(DEFAULT_SETTINGS.debug_logging_enabled).toBe(true);
+  });
+
+  test("диагностика соединения остаётся выключенной по умолчанию", () => {
+    // Она подменяет WebSocket в мире страницы — это осознанно opt-in.
+    expect(DEFAULT_SETTINGS.connection_diag_enabled).toBe(false);
+  });
+});
+
 describe("Firefox-compatible settings changes", () => {
   test("ignores unchanged keys sent by Firefox", () => {
     const handler = vi.fn();

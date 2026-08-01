@@ -69,6 +69,13 @@ export const SITE = {
    * этот экран сам по себе доказывает, что игра идёт (ревью 02.08.2026).
    */
   roomFixedState: ".roller .ended",
+  /**
+   * Матч ЗАВЕРШЁН — только победа одной из сторон. Тем же блоком `.ended` сайт
+   * рисует паузу и промах мафии, а это середина ЖИВОЙ игры (contClasses:
+   * ended-mafia / ended-civilian / ended-pause / ended-mafia-missed). Классы
+   * держим в SITE, чтобы их сторожил контрактный тест по живым бандлам.
+   */
+  roomMatchEnded: ".ended.ended-mafia, .ended.ended-civilian",
   /** Обратный отсчёт роспуска: «Игра будет распущена через MM:SS». */
   disbandmentTimer: ".disbandment-timer",
   /** Отметка «Готов» на СВОЕЙ плитке (player__topleftmenu). */
@@ -317,6 +324,19 @@ export function endedScreenVisible(): boolean {
   // проверки ночная пауза — а с нашим же F8 они частые — уводила бы OBS на
   // дневную сцену и обратно (поймано ревью аудита устойчивости 01.08.2026).
   return !el.classList.contains("ended-pause");
+}
+
+/**
+ * Матч ЗАВЕРШЁН (победа мафии или мирных), а не просто «фиксированный экран».
+ *
+ * Тем же блоком `.ended` сайт рисует ещё паузу и промах мафии — оба посреди
+ * ЖИВОЙ игры (contClasses: ended-mafia / ended-civilian / ended-pause /
+ * ended-mafia-missed). Отдельная проверка нужна там, где вопрос стоит «идёт ли
+ * матч прямо сейчас» — например, ведёт ли эта вкладка автосцену OBS.
+ */
+export function matchFinishedVisible(): boolean {
+  const el = document.querySelector<HTMLElement>(SITE.roomMatchEnded);
+  return !!el && el.offsetWidth > 0 && el.offsetHeight > 0;
 }
 
 export function classifyPhaseText(text: string): "day" | "night" | null {

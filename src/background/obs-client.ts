@@ -147,6 +147,7 @@ export class ObsClient {
             this.lastHeartbeat = Date.now();
             this.startHeartbeat();
             void this.saveConnectionState(true);
+            log.info("obs", "подключено", url);
             this.notifyAll("obs_connected");
             resolve(true);
           }
@@ -264,7 +265,18 @@ export class ObsClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.reconnectAttempts >= this.maxReconnectAttempts || !this.settings) return;
+    if (!this.settings) return;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      // Молчаливая остановка автоповторов = «всё вдруг перестало работать» без
+      // единого следа в логе. Бюджет переживает выгрузку воркера, поэтому
+      // строка обязана быть на info (разбор жалобы 02.08.2026).
+      log.info(
+        "obs",
+        `бюджет переподключений исчерпан (${this.reconnectAttempts}/${this.maxReconnectAttempts}) —`,
+        "автоповторы остановлены до ручного подключения или правки настроек",
+      );
+      return;
+    }
     this.reconnectAttempts++;
     void browser.storage.local
       .set({ [OBS_RECONNECT_ATTEMPTS_KEY]: this.reconnectAttempts })
@@ -503,6 +515,21 @@ export class ObsClient {
   }
 
   private async setRetryBlocked(blocked: boolean, reason?: "auth" | "protocol"): Promise<void> {
+    if (blocked !== this.retryBlocked) {
+      // Блокировка гасит и watchdog: без соединения будить воркер каждую
+      // минуту незачем. Значит это состояние «само не починится» — и в логе
+      // оно обязано быть видно вместе с причиной.
+      log.info(
+        "obs",
+        blocked
+          ? `автоповторы заблокированы (${reason ?? "auth"}): ${
+              reason === "protocol"
+                ? "несовместимая версия obs-websocket"
+                : "OBS отверг аутентификацию"
+            }`
+          : "автоповторы разблокированы",
+      );
+    }
     this.retryBlocked = blocked;
     try {
       await browser.storage.local.set({

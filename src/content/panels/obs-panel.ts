@@ -23,7 +23,13 @@ import { onDomChange } from "@core/dom";
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { onMessage, sendRuntime } from "@core/messaging";
-import { SITE, classifyPhaseText, endedScreenVisible } from "@core/selectors";
+import {
+  SITE,
+  classifyPhaseText,
+  endedScreenVisible,
+  matchFinishedVisible,
+} from "@core/selectors";
+import { isGameRoomPath } from "@shared/routes";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { ObsConnectionState, ObsScene } from "@shared/types";
 
@@ -44,6 +50,32 @@ interface AutoSceneState {
 
 function norm(el: { textContent?: string | null } | null | undefined): string {
   return (el?.textContent || "").toLowerCase();
+}
+
+/**
+ * Ведёт ли ЭТА вкладка автосцену прямо сейчас — ответ на пинг владения.
+ *
+ * Чистая функция с явными входами: предикат из четырёх условий, и в нём уже
+ * была ошибка (отвечали по одной настройке, а она остаётся включённой до
+ * закрытия вкладки — вкладка с доигранным матчем держала сцену до 20 минут).
+ *
+ * `phaseKnown` — «я в этой вкладке уже определял фазу», а не «на странице
+ * сейчас видно 10 плиток»: сайт пересобирает плитки на КАЖДОЙ смене фазы, и
+ * пинг, прилетевший ровно в этот кадр, отнял бы владение у настоящего эфира
+ * (ревью 02.08.2026).
+ */
+export function drivesAutoScene(input: {
+  autoModeOn: boolean;
+  pathname: string;
+  phaseKnown: boolean;
+  matchFinished: boolean;
+}): boolean {
+  return (
+    input.autoModeOn &&
+    isGameRoomPath(input.pathname) &&
+    input.phaseKnown &&
+    !input.matchFinished
+  );
 }
 
 /** Есть ли на странице активный игровой интерфейс (≥10 игроков/камер + контролы). */
@@ -280,21 +312,22 @@ async function obsCommand(
  * команда проходит мимо проверки владельца автосцены и забирает владение
  * этой вкладке.
  */
-async function switchScene(sceneName: string, manual = false): Promise<void> {
+async function switchScene(sceneName: string, manual = false): Promise<boolean> {
   const response = await obsCommand("set_scene", { sceneName, manual });
   // Отказ по владению приходит как success с data.ignored: сцену НЕ трогали,
   // поэтому ни currentScene, ни подсветку обновлять нельзя — иначе панель
   // показывала бы сцену, которой в OBS нет, а автопуть переставал бы
   // повторять попытки (ревью пакета D, блокер).
   if (response?.success && response.data?.ignored === "not_owner") {
-    log.debug(SCOPE, "scene switch skipped: another tab owns auto-scene");
-    return;
+    log.info(SCOPE, "смена сцены отклонена: автосценой владеет другая вкладка игры");
+    return false;
   }
   if (response && response.success) {
     // Именно sceneName: раньше сюда передавалась модульная currentScene,
     // т.е. подсвечивалась ПРОШЛАЯ сцена, а не только что установленная.
     currentScene = sceneName;
     panel?.setCurrentScene(sceneName);
+    return true;
   } else {
     log.error(SCOPE, "Failed to switch scene", response?.error);
     throw new Error(response?.error || "Unknown error");
@@ -784,7 +817,9 @@ function evaluateTimeOfDay(): void {
 
       const confirmedTimeOfDay = detectTimeOfDay();
       if (confirmedTimeOfDay === newTimeOfDay && confirmedTimeOfDay !== currentTimeOfDay) {
-        log.debug(SCOPE, "Confirmed time change", currentTimeOfDay, "->", confirmedTimeOfDay);
+        // info: точка, с которой начинается вся автосмена. Без неё в логе
+        // не видно даже того, распознали мы фазу или нет.
+        log.info(SCOPE, "фаза подтверждена:", currentTimeOfDay, "→", confirmedTimeOfDay);
         currentTimeOfDay = confirmedTimeOfDay;
         pendingTimeOfDay = null;
         if (confirmedTimeOfDay === "day") await hideRoleBeforeDaySceneSwitch();
@@ -808,14 +843,18 @@ function evaluateTimeOfDay(): void {
 
 /** Автоматически переключает сцену в зависимости от времени суток. */
 async function autoSwitchScene(timeOfDay: TimeOfDay): Promise<void> {
+  // Ниже — info, а не debug. Это решения, принимаемые НЕСКОЛЬКО РАЗ ЗА ИГРУ
+  // (на смене фазы), а не потиковый шум, зато без них жалоба «автосмена сцен
+  // перестала работать» неразбираема: в файл лога пишется только info, и весь
+  // путь автосцены был в нём невидим (разбор жалобы 02.08.2026).
   if (!autoModeEnabled) {
-    log.debug(SCOPE, "Auto mode disabled, skipping scene switch");
+    log.info(SCOPE, "смена сцены пропущена: авто-режим выключен");
     return;
   }
 
   const targetScene = timeOfDay === "day" ? dayScene : nightScene;
   if (!targetScene) {
-    log.debug(SCOPE, "No target scene configured for", timeOfDay);
+    log.info(SCOPE, "смена сцены пропущена: не выбрана сцена для фазы", timeOfDay);
     return;
   }
   if (currentScene === targetScene) {
@@ -823,14 +862,15 @@ async function autoSwitchScene(timeOfDay: TimeOfDay): Promise<void> {
     return;
   }
 
-  log.debug(SCOPE, "Auto-switching to", timeOfDay, "scene:", targetScene, "(prev:", currentScene, ")");
+  log.info(SCOPE, "автосмена сцены:", timeOfDay, "→", targetScene, "(было:", currentScene, ")");
   // currentScene обновляет switchScene ПОСЛЕ подтверждения. Оптимистичная
   // запись до запроса блокировала все повторы гвардом currentScene===target:
   // упавшее переключение (сцена удалена, дисконнект) молча замораживало
   // автомод до следующей смены фазы.
   try {
-    await switchScene(targetScene);
-    log.debug(SCOPE, "Switched to scene:", targetScene);
+    // Подтверждение отдельной строкой: «попытались» и «сцена реально
+    // переключилась» — разные события, и в жалобе важно именно второе.
+    if (await switchScene(targetScene)) log.info(SCOPE, "сцена переключена:", targetScene);
   } catch (e) {
     log.error(SCOPE, "Failed to auto-switch scene", e, "(target:", targetScene, ")");
   }
@@ -840,12 +880,12 @@ async function autoSwitchScene(timeOfDay: TimeOfDay): Promise<void> {
 
 function startDOMMonitoring(): void {
   if (!autoModeEnabled) {
-    log.debug(SCOPE, "Auto mode disabled, not starting DOM monitoring");
+    log.info(SCOPE, "слежение за фазой не запущено: авто-режим выключен");
     return;
   }
   if (unsubDom) return;
 
-  log.debug(SCOPE, "Starting DOM monitoring for automatic scene switching");
+  log.info(SCOPE, "слежение за фазой запущено (день:", dayScene || "—", "ночь:", nightScene || "—", ")");
 
   // Реагируем только на мутации, связанные с элементами стадий: раньше
   // релевантной считалась ЛЮБАЯ childList/class/style-мутация документа
@@ -929,8 +969,13 @@ function doShow(): void {
   if (!panel) {
     panel = new ObsPanel();
     panel.onSceneClick = (sceneName) => {
-      // Ручной клик: приоритетнее автоматики (см. switchScene).
-      void switchScene(sceneName, true);
+      // Ручной клик: приоритетнее автоматики (см. switchScene). Ошибку ловим
+      // здесь: без catch это необработанный rejection, а человек, кликнувший
+      // по сцене, не узнавал, что переключение не удалось.
+      void switchScene(sceneName, true).catch((e: Error) => {
+        log.error(SCOPE, "ручное переключение сцены не удалось", e);
+        panel?.setConnectionStatus(`Не удалось переключить: ${e.message}`, "error");
+      });
     };
     panel.onClose = () => {
       doHide();
@@ -1064,6 +1109,21 @@ export const obsPanelFeature: Feature = {
       const m = msg as any;
       if (m.type === "obs_event") {
         handleOBSEvent(m.eventType, m.data);
+      }
+      if (m.type === "obs_scene_owner_ping") {
+        // «Автосцену ведёшь ты ПРЯМО СЕЙЧАС?» Отвечать по одной настройке
+        // нельзя: `autoModeEnabled` — это «мне разрешено», и он остаётся true
+        // до конца жизни вкладки. Вкладка с доигранным матчем держала бы
+        // владение ещё 20 минут, а следующая игра в новой вкладке всё это
+        // время молчала бы (ревью 02.08.2026 — самый частый бытовой случай).
+        return Promise.resolve({
+          owning: drivesAutoScene({
+            autoModeOn: autoModeEnabled,
+            pathname: location.pathname,
+            phaseKnown: currentTimeOfDay !== null,
+            matchFinished: matchFinishedVisible(),
+          }),
+        });
       }
       // floating_panel_show/hide/toggle удалены: этих сообщений никто никогда
       // не отправлял (и их не было в ExtMessage) — слушатели-призраки.

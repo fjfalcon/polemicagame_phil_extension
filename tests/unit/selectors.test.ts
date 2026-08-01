@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import phaseFixture from "../fixtures/phase-labels.ru.json";
 import { afterEach, describe, expect, test } from "vitest";
-import { classifyPhaseText, endedScreenVisible, hasPhaseMarker } from "@core/selectors";
+import {
+  classifyPhaseText,
+  endedScreenVisible,
+  hasPhaseMarker,
+  matchFinishedVisible,
+} from "@core/selectors";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -47,7 +52,10 @@ describe("endedScreenVisible", () => {
   }
 
   test("recognizes a visible victory screen", () => {
-    ended("ended ended-civilian-win");
+    // Класс СВЕРЕН С БАНДЛОМ (contClasses): ended-civilian, а не «-win».
+    // Прежняя фикстура называла несуществующий класс — безобидно для этой
+    // проверки, но служила образцом и тянула ошибку дальше (ревью 02.08.2026).
+    ended("ended ended-civilian");
     expect(endedScreenVisible()).toBe(true);
   });
 
@@ -61,5 +69,39 @@ describe("endedScreenVisible", () => {
     const el = ended();
     Object.defineProperty(el, "offsetWidth", { configurable: true, value: 0 });
     expect(endedScreenVisible()).toBe(false);
+  });
+});
+
+describe("matchFinishedVisible (матч действительно доигран)", () => {
+  function ended(classes: string) {
+    const el = document.createElement("div");
+    el.className = classes;
+    Object.defineProperties(el, {
+      offsetWidth: { configurable: true, value: 300 },
+      offsetHeight: { configurable: true, value: 200 },
+    });
+    document.body.append(el);
+    return el;
+  }
+
+  test.each(["ended ended-civilian", "ended ended-mafia"])("%s — матч закончен", (classes) => {
+    ended(classes);
+    expect(matchFinishedVisible()).toBe(true);
+  });
+
+  test.each(["ended ended-pause", "ended ended-mafia-missed"])(
+    "%s — это середина живой игры, владение автосценой не снимаем",
+    (classes) => {
+      // Пауза и промах мафии рисуются ТЕМ ЖЕ блоком. Спутать их с концом матча
+      // значит отдать сцену другой вкладке посреди эфира.
+      ended(classes);
+      expect(matchFinishedVisible()).toBe(false);
+    },
+  );
+
+  test("скрытый экран не считается", () => {
+    const el = ended("ended ended-mafia");
+    Object.defineProperty(el, "offsetHeight", { configurable: true, value: 0 });
+    expect(matchFinishedVisible()).toBe(false);
   });
 });

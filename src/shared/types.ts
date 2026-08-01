@@ -215,6 +215,18 @@ export interface GetContentVersionMsg {
   type: "getContentVersion";
 }
 
+/**
+ * background → вкладка: «автосцену OBS ведёшь сейчас ты?»
+ *
+ * Спрашиваем саму вкладку, а не браузер: `tabs.get` успешен и для выгруженной
+ * вкладки, и для той, чей content-скрипт осиротел после обновления расширения,
+ * а `tab.url` без разрешения `tabs` приходит только для страниц сайта. Молчание
+ * в ответ = владение свободно (ревью 02.08.2026).
+ */
+export interface ObsSceneOwnerPingMsg {
+  type: "obs_scene_owner_ping";
+}
+
 /** content → background: автопринятие игры. */
 export interface StartSearchMsg {
   action: "startSearch";
@@ -247,6 +259,7 @@ export type ExtMessage =
   | GetNicknameLengthsMsg
   | OpenNickColorsMsg
   | GetContentVersionMsg
+  | ObsSceneOwnerPingMsg
   | NotesApplyOpsMsg
   | NotesMergeMsg
   | StartSearchMsg

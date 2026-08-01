@@ -8,12 +8,48 @@ import type { ExtMessage } from "@shared/types";
 
 const GAME_TABS = { url: "*://*.polemicagame.com/*" } as const;
 
+/**
+ * Контекст расширения инвалидирован — вкладка «осиротела».
+ *
+ * При обновлении расширения браузер НЕ переинжектит content-скрипт в уже
+ * открытый документ: старый скрипт продолжает работать, но любая его команда в
+ * background с этого момента падает навсегда. Снаружи это выглядит как «всё
+ * вдруг перестало работать», лечится только F5 — и до сих пор не оставляло в
+ * логе ни следа, потому что ошибку глушил debug (разбор жалобы 02.08.2026).
+ */
+function isContextInvalidated(): boolean {
+  // Канонический признак, а не текст ошибки: при инвалидации `runtime.id`
+  // становится undefined. Матчить сообщение нельзя — «Receiving end does not
+  // exist» приходит и в обычной ситуации «попап закрыт», и тогда фон писал бы
+  // сам себе, что «вкладка осиротела и лечится F5» (ревью 02.08.2026, блокер:
+  // строка попадала бы почти в каждый лог и уводила разбор не туда).
+  try {
+    return !browser.runtime?.id;
+  } catch {
+    // Доступ к runtime тоже бросает у осиротевшего скрипта.
+    return true;
+  }
+}
+
+/** Про осиротевшую вкладку пишем ОДИН раз: иначе строка засорит весь буфер. */
+let orphanReported = false;
+
 /** Отправить сообщение в runtime (background / popup). Ошибки «нет получателя» гасятся. */
 export async function sendRuntime<T = unknown>(msg: ExtMessage): Promise<T | undefined> {
   try {
     return (await browser.runtime.sendMessage(msg)) as T;
   } catch (e) {
-    log.debug("messaging", "runtime sendMessage no receiver", (e as Error)?.message);
+    const message = (e as Error)?.message || "";
+    if (!orphanReported && isContextInvalidated()) {
+      orphanReported = true;
+      log.info(
+        "messaging",
+        "страница осиротела после обновления расширения — её код больше не",
+        "достучится до фона; всё, что работает через фон (OBS, заметки в",
+        "координаторе), тут мертво до перезагрузки страницы (F5)",
+      );
+    }
+    log.debug("messaging", "runtime sendMessage no receiver", message);
     return undefined;
   }
 }
