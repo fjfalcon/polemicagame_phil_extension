@@ -64,6 +64,7 @@ import {
 } from "@core/messaging";
 import type {
   Settings,
+  NotesResultMsg,
   NoteFrameWidth,
   ObsScene,
   ObsEventMsg,
@@ -631,8 +632,11 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
 
-        // mergeNotes понимает и старый строковый формат заметок — прежний импорт
-        // молча выбрасывал такие записи и всё равно рисовал зелёный тост.
+        // Предварительный расчёт: сколько записей добавится/обновится —
+        // нужен для подтверждения ДО фактической записи. Сама запись идёт
+        // через координатор в background (одна очередь на браузер), иначе
+        // импорт затирал правку, сделанную в игровой вкладке в те же
+        // секунды (аудит lifecycle 01.08.2026, находка 2).
         const { notes, loadFailed } = await loadNotes();
         if (loadFailed) {
           // Мерж в непрочитанную (пустую) карту с последующей записью стёр бы
@@ -640,7 +644,7 @@ document.addEventListener("DOMContentLoaded", () => {
           showPopupToast("Не удалось прочитать текущие заметки — импорт отменён", "error");
           return;
         }
-        const { merged, added, replaced } = mergeNotes(notes, incoming);
+        const { added, replaced } = mergeNotes(notes, incoming);
         if (!added && !replaced) {
           const onlyExtras = await applySettings();
           await applyExtras();
@@ -664,16 +668,35 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
         }
-        if (!(await saveNotes(merged))) {
-          showPopupToast("Не удалось сохранить заметки", "error");
+        const applied = await sendRuntime<NotesResultMsg>({
+          type: "notes_merge",
+          incoming: incoming as Record<string, unknown>,
+        });
+        if (applied?.reason === "read_failed") {
+          // Координатор ОСОЗНАННО отказал (не смог прочитать карту) — писать
+          // напрямую нельзя, это обход защиты «не поверх непрочитанного».
+          showPopupToast("Не удалось прочитать текущие заметки — импорт отменён", "error");
           return;
+        }
+        if (!applied || applied.ok !== true) {
+          // Фолбэк на прямую запись, если координатор недоступен: терять
+          // импорт из-за спящего воркера нельзя.
+          const fallbackMerged = mergeNotes(notes, incoming).merged;
+          if (!(await saveNotes(fallbackMerged))) {
+            showPopupToast("Не удалось сохранить заметки", "error");
+            return;
+          }
         }
         // Настройки применяем ПОСЛЕ успешной записи заметок (находка 6).
         const restoredSettings = await applySettings();
         await applyExtras();
-        const notesMsg = replaced
-          ? `Добавлено: ${added}, обновлено: ${replaced}`
-          : `Импортировано заметок: ${added}`;
+        // Авторитетные цифры — от координатора: он считал их на свежей карте
+        // (в игровой вкладке могли править заметки в эти же секунды).
+        const addedFinal = applied?.added ?? added;
+        const replacedFinal = applied?.replaced ?? replaced;
+        const notesMsg = replacedFinal
+          ? `Добавлено: ${addedFinal}, обновлено: ${replacedFinal}`
+          : `Импортировано заметок: ${addedFinal}`;
         showPopupToast(
           restoredSettings ? `${notesMsg}; настроек: ${restoredSettings}` : notesMsg,
         );

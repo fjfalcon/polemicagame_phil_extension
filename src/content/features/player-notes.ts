@@ -21,7 +21,7 @@
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { onDomChange, paintNickEl } from "@core/dom";
-import { onMessage } from "@core/messaging";
+import { onMessage, sendRuntime } from "@core/messaging";
 import { toggleFlipForPlayer, isPlayerFlipped, unflipAll } from "../camera-flip";
 import { getMatchId } from "../match-data";
 import { escapeHtml } from "@core/escape";
@@ -42,7 +42,7 @@ import {
 } from "@core/notes-store";
 import type { NoteRecord, NotesMap, NickColorIndex } from "@core/notes-store";
 import type { Feature, FeatureContext } from "@core/feature";
-import type { Settings, ExtMessage } from "@shared/types";
+import type { Settings, ExtMessage, NoteOp, NotesResultMsg } from "@shared/types";
 
 // ───────────────────────── Типы данных API (any допустим) ─────────────────────────
 
@@ -619,13 +619,56 @@ class PlayerNotesManager {
     }
   }
 
-  /** Возвращает false, если запись не удалась — интерфейс обязан это показать. */
-  private async saveNotes(): Promise<boolean> {
-    // Никакого авто-ресинка здесь: вызывающий уже мутировал this.notes, и
-    // перезагрузка с диска затёрла бы только что введённую заметку, вернув
-    // при этом true. Честный отказ — модалка покажет «Не сохранено!».
+  /**
+   * Сохранить ЗАТРОНУТЫЕ ключи через координатор в background.
+   *
+   * Вызывающий уже мутировал this.notes (мгновенный UI) и передаёт список
+   * ключей, которые он менял. Раньше сюда уходила ВСЯ карта, и вторая
+   * вкладка, писавшая другого игрока в те же секунды, затирала правку
+   * (аудит lifecycle 01.08.2026, находка 2 — КРИТИЧНО). Теперь запись
+   * выполняет background: одна очередь на браузер, свежая карта читается
+   * непосредственно перед применением.
+   *
+   * Возвращает false, если запись не удалась — интерфейс обязан это показать.
+   */
+  private async saveNotes(touchedKeys: string[]): Promise<boolean> {
     if (this.notesReadOnly) return false;
-    return await saveNotesToStore(this.notes);
+    const ops: NoteOp[] = touchedKeys.map((key) => ({
+      key,
+      record: (this.notes[key] as unknown) ?? null,
+    }));
+    return await this.commitNoteOps(ops);
+  }
+
+  /**
+   * Отправка операций координатору с честным фолбэком.
+   *
+   * fallbackMap обязателен там, где результат собран НЕ в this.notes, а в
+   * отдельной карте (ленивая миграция читает свежую карту с диска): без него
+   * фолбэк записал бы устаревший снимок памяти — то есть ровно ту потерю
+   * чужих правок, от которой защищались (ревью пакета B, находка 1).
+   */
+  private async commitNoteOps(ops: NoteOp[], fallbackMap?: NotesMap): Promise<boolean> {
+    if (!ops.length) return true;
+    try {
+      const res = await sendRuntime<NotesResultMsg>({ type: "notes_apply_ops", ops });
+      if (res && typeof res.ok === "boolean") {
+        // Координатор возвращает свежую карту — подхватываем её целиком,
+        // чтобы память вкладки сразу видела и чужие правки.
+        if (res.ok && res.notes) this.notes = res.notes as NotesMap;
+        return res.ok;
+      }
+    } catch (e) {
+      log.debug("player-notes", "notes coordinator unavailable", e);
+    }
+    // Фолбэк: background не ответил (старая вкладка после обновления
+    // расширения, воркер недоступен). Пишем как раньше — не хуже прежнего
+    // поведения, зато правка пользователя не теряется молча.
+    log.warn("player-notes", "координатор недоступен — пишем карту напрямую");
+    const map = fallbackMap ?? this.notes;
+    const ok = await saveNotesToStore(map);
+    if (ok && fallbackMap) this.notes = fallbackMap;
+    return ok;
   }
 
   /** userId игрока, если статистика его уже резолвила (иначе undefined). */
@@ -798,8 +841,14 @@ class PlayerNotesManager {
     fresh[key] = { ...winner, nick: username };
     for (const nk of freshNickKeys) delete fresh[nk];
 
-    if (await saveNotesToStore(fresh)) {
-      this.notes = fresh;
+    const migrationOps: NoteOp[] = [
+      { key, record: fresh[key] as unknown },
+      ...freshNickKeys.map((nk) => ({ key: nk, record: null })),
+    ];
+    // fresh как карта фолбэка: она собрана из СВЕЖЕГО чтения диска, в
+    // отличие от this.notes. Память обновит сам commitNoteOps — картой от
+    // координатора или fresh (при фолбэке).
+    if (await this.commitNoteOps(migrationOps, fresh)) {
       log.debug("player-notes", "note migrated to id key", username, key);
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
@@ -2097,7 +2146,7 @@ class PlayerNotesManager {
       // Запись по id-ключу поглощает легаси-ники этого игрока.
       for (const nk of staleNickKeys) delete this.notes[nk];
 
-      if (!(await this.saveNotes())) {
+      if (!(await this.saveNotes([key, ...staleNickKeys]))) {
         // Откатываем память под состояние хранилища, иначе интерфейс будет
         // показывать заметку, которой на диске нет.
         for (const [k, v] of touched) {
@@ -2231,7 +2280,7 @@ class PlayerNotesManager {
         if (!color && !next.text && !next.tag) delete this.notes[key];
         else this.notes[key] = next;
       }
-      if (!(await this.saveNotes())) {
+      if (!(await this.saveNotes([key]))) {
         // Откат памяти под состояние диска.
         if (prev === undefined) delete this.notes[key];
         else this.notes[key] = prev;
@@ -2353,7 +2402,7 @@ class PlayerNotesManager {
           version: VERSION,
           ...(isIdKey(key) ? { nick: createNick } : {}),
         };
-        if (!(await this.saveNotes())) {
+        if (!(await this.saveNotes([key]))) {
           delete this.notes[key];
           return false;
         }
@@ -2367,7 +2416,7 @@ class PlayerNotesManager {
       if (!text && !next.tag && !next.nickColor) delete this.notes[key];
       else this.notes[key] = next;
 
-      if (!(await this.saveNotes())) {
+      if (!(await this.saveNotes([key]))) {
         this.notes[key] = prev; // откат памяти под состояние диска
         return false;
       }
@@ -2383,7 +2432,7 @@ class PlayerNotesManager {
       const prev = this.notes[key];
       if (prev === undefined) return true;
       delete this.notes[key];
-      if (!(await this.saveNotes())) {
+      if (!(await this.saveNotes([key]))) {
         this.notes[key] = prev;
         return false;
       }

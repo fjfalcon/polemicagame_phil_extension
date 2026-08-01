@@ -8,6 +8,7 @@ import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
 import { onMessage } from "@core/messaging";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
+import { applyNoteOps, mergeNotesViaCoordinator } from "./notes-coordinator";
 import { OBS_RETRY_BLOCKED_KEY, ObsClient } from "./obs-client";
 import type { ExtMessage, ObsCommandMsg } from "@shared/types";
 
@@ -148,6 +149,14 @@ onMessage((msg: ExtMessage, sender) => {
   // вкладка до перезагрузки) — отвечаем и ничего не делаем.
   if ("action" in msg && (msg.action === "startSearch" || msg.action === "stopSearch")) {
     return Promise.resolve({ ok: true });
+  }
+  // Запись заметок идёт ТОЛЬКО отсюда: одна очередь на браузер (см.
+  // notes-coordinator). Возвращаем промис, чтобы воркер не уснул на полпути.
+  if ("type" in msg && msg.type === "notes_apply_ops") {
+    return applyNoteOps(msg.ops);
+  }
+  if ("type" in msg && msg.type === "notes_merge") {
+    return mergeNotesViaCoordinator(msg.incoming);
   }
   // Возвращаем ПРОМИС операции, а не void: иначе service worker может уснуть
   // раньше, чем будильник реально создан/снят.

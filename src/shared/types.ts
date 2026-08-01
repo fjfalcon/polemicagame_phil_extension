@@ -166,6 +166,38 @@ export interface OpenNickColorsMsg {
   type: "openNickColors";
 }
 
+/**
+ * Точечная правка карты заметок: `record === null` — удалить ключ.
+ * Пишет ВСЕГДА background (единственная очередь на браузер), поэтому две
+ * вкладки больше не затирают правки друг друга целой картой.
+ */
+export interface NoteOp {
+  key: string;
+  record: unknown | null;
+}
+
+/** Применить точечные правки заметок через координатор в background. */
+export interface NotesApplyOpsMsg {
+  type: "notes_apply_ops";
+  ops: NoteOp[];
+}
+
+/** Слить карту заметок (импорт бэкапа) через тот же координатор. */
+export interface NotesMergeMsg {
+  type: "notes_merge";
+  incoming: Record<string, unknown>;
+}
+
+/** Ответ координатора: ok=false — писать НЕ удалось (UI обязан сказать). */
+export interface NotesResultMsg {
+  ok: boolean;
+  /** Почему отказ. read_failed — писать нельзя, фолбэк запрещён. */
+  reason?: "read_failed";
+  notes?: Record<string, unknown>;
+  added?: number;
+  replaced?: number;
+}
+
 /** content → background: автопринятие игры. */
 export interface StartSearchMsg {
   action: "startSearch";
@@ -197,6 +229,8 @@ export type ExtMessage =
   | TwitchStatusMsg
   | GetNicknameLengthsMsg
   | OpenNickColorsMsg
+  | NotesApplyOpsMsg
+  | NotesMergeMsg
   | StartSearchMsg
   | StopSearchMsg
   | QueueGuardMsg

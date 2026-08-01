@@ -141,6 +141,12 @@ function noteTimestamp(note: NoteRecord | string | undefined): number {
  */
 /** Максимумы для записи из ЧУЖОГО файла (присланный «бэкап» — недоверенный ввод). */
 export const MAX_NOTE_TEXT = 5000;
+/**
+ * Потолок для СВОЕЙ заметки, набранной руками. Отдельный и заметно выше:
+ * тот же нормализатор теперь проходит и локальные правки, а молча обрезать
+ * то, что пользователь сам написал, нельзя (ревью пакета B, находка 2).
+ */
+export const MAX_OWN_NOTE_TEXT = 20_000;
 export const MAX_NOTE_KEY = 200;
 export const MAX_IMPORT_ENTRIES = 20_000;
 
@@ -151,17 +157,17 @@ export const MAX_IMPORT_ENTRIES = 20_000;
  * ломали проходы заметок TypeError'ом (аудит безопасности 01.08.2026, №4/№12).
  * Возвращает null, если из значения не получается осмысленной заметки.
  */
-export function normalizeNoteRecord(raw: unknown): NoteRecord | null {
+export function normalizeNoteRecord(raw: unknown, maxText = MAX_NOTE_TEXT): NoteRecord | null {
   if (typeof raw === "string") {
     // Легаси-формат: заметка была просто строкой.
-    return { text: raw.slice(0, MAX_NOTE_TEXT), timestamp: 0 };
+    return { text: raw.slice(0, maxText), timestamp: 0 };
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.text !== "string") return null;
 
   const rec: NoteRecord = {
-    text: r.text.slice(0, MAX_NOTE_TEXT),
+    text: r.text.slice(0, maxText),
     // Время из чужого файла ограничиваем «сейчас»: timestamp вида
     // Number.MAX_SAFE_INTEGER делал присланную запись вечным победителем
     // слияния и затирал настоящие заметки (№5).
