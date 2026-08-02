@@ -11,7 +11,7 @@ vi.mock("@core/messaging", () => ({
   broadcastToGameTabs: vi.fn(),
 }));
 
-import { closeCategory, safeEndpoint } from "../../src/background/obs-client";
+import { closeCategory, failureCategory, safeEndpoint } from "../../src/background/obs-client";
 
 describe("safeEndpoint — адрес OBS для лога", () => {
   test("логин, пароль и query не уезжают в файл поддержки", () => {
@@ -46,5 +46,27 @@ describe("closeCategory — причина обрыва нашими слова�
     // Текст причины присылает СЕРВЕР, в него может попасть что угодно —
     // в лог идёт только код и наша категория.
     expect(closeCategory(code)).toBe(expected);
+  });
+});
+
+describe("failureCategory — класс отказа вместо сырой ошибки", () => {
+  test.each([
+    [new Error("Connection timeout"), "таймаут подключения"],
+    [new Error("Неверный пароль OBS"), "неверный пароль"],
+    [new Error("OBS закрыл соединение (код 4010)"), "несовместимая версия obs-websocket"],
+    [new Error("OBS закрыл соединение (код 1006)"), "OBS закрыл соединение"],
+    [new Error("WebSocket error"), "ошибка сокета"],
+    [new Error("Superseded by new connection"), "заменено новым подключением"],
+    [new Error("что-то новое"), "прочее"],
+    [undefined, "прочее"],
+  ])("%s → %s", (input, expected) => {
+    expect(failureCategory(input)).toBe(expected);
+  });
+
+  test("адрес с паролем не протекает через текст ошибки", () => {
+    // Сырой Error.message может нести ws://user:pass@host — в файл поддержки
+    // уходит только категория.
+    const e = new Error("failed to connect to ws://user:hunter2@10.0.0.5:4455");
+    expect(failureCategory(e)).not.toContain("hunter2");
   });
 });

@@ -31,6 +31,22 @@ export function safeEndpoint(url: string): string {
   }
 }
 
+/**
+ * Категория неудачной попытки подключения — вместо сырого `Error.message`.
+ * Текст ошибки может содержать адрес с логином и паролем, а нам нужен только
+ * класс отказа (аудит наблюдаемости 02.08.2026, OC-1).
+ */
+export function failureCategory(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  if (/timeout/i.test(msg)) return "таймаут подключения";
+  if (/Неверный пароль/i.test(msg)) return "неверный пароль";
+  if (/код 4010|код 4011/i.test(msg)) return "несовместимая версия obs-websocket";
+  if (/закрыл соединение|closed/i.test(msg)) return "OBS закрыл соединение";
+  if (/WebSocket error|socket/i.test(msg)) return "ошибка сокета";
+  if (/Superseded/i.test(msg)) return "заменено новым подключением";
+  return "прочее";
+}
+
 /** Человеческая категория кода закрытия WebSocket — вместо текста от сервера. */
 export function closeCategory(code: number): string {
   if (code === 1000) return "штатное закрытие";
@@ -179,15 +195,25 @@ export class ObsClient {
           this.handleMessage(msg);
         };
         socket.onclose = (event) => {
-          // Причину закрытия шлёт СЕРВЕР — в неё может попасть что угодно,
-          // включая секреты. В файл поддержки уходит только код и наша
-          // категория (аудит наблюдаемости 02.08.2026, LOG-3).
-          log.info("obs", "соединение закрыто, код", event.code, closeCategory(event.code));
           const wasConnected = this.isConnected;
           this.teardownSocket();
           const authBlocked = [4008, 4009].includes(event.code);
           const protocolBlocked = [4010, 4011].includes(event.code);
-          if (authBlocked || protocolBlocked) {
+          // Одна строка с ПРИНЯТЫМ РЕШЕНИЕМ: из голого «disconnected code
+          // reason» нельзя было понять, на какой стадии оборвалось и будет ли
+          // повтор (аудит наблюдаемости 02.08.2026, OC-4). Текст причины от
+          // сервера не пишем — в него может попасть что угодно (LOG-3).
+          const willBlock = authBlocked || protocolBlocked;
+          log.info(
+            "obs",
+            "соединение закрыто:",
+            wasConnected ? "стадия=рабочая" : "стадия=рукопожатие",
+            `код=${event.code}`,
+            closeCategory(event.code),
+            "| дальше:",
+            willBlock ? "блокируем автоповторы" : event.code === 1000 ? "не повторяем" : "повтор",
+          );
+          if (willBlock) {
             void this.setRetryBlocked(true, authBlocked ? "auth" : "protocol");
           }
           void this.saveConnectionState(false);
@@ -314,7 +340,17 @@ export class ObsClient {
     this.reconnectTimer = setTimeout(async () => {
       try {
         await this.connect(this.settings!.url, this.settings!.password);
-      } catch {
+      } catch (e) {
+        // Итог КАЖДОЙ попытки: раньше reject внутри таймера поглощался
+        // целиком, и по логу нельзя было понять, чем закончилась попытка №4
+        // — таймаутом, отказом сокета или закрытием (OC-1). Ни адреса, ни
+        // пароля, ни сырого текста ошибки: только категория.
+        log.warn(
+          "obs",
+          `переподключение не удалось: попытка ${this.reconnectAttempts}/${this.maxReconnectAttempts},`,
+          "причина:",
+          failureCategory(e),
+        );
         this.attemptReconnect();
       }
     }, delay);

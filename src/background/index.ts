@@ -86,7 +86,20 @@ async function reconcileObsConnection(probe = false, ignorePersistedBlock = fals
     try {
       await setObsWatchdog(false);
     } finally {
-      if (obs.hasConnectionActivity()) obs.disconnect();
+      // Отключаем осознанно — и говорим почему. Раньше ранние return молчали,
+      // а `disconnect()` отвязывает onclose, поэтому даже строки о закрытии не
+      // было: в файле просто переставало что-либо происходить (OC-2).
+      if (obs.hasConnectionActivity()) {
+        const reason = !s.extension_enabled
+          ? "расширение выключено"
+          : suspended
+            ? "пользователь нажал «Отключиться»"
+            : !s.obs_enabled
+              ? "интеграция с OBS выключена"
+              : "не задан адрес OBS";
+        log.info("background", "OBS отключён:", reason);
+        obs.disconnect();
+      }
     }
     return;
   }
@@ -94,10 +107,31 @@ async function reconcileObsConnection(probe = false, ignorePersistedBlock = fals
   if (obs.isConnectedTo(s.obs_host, s.obs_password)) {
     await setObsWatchdog(true);
     if (!probe || (await obs.verifyConnection())) return;
+    // Проба не прошла — соединение сейчас заменят. Без этой строки в файле
+    // появлялось новое «подключено» без всякой причины (OC-3).
+    log.warn("background", "проверка живости OBS не прошла — переподключаемся");
   }
   // Блок реконнекта (неверный пароль/версия): без соединения будить SW
   // каждую минуту бессмысленно — гасим watchdog, а не ставим его до проверки.
   if (obs.isAutoReconnectBlocked() || (!ignorePersistedBlock && (await isAutoReconnectBlocked()))) {
+    const stored = (await browser.storage.local.get({ [OBS_RETRY_BLOCK_REASON_KEY]: null })) as Record<
+      string,
+      unknown
+    >;
+    const reason = stored[OBS_RETRY_BLOCK_REASON_KEY];
+    // Состояние «само не починится»: watchdog гасим, и без строки это
+    // выглядит как «расширение просто перестало подключаться» (OC-2).
+    log.warn(
+      "background",
+      "подключение к OBS не выполняется: автоповторы заблокированы, причина:",
+      reason === "protocol"
+        ? "несовместимая версия obs-websocket"
+        : reason === "auth"
+          ? "OBS отверг аутентификацию"
+          : // Блокировка могла достаться с версий до 9.0, где причина не
+            // записывалась: называть её аутентификацией — уводить разбор.
+            "причина не записана (блокировка с прежней версии)",
+    );
     await setObsWatchdog(false);
     return;
   }

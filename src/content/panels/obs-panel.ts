@@ -504,8 +504,17 @@ function applyRoleVisibility(isRoleVisible: boolean): boolean {
     }
   });
 
+  const previous = lastAppliedRoleVisibility;
   lastAppliedRoleVisibility = isRoleVisible ? "visible" : "hidden";
-  log.debug(SCOPE, "Role visibility applied", lastAppliedRoleVisibility);
+  // info на СМЕНЕ состояния (несколько раз за игру): без неё в файле не видно,
+  // была ли роль реально скрыта перед дневной сценой, и успешное переключение
+  // сцены создавало ложное ощущение полного успеха (OP-1).
+  if (previous !== lastAppliedRoleVisibility) {
+    log.info(
+      SCOPE,
+      isRoleVisible ? "роль показана для ночной фазы" : "роль скрыта для дневной фазы",
+    );
+  }
   return true;
 }
 
@@ -539,7 +548,20 @@ function scheduleRoleVisibility(timeOfDay: TimeOfDay, attempt = 0): void {
   pendingRoleVisibilityTimer = setTimeout(() => {
     pendingRoleVisibilityTimer = null;
     const applied = applyRoleVisibility(shouldShowRoles);
-    if (!applied && attempt < 5) scheduleRoleVisibility(timeOfDay, attempt + 1);
+    if (applied) return;
+    if (attempt < 5) {
+      scheduleRoleVisibility(timeOfDay, attempt + 1);
+      return;
+    }
+    // Терминальный исход: дальше попыток не будет. Без этой строки в файле
+    // оставалась тишина, неотличимая от «всё получилось» (OP-1).
+    log.warn(
+      SCOPE,
+      "видимость роли не подтверждена после",
+      attempt + 1,
+      "попыток; требуемое состояние:",
+      targetVisibility,
+    );
   }, delayMs);
 }
 
@@ -548,8 +570,19 @@ async function hideRoleBeforeDaySceneSwitch(): Promise<void> {
     clearTimeout(pendingRoleVisibilityTimer);
     pendingRoleVisibilityTimer = null;
   }
-  applyRoleVisibility(false);
-  lastAppliedRoleVisibility = "hidden";
+  const hidden = applyRoleVisibility(false);
+  if (!hidden) {
+    // Латч «скрыто» здесь НЕ ставим. Раньше он ставился безусловно, и
+    // retry-машина считала работу сделанной: роль оставалась на экране, а
+    // сцена переключалась — в логе это выглядело полным успехом, хотя роль
+    // могла уехать в эфир (аудит наблюдаемости 02.08.2026, OP-1).
+    log.warn(
+      SCOPE,
+      "роль НЕ скрыта перед дневной сценой: элементы роли не найдены;",
+      "сцена переключается в ухудшенном режиме, повторяем скрытие",
+    );
+    scheduleRoleVisibility("day");
+  }
   // Дать DOM перерисовать скрытое состояние перед переключением сцены OBS.
   await new Promise((resolve) => setTimeout(resolve, 30));
 }
@@ -595,7 +628,62 @@ function getStageContainer(): Element | null {
  * Определяет время суток на основе DOM элементов страницы игры.
  * RU-логика сохранена из obs-floating-panel.js; EN-маркеры — best-effort.
  */
+/**
+ * Фазу не распознали в ЭТОМ вызове (взводится внутренним детектором).
+ * Вынесено из детектора наружу: у него полтора десятка точек возврата, и
+ * различать «распознали» и «оставили прежнее» надо в одном месте.
+ */
+let autoSettingsInitialized = false;
+let phaseUnknownHit = false;
+/** С какого момента длится «фазу не понимаем» (0 — понимаем). */
+let phaseUnknownSince = 0;
+/** Про это непонимание уже пожаловались (чтобы не повторяться). */
+let phaseUnknownReported = false;
+/**
+ * Сколько терпим непонимание, прежде чем жаловаться.
+ *
+ * Комната первые 1.5-2.5 с рисует ТРИ ПУСТЫХ `.substage` (массив substages в
+ * data фиксирован, текст берётся из ещё не пришедшей стадии), а детектор ходит
+ * раз в 2 с. Без порога совершенно здоровый старт давал бы `warn` в каждой
+ * вкладке при каждой загрузке — а `warn` поддержка грепает первым (ревью
+ * 02.08.2026). Порог заодно прикрывает промахи в момент перерисовки роллера.
+ */
+const PHASE_UNKNOWN_GRACE_MS = 8000;
+
 function detectTimeOfDay(): TimeOfDay {
+  phaseUnknownHit = false;
+  const result = detectTimeOfDayInner();
+  if (phaseUnknownHit) {
+    if (!phaseUnknownSince) {
+      phaseUnknownSince = Date.now();
+    } else if (!phaseUnknownReported && Date.now() - phaseUnknownSince > PHASE_UNKNOWN_GRACE_MS) {
+      phaseUnknownReported = true;
+      log.warn(
+        SCOPE,
+        "фаза игры не распознана дольше",
+        `${Math.round(PHASE_UNKNOWN_GRACE_MS / 1000)} с:`,
+        "ни один маркер стадии не подошёл; сохраняем прежнюю сцену —",
+        result,
+      );
+    }
+  } else if (phaseUnknownSince) {
+    // О восстановлении говорим только если жаловались: иначе здоровый старт
+    // порождал бы пару строк на ровном месте.
+    if (phaseUnknownReported) {
+      log.info(
+        SCOPE,
+        "фаза снова распознаётся:",
+        result,
+        `(не понимали ${Math.round((Date.now() - phaseUnknownSince) / 1000)} с)`,
+      );
+    }
+    phaseUnknownSince = 0;
+    phaseUnknownReported = false;
+  }
+  return result;
+}
+
+function detectTimeOfDayInner(): TimeOfDay {
   try {
     // 1. Терминальный экран (.ended): промах, победа любой из сторон, пауза.
     // Сайт перед gameOver стартует день, но фазовых маркеров на этом экране
@@ -765,10 +853,16 @@ function detectTimeOfDay(): TimeOfDay {
     }
 
     const fallbackTime = currentTimeOfDay || "day";
+    // Ни один маркер не подошёл: сообщит обёртка, по фронту состояния. Иначе
+    // после «слежение запущено» в файле идёт тишина, одинаковая и для здоровой
+    // стабильной фазы, и для мёртвого наблюдателя, и для съехавшей разметки
+    // сайта (аудит наблюдаемости 02.08.2026, OP-2).
+    phaseUnknownHit = true;
     log.debug(SCOPE, "No specific stage detected - keeping", fallbackTime.toUpperCase());
     return fallbackTime;
   } catch (e) {
     log.error(SCOPE, "Error detecting time of day", e);
+    phaseUnknownHit = true;
     return currentTimeOfDay || "day";
   }
 }
@@ -858,7 +952,7 @@ async function autoSwitchScene(timeOfDay: TimeOfDay): Promise<void> {
     return;
   }
   if (currentScene === targetScene) {
-    log.debug(SCOPE, "Scene already set to", targetScene);
+    log.info(SCOPE, "смена не требуется: нужная сцена уже активна —", targetScene);
     return;
   }
 
@@ -1078,14 +1172,37 @@ function applyAutoSettings(ctx: FeatureContext): void {
 
   if (!changed) return;
 
-  log.debug(SCOPE, "Auto scene settings changed", {
-    autoModeEnabled,
-    dayScene,
-    nightScene,
-  });
+  // info: пользователь переключил тумблер или выбрал другие сцены — и ждёт,
+  // что это сразу подействует. Раньше в файле не было ни самого изменения, ни
+  // его последствия (аудит наблюдаемости 02.08.2026, OP-3).
+  // Первый вызов — это ЗАПУСК, а не правка: при загрузке страницы значения
+  // приезжают с дефолтов, и «изменены» было бы ложным следом «пользователь
+  // только что трогал тумблер» (ревью 02.08.2026).
+  log.info(
+    SCOPE,
+    autoSettingsInitialized ? "настройки автосцен изменены: авто-режим" : "автосцены при запуске: авто-режим",
+    autoModeEnabled ? "вкл" : "выкл",
+    "| день:",
+    dayScene || "не выбрана",
+    "| ночь:",
+    nightScene || "не выбрана",
+  );
 
-  if (autoModeEnabled) startDOMMonitoring();
-  else stopDOMMonitoring();
+  const wasInitialized = autoSettingsInitialized;
+  autoSettingsInitialized = true;
+
+  if (autoModeEnabled) {
+    startDOMMonitoring();
+    // Новую пару применяем к УЖЕ известной фазе. Обнулять currentTimeOfDay
+    // нельзя: финальный фолбэк детектора — `currentTimeOfDay || "day"`, то
+    // есть без памяти «не понял — оставь как было» превращается в «считай,
+    // что день», и смена пары сцен ночью могла выдать дневную сцену в эфир
+    // (ревью 02.08.2026).
+    if (wasInitialized && currentTimeOfDay) void autoSwitchScene(currentTimeOfDay);
+    requestTimeOfDayCheck();
+  } else {
+    stopDOMMonitoring();
+  }
 }
 
 // ─────────────────────────── публичная фича ───────────────────────────
@@ -1191,5 +1308,12 @@ export const obsPanelFeature: Feature = {
     autoModeEnabled = false;
     dayScene = "";
     nightScene = "";
+    // Иначе после выключения и повторного включения первая же удачная
+    // детекция напечатала бы «не понимали 3600 с», посчитав и время, когда
+    // фича вообще не работала — строка, чей единственный смысл в длительности,
+    // врала бы (ревью 02.08.2026).
+    phaseUnknownSince = 0;
+    phaseUnknownReported = false;
+    autoSettingsInitialized = false;
   },
 };
