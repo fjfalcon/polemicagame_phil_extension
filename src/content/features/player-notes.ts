@@ -181,6 +181,32 @@ function fetchRatingList(): Promise<RatingPlayer[]> {
   return request;
 }
 
+/**
+ * Кому из игроков за столом ещё нужен резолв id.
+ *
+ * Отдельной чистой функцией, потому что это ГЕЙТ ЧАСТОТЫ: проход по плиткам
+ * идёт раз в две секунды, и без него резолв превратился бы в фоновый поток
+ * запросов. Проверить это внутри класса на три тысячи строк нечем.
+ */
+export function pendingIdLookups(
+  usernames: string[],
+  ctx: { attempted: Set<string>; isKnown: (username: string) => boolean },
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of usernames) {
+    const username = raw.trim();
+    if (!username) continue;
+    const lower = username.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    if (ctx.attempted.has(lower)) continue;
+    if (ctx.isKnown(username)) continue;
+    out.push(username);
+  }
+  return out;
+}
+
 async function findRatingPlayer(username: string): Promise<RatingPlayer | undefined> {
   const key = username.toLowerCase();
   return (await fetchRatingList()).find(
@@ -248,6 +274,14 @@ class PlayerNotesManager {
    * и заглушка с нулями отравила бы тултипы/инлайн-статистику.
    */
   private profileIdByNick = new Map<string, string>();
+  /**
+   * Ники, для которых id уже пытались резолвить: без этого проход по плиткам
+   * (раз в 2 секунды) дёргал бы резолв заново на каждом тике.
+   */
+  private idResolveAttempted = new Set<string>();
+  private idResolveInFlight: Promise<void> | null = null;
+  /** Когда резолв последний раз упал — чтобы не долбить сеть после отказа. */
+  private idResolveFailedAt = 0;
   /** Кэш последних игр по нику (lowercase). */
   private lastGamesCache = new Map<string, LastGameEntry[]>();
   /**
@@ -507,6 +541,8 @@ class PlayerNotesManager {
     this.unmutedThisSession.clear();
     this.removedTagsThisSession.clear();
     this.profileIdByNick.clear();
+    this.idResolveAttempted.clear();
+    this.idResolveFailedAt = 0;
     this.nickIndexCache = null;
     this.colorIndexCache = null;
     this.hiddenVideos.clear();
@@ -1107,6 +1143,97 @@ class PlayerNotesManager {
   }
 
   /** Обновить цвет ника у всех видимых игроков (после правки в диалогах). */
+  /** Пауза после неудачного резолва: сеть могла лечь, долбить её незачем. */
+  private static readonly ID_RESOLVE_COOLDOWN_MS = 60_000;
+
+  /**
+   * Заранее выяснить userId игроков за столом.
+   *
+   * Зачем: заметка, цвет ника и метка роли живут под ВЕЧНЫМ ключом `u:<id>`,
+   * а ник меняется. Раньше id резолвился только в `mouseenter` кнопки
+   * статистики — то есть игрок, сменивший ник, сидел за столом «чужим»:
+   * без цвета, без точки заметки, без метки, пока на него не наведёшь
+   * (жалоба с видео 02.08.2026). Всё «оживало» после наведения, и выглядело
+   * это как случайный сбой.
+   *
+   * Стоимость: `findRatingPlayer` читает ОБЩИЙ кэшированный список рейтинга —
+   * один запрос на всех десятерых, а не по запросу на игрока. Полную
+   * статистику по-прежнему грузим лениво, по наведению (перф-аудит 01.08.2026).
+   */
+  private ensurePlayerIdsResolved(usernames: string[]): void {
+    if (this.idResolveInFlight) return;
+    if (Date.now() - this.idResolveFailedAt < PlayerNotesManager.ID_RESOLVE_COOLDOWN_MS) return;
+    const pending = pendingIdLookups(usernames, {
+      attempted: this.idResolveAttempted,
+      isKnown: (u) => this.noteUserId(u) !== undefined,
+    });
+    if (!pending.length) return;
+
+    this.idResolveInFlight = (async () => {
+      try {
+        // Порядок ИСТОЧНИКОВ тот же, что на пути по наведению: сначала
+        // активные игры, потом рейтинг. Только рейтинга мало — он топ-1000, и
+        // для игрока за его пределами жалоба воспроизводилась бы один в один,
+        // а «пробовали» больше не дало бы повторить (ревью 02.08.2026).
+        let games: any[] = [];
+        try {
+          games = await fetchActiveGames();
+        } catch (e) {
+          log.warn("player-notes", "список активных игр недоступен, ищем в рейтинге", e);
+        }
+        if (!this.active) return;
+
+        const idByNick = new Map<string, string>();
+        for (const game of games) {
+          for (const p of game.players ?? []) {
+            const nick = typeof p?.username === "string" ? p.username.toLowerCase() : "";
+            if (nick && p.id !== undefined && p.id !== null) idByNick.set(nick, String(p.id));
+          }
+        }
+
+        let resolved = 0;
+        for (const username of pending) {
+          const lower = username.toLowerCase();
+          let id = idByNick.get(lower);
+          if (id === undefined) {
+            const player = await findRatingPlayer(username);
+            if (!this.active) return;
+            const ratingId = player?.user_id;
+            if (ratingId !== undefined && ratingId !== null) id = String(ratingId);
+          }
+          // Помечаем ТОЛЬКО когда оба источника ответили: иначе один сетевой
+          // сбой навсегда лишал бы игрока оформления.
+          this.idResolveAttempted.add(lower);
+          if (id !== undefined) {
+            this.profileIdByNick.set(lower, id);
+            resolved++;
+          }
+        }
+
+        if (!this.active) return;
+        if (resolved) {
+          // Индексы построены на старом составе — иначе цвет по id не найдётся.
+          this.nickIndexCache = null;
+          this.colorIndexCache = null;
+          this.refreshNickColors();
+          this.refreshNoteIndicators();
+          this.refreshPlayerTags();
+          log.info(
+            "player-notes",
+            "id игроков за столом определены заранее:",
+            `${resolved} из ${pending.length}`,
+          );
+        }
+      } catch (e) {
+        // Хвост ников остаётся непомеченным: после паузы попробуем снова.
+        this.idResolveFailedAt = Date.now();
+        log.warn("player-notes", "не удалось определить id игроков за столом", e);
+      } finally {
+        this.idResolveInFlight = null;
+      }
+    })();
+  }
+
   private refreshNickColors(): void {
     document
       .querySelectorAll<HTMLElement>(`.${OWN.playerIcons} > [data-username]`)
@@ -3178,9 +3305,13 @@ class PlayerNotesManager {
     try {
       // Сначала сторож (снимает чужое), потом обычный проход (вешает своё).
       this.sweepStaleDecorations();
-      document
-        .querySelectorAll(SITE.player)
-        .forEach((el) => this.processElement(el));
+      const tiles = Array.from(document.querySelectorAll<HTMLElement>(SITE.player));
+      // id игроков за столом — ЗАРАНЕЕ, не по наведению: см.
+      // ensurePlayerIdsResolved. Один общий запрос на всех, дальше кэш.
+      this.ensurePlayerIdsResolved(
+        tiles.map((el) => el.querySelector(SITE.playerName)?.textContent?.trim() || ""),
+      );
+      tiles.forEach((el) => this.processElement(el));
       // Сайтовый список «Участники» — не плитки, обходится отдельно.
       this.applyParticipantColors();
       // Страница профиля — тоже отдельно (плиток .player там нет).

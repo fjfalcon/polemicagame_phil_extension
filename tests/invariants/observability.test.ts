@@ -232,3 +232,65 @@ describe("тост не мешает игре", () => {
     expect(requeue).not.toMatch(/function showToast\(/);
   });
 });
+
+describe("id игрока определяется заранее, а не по наведению", () => {
+  const source = read("src/content/features/player-notes.ts");
+
+  test("проход по плиткам сам запускает резолв id", () => {
+    // Заметка, цвет и метка живут под вечным ключом u:<id>, а ник меняется.
+    // Пока id резолвился только в mouseenter кнопки статистики, игрок со
+    // сменённым ником сидел за столом «чужим», и всё оживало лишь после
+    // наведения (жалоба с видео 02.08.2026).
+    const pass = source.slice(
+      source.indexOf("private processExistingElements"),
+      source.indexOf("private processElement("),
+    );
+    // Именно ВЫЗОВ-ОПЕРАТОР, а не упоминание: `void 0 && this.ensure…`
+    // проходил бы простой проверкой на подстроку (поймано мутацией).
+    expect(pass).toMatch(/\n\s+this\.ensurePlayerIdsResolved\(/);
+  });
+
+  test("резолв не повторяется на каждом проходе и не долбит сеть после отказа", () => {
+    // Проход идёт раз в 2 секунды: без этих гейтов резолв стал бы фоновым
+    // потоком запросов.
+    expect(source).toMatch(/idResolveAttempted/);
+    expect(source).toMatch(/idResolveInFlight/);
+    expect(source).toMatch(/ID_RESOLVE_COOLDOWN_MS/);
+  });
+
+  test("источники id те же, что на пути по наведению", () => {
+    // Только рейтинг — это топ-1000: для игрока за его пределами жалоба
+    // воспроизвелась бы один в один, а «пробовали» не дало бы повторить.
+    const fn = source.slice(
+      source.indexOf("private ensurePlayerIdsResolved"),
+      source.indexOf("private refreshNickColors"),
+    );
+    expect(fn).toContain("fetchActiveGames()");
+    expect(fn).toContain("findRatingPlayer(");
+  });
+
+  test("после выключения фичи резолв ничего не пишет", () => {
+    // Асинхронное тело переживает disable(): без гейта оно заново наполнило
+    // бы только что очищенные карты и написало в DOM (§4.7).
+    const fn = source.slice(
+      source.indexOf("private ensurePlayerIdsResolved"),
+      source.indexOf("private refreshNickColors"),
+    );
+    expect(fn.match(/if \(!this\.active\) return;/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+
+  test("после успешного резолва оформление игроков обновляется", () => {
+    // Иначе id известен, а цвет и точка заметки по-прежнему не показаны —
+    // то есть баг остался бы ровно тем же с точки зрения человека.
+    const fn = source.slice(
+      source.indexOf("private ensurePlayerIdsResolved"),
+      source.indexOf("private refreshNickColors"),
+    );
+    expect(fn).toContain("refreshNickColors()");
+    expect(fn).toContain("refreshNoteIndicators()");
+    expect(fn).toContain("refreshPlayerTags()");
+    // Кэши индексов построены на старом составе — без сброса цвет по id
+    // не найдётся.
+    expect(fn).toContain("colorIndexCache = null");
+  });
+});
