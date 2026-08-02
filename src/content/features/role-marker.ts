@@ -9,6 +9,7 @@
 import { browser } from "@core/env";
 import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
+import { showToast } from "@core/toast";
 import { SITE } from "@core/selectors";
 import type { Feature } from "@core/feature";
 
@@ -98,6 +99,10 @@ function resolveGameKey(): string | null {
 
 /** Чтение упало — писать нельзя (иначе затрём чужую историю). */
 let readOnly = false;
+/** Про отказ уже сказали: десять размеченных плиток не должны дать десять
+ *  одинаковых строк (тот же приём, что в пакетах C и PN-1). */
+let readOnlyLogged = false;
+let noGameLogged = false;
 
 /** Немедленная запись (используется и таймером, и flush'ем). */
 function writeNow(): void {
@@ -148,7 +153,32 @@ function scheduleSave(): void {
 }
 
 function persist(): void {
-  if (!gameKey) return;
+  if (readOnly) {
+    // Квадрат уже перекрашен, и человек считает метку сохранённой. Раньше
+    // отказ был нем в обе стороны — ни в файле, ни на экране (аудит
+    // наблюдаемости 02.08.2026, RM-2).
+    if (!readOnlyLogged) {
+      readOnlyLogged = true;
+      log.warn("role-marker", "метка не сохранена: хранилище только для чтения");
+    }
+    showToast("Метка не сохранится: не удалось прочитать историю меток", {
+      key: "role-marker-readonly",
+      kind: "warn",
+    });
+    return;
+  }
+  if (!gameKey) {
+    // Игра ещё не опознана (id/состав не готовы): запись некуда деть.
+    if (!noGameLogged) {
+      noGameLogged = true;
+      log.warn("role-marker", "метка пока не сохранена: игра ещё не опознана");
+    }
+    showToast("Метка пока не сохранится: игра ещё не опознана, попробуйте через пару секунд", {
+      key: "role-marker-no-game",
+      kind: "warn",
+    });
+    return;
+  }
   if (Object.keys(marks).length) storeAll[gameKey] = { ...marks };
   else delete storeAll[gameKey];
   scheduleSave();
@@ -349,6 +379,8 @@ export const roleMarkerFeature: Feature = {
   },
   disable() {
     readOnly = false;
+    readOnlyLogged = false;
+    noGameLogged = false;
     offDom?.();
     offDom = null;
     closeMenu?.();

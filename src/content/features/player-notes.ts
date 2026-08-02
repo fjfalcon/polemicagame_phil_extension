@@ -20,6 +20,7 @@
  */
 import { browser } from "@core/env";
 import { log } from "@core/log";
+import { showToast } from "@core/toast";
 import { onDomChange, paintNickEl } from "@core/dom";
 import { onMessage, sendRuntime } from "@core/messaging";
 import { toggleFlipForPlayer, isPlayerFlipped, unflipAll } from "../camera-flip";
@@ -227,6 +228,13 @@ const THEME_COLORS: Record<string, string> = {
 
 class PlayerNotesManager {
   private settings: Settings;
+  /**
+   * Полный проход по плиткам сейчас падает (латч, а не счётчик строк).
+   * Проход идёт раз в 2 секунды: без латча устойчивая поломка давала бы
+   * 1800 одинаковых строк в час и вытесняла из кольца первопричину
+   * (аудит наблюдаемости 02.08.2026, PN-1).
+   */
+  private passFailed = false;
   private active = true;
 
   private notes: NotesMap = {};
@@ -555,7 +563,16 @@ class PlayerNotesManager {
     this.notes = notes;
     this.customTags = customTags;
     this.notesReadOnly = loadFailed === true;
-    if (this.notesReadOnly) log.warn("player-notes", "notes load failed — saves blocked");
+    if (this.notesReadOnly) {
+      log.warn("player-notes", "заметки не прочитались — запись заблокирована");
+      // Сказать СРАЗУ, а не когда человек нажмёт «Сохранить» и получит отказ:
+      // до этого момента он видит пустые заметки и думает, что они пропали
+      // (аудит наблюдаемости 02.08.2026, раздел «Ответ пользователю»).
+      showToast(
+        "Заметки не загрузились — данные НЕ удалены, но сохранение временно заблокировано",
+        { key: "notes-read-only", kind: "warn", durationMs: 8000 },
+      );
+    }
     log.debug("player-notes", "notes loaded", Object.keys(this.notes).length);
   }
 
@@ -3168,8 +3185,23 @@ class PlayerNotesManager {
       this.applyParticipantColors();
       // Страница профиля — тоже отдельно (плиток .player там нет).
       this.ensureProfileNoteUI();
+      // Проход прошёл целиком: если до этого он падал — говорим, что
+      // починилось. Иначе в файле остаётся только «сломалось».
+      if (this.passFailed) {
+        this.passFailed = false;
+        log.info("player-notes", "обновление заметок восстановилось");
+      }
     } catch (e) {
-      log.error("player-notes", "processExistingElements failed", e);
+      // ЛАТЧ, а не строка на каждый проход. Проход идёт раз в 2 секунды: при
+      // устойчивой поломке это 1800 строк в час — кольцо в 600 записей
+      // прокручивалось за 20 минут и вытесняло ПЕРВОПРИЧИНУ вместе с началом
+      // сессии (аудит наблюдаемости 02.08.2026, PN-1).
+      if (!this.passFailed) {
+        this.passFailed = true;
+        log.error("player-notes", "обновление заметок упало", e);
+      } else {
+        log.debug("player-notes", "processExistingElements failed (повтор)", e);
+      }
     }
   }
 

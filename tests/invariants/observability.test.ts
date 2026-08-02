@@ -124,3 +124,111 @@ describe("разведка очереди (QP-1)", () => {
     expect(source).toMatch(pattern);
   });
 });
+
+describe("твич-чат: транспорт ≠ готовность (TW-1..2)", () => {
+  const source = read("src/content/panels/twitch-panel.ts");
+
+  test.each([
+    ["сокет открыт", /twitch: сокет открыт/],
+    ["чат готов", /twitch: чат готов — вход в канал подтверждён/],
+    ["вход отклонён", /twitch: сервис отклонил вход в канал/],
+    ["соединение закрыто", /twitch: соединение закрыто, код/],
+    ["переподключение", /twitch: переподключение, попытка/],
+    ["бюджет исчерпан", /twitch: переподключение прекращено/],
+  ])("%s объявляется", (_name, pattern) => {
+    expect(source).toMatch(pattern);
+  });
+
+  test("бюджет попыток обнуляет ГОТОВНОСТЬ чата, а не открытие сокета", () => {
+    // Раньше reconnectAttempts = 0 стояло в onopen: у «дёрганья» транспорта
+    // не было верхнего предела, и поштучные строки могли сами забить кольцо.
+    expect(source).toMatch(/ircReady = true;[\s\S]{0,120}?reconnectAttempts = 0/);
+    const onopen = source.slice(source.indexOf("ws.onopen"), source.indexOf("ws.onmessage"));
+    expect(onopen, "обнуление в onopen возвращает неограниченный бюджет").not.toMatch(
+      /reconnectAttempts = 0/,
+    );
+  });
+
+  test("объект события ошибки в лог не пишем", () => {
+    // Он сериализуется в «{}» и в файле бесполезен.
+    expect(source).not.toMatch(/log\.error\([^)]*"IRC websocket error", err/);
+  });
+});
+
+describe("честный ответ пользователю (раздел «Ответ пользователю»)", () => {
+  test.each([
+    ["метка ролей: только чтение", "src/content/features/role-marker.ts", /showToast\(/],
+    ["подмена роли не сработала", "src/content/features/role-faker.ts", /showToast\(/],
+    ["заметки не загрузились", "src/content/features/player-notes.ts", /showToast\(/],
+  ])("%s — человеку говорят вслух", (_name, file, pattern) => {
+    // Лог отвечает на вопрос «что случилось» ПОТОМ; но в этих трёх случаях
+    // человек прямо сейчас видит успех, которого не было.
+    expect(read(file)).toMatch(pattern);
+  });
+
+  test("повторы тостов подавляются", () => {
+    // Иначе на каждый клик по метке в read-only режиме вылезала бы плашка.
+    expect(read("src/core/toast.ts")).toMatch(/DEDUPE_MS/);
+  });
+});
+
+describe("заметки: повторяющаяся ошибка не вытесняет первопричину (PN-1)", () => {
+  const source = read("src/content/features/player-notes.ts");
+
+  test("устойчивая поломка прохода пишется один раз, а не каждые 2 секунды", () => {
+    expect(source).toMatch(/passFailed/);
+    expect(source).toMatch(/обновление заметок упало/);
+    expect(source).toMatch(/обновление заметок восстановилось/);
+  });
+});
+
+describe("панель твича не объявляет успех раньше времени (№8)", () => {
+  const source = read("src/content/panels/twitch-panel.ts");
+
+  test("«Подключились» — только после подтверждённого входа в канал", () => {
+    // Для несуществующего канала Twitch молча игнорирует JOIN, и человек
+    // шесть минут видел ложное «Подключились к чату».
+    const onopen = source.slice(source.indexOf("ws.onopen"), source.indexOf("ws.onmessage"));
+    expect(onopen).not.toMatch(/addSystemMessage\("Подключились/);
+    expect(source).toMatch(/ircReady = true;[\s\S]{0,300}?addSystemMessage\("Подключились/);
+  });
+
+  test("неподтверждённый вход объявляется таймером, а не шестиминутным простоем", () => {
+    // Проверяем ВЫЗОВ, а не наличие функции: объявление без вызова — ровно
+    // тот вакуумный тест, который ловит только сам себя (ревью 02.08.2026).
+    const connect = source.slice(
+      source.indexOf("function connectToTwitch"),
+      source.indexOf("function disconnect("),
+    );
+    expect(connect).toContain("startJoinWatchdog()");
+    expect(connect, "таймер прошлого подключения обязан гаснуть до замены сокета").toContain(
+      "clearJoinWatchdog()",
+    );
+    expect(source).toMatch(/имя набрано с ошибкой/);
+  });
+});
+
+describe("тост не мешает игре", () => {
+  const source = read("src/core/toast.ts");
+
+  test("плашка не перехватывает клики", () => {
+    // Правый нижний угол в комнате занят игровыми контролами. Ищем стиль
+    // САМОЙ плашки: контейнер тоже имеет pointer-events: none, и поиск по
+    // всему файлу проходил бы при любой реализации.
+    // Якорь — className самой плашки: `el.style.cssText` есть и у
+    // контейнера, и срез по нему брал чужой стиль (моя же ошибка).
+    const style = source.slice(
+      source.indexOf("el.className = TOAST_CLASS;"),
+      source.indexOf("ensureContainer().appendChild"),
+    );
+    expect(style).toMatch(/pointer-events: none/);
+  });
+
+  test("тост в проекте один: две системы наложились бы друг на друга", () => {
+    const requeue = read("src/content/features/queue-requeue.ts");
+    expect(requeue, "queue-requeue обязан пользоваться общим модулем").toMatch(
+      /from "@core\/toast"/,
+    );
+    expect(requeue).not.toMatch(/function showToast\(/);
+  });
+});

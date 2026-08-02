@@ -43,6 +43,7 @@ import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { SITE, TEXT } from "@core/selectors";
 import { isGameRoomPath, isSearchPath } from "@shared/routes";
 import { log } from "@core/log";
+import { showToast } from "@core/toast";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
 
@@ -108,8 +109,6 @@ function siteModalOpen(): boolean {
   );
 }
 
-let toast: HTMLElement | null = null;
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
 /** Последнее НАСТОЯЩЕЕ действие игрока (isTrusted) — автоклик обязан уступать
  *  дорогу человеку (инвариант AGENTS.md §4 п.2: бэкофф после ручных действий). */
 let lastTrustedInputAt = 0;
@@ -472,29 +471,6 @@ function reset(): void {
   lastClickAt = 0;
 }
 
-function showToast(text: string): void {
-  removeToast();
-  const el = document.createElement("div");
-  el.textContent = text;
-  el.style.cssText = `
-    position: fixed; right: 16px; bottom: 16px; z-index: 2147483600;
-    background: #161c2c; color: #e6e9f0; border: 1px solid rgba(255,255,255,.15);
-    border-radius: 10px; padding: 10px 14px; font: 13px/1.4 system-ui, sans-serif;
-    box-shadow: 0 8px 30px rgba(0,0,0,.45); max-width: 300px;
-  `;
-  document.body.appendChild(el);
-  toast = el;
-  toastTimer = setTimeout(removeToast, 4000);
-}
-
-function removeToast(): void {
-  if (toastTimer) {
-    clearTimeout(toastTimer);
-    toastTimer = null;
-  }
-  toast?.remove();
-  toast = null;
-}
 
 function tick(): void {
   if (!settings || settings.requeue_after_lobby_fail_enabled === false) {
@@ -622,6 +598,9 @@ function tick(): void {
   if (attempts === 1) {
     showToast(
       armedFromRoom ? "Снова встаю в поиск… 🔁" : "Лобби развалилось — возвращаю в поиск… 🔁",
+      // Ключ с номером попытки: дедуп в 30 с иначе съедал бы плашку у
+      // ВТОРОГО развала лобби подряд, а он вполне возможен (ревью 02.08.2026).
+      { key: `requeue-acting-${Date.now()}` },
     );
   }
   safeClick(play);
@@ -696,7 +675,6 @@ export const queueRequeueFeature: Feature = {
       clearTimeout(graceTimer);
       graceTimer = null;
     }
-    removeToast();
     reset();
     settings = null;
   },

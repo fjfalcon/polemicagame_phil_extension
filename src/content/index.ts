@@ -10,6 +10,7 @@ import { FeatureManager } from "@core/feature";
 import { getMatchId, parseMatchOnPage } from "./match-data";
 import { onMessage } from "@core/messaging";
 import { browser } from "@core/env";
+import { clearToasts } from "@core/toast";
 import { setupNicknameLengthsResponder } from "./nickname-lengths";
 import { setupDiagnostics } from "./diag";
 
@@ -91,6 +92,10 @@ function setupUrlRouter(extensionEnabledAtBoot: boolean): void {
   const fallbackTimer = window.setInterval(schedule, 500);
   const onPageShow = () => schedule();
   const onPageHide = (event: PageTransitionEvent) => {
+    // Тосты — ОБЩИЙ ресурс: снимает их владелец страницы, а не каждая фича.
+    // Иначе выключение одной фичи стирало плашку соседней и обнуляло её
+    // подавление повторов (ревью 02.08.2026).
+    if (!event.persisted) clearToasts();
     if (event.persisted) return;
     clearInterval(fallbackTimer);
     window.removeEventListener("popstate", schedule);

@@ -705,6 +705,15 @@ let unsubDom: (() => void) | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 /** Признак намеренного отключения — чтобы не переподключаться после disconnect(). */
 let intentionalClose = false;
+/**
+ * Чат ПОДТВЕРЖДЁННО готов: мы вошли в канал (IRC 366).
+ *
+ * Открытый сокет готовности не доказывает — JOIN могут отвергнуть, канала
+ * может не быть. Раньше бюджет переподключений обнулялся на каждом открытии
+ * транспорта, поэтому у «дёрганья» соединения не было верхнего предела
+ * (аудит наблюдаемости 02.08.2026, TW-2).
+ */
+let ircReady = false;
 /** Последний входящий трафик — детект молчаливо умершего сокета. */
 let lastActivityAt = 0;
 let idleWatchdog: ReturnType<typeof setInterval> | null = null;
@@ -719,6 +728,39 @@ const IDLE_TIMEOUT_MS = 6 * 60 * 1000;
 
 function sendTwitchStatus(connected: boolean, error?: string): void {
   void sendRuntime({ type: "twitch_status", connected, channel: channelName, error });
+}
+
+/**
+ * Сколько ждём подтверждения входа в канал (IRC 366) после открытия сокета.
+ *
+ * Замер на живом Twitch: у существующего канала 366 приходит примерно за
+ * секунду; у несуществующего JOIN игнорируется МОЛЧА — ни ошибки, ни NOTICE.
+ * Без этого таймера самая частая причина жалобы (опечатка в имени канала)
+ * выводилась только косвенно, через шестиминутный простой (ревью 02.08.2026).
+ */
+const JOIN_CONFIRM_TIMEOUT_MS = 10_000;
+let joinWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+function clearJoinWatchdog(): void {
+  if (joinWatchdog) {
+    clearTimeout(joinWatchdog);
+    joinWatchdog = null;
+  }
+}
+
+function startJoinWatchdog(): void {
+  clearJoinWatchdog();
+  joinWatchdog = setTimeout(() => {
+    joinWatchdog = null;
+    if (ircReady) return;
+    log.warn(
+      SCOPE,
+      "twitch: вход в канал не подтверждён за",
+      `${JOIN_CONFIRM_TIMEOUT_MS / 1000} с —`,
+      "вероятно, канала нет или имя набрано с ошибкой",
+    );
+    panel?.addSystemMessage("Канал не отвечает — проверьте имя канала");
+  }, JOIN_CONFIRM_TIMEOUT_MS);
 }
 
 function startIdleWatchdog(): void {
@@ -813,7 +855,12 @@ function clearReconnect(): void {
 function scheduleReconnect(): void {
   if (intentionalClose || !channelName) return;
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-    log.warn(SCOPE, "reconnect limit reached, giving up");
+    log.warn(
+      SCOPE,
+      "twitch: переподключение прекращено — исчерпаны",
+      MAX_RECONNECT_ATTEMPTS,
+      "попытки; чат остаётся отключённым",
+    );
     panel?.addSystemMessage("Не удалось подключиться — проверьте имя канала");
     return;
   }
@@ -823,7 +870,7 @@ function scheduleReconnect(): void {
   const delay = Math.min(RECONNECT_DELAY * reconnectAttempts, 30_000);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    log.debug(SCOPE, "reconnecting to", channelName, `attempt ${reconnectAttempts}`);
+    log.info(SCOPE, `twitch: переподключение, попытка ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
     connectToTwitch();
   }, delay);
 }
@@ -857,6 +904,10 @@ function connectToTwitch(): void {
     socket = null;
   }
   intentionalClose = false;
+  // Таймер подтверждения входа от ПРЕЖНЕГО подключения: onclose заменяемого
+  // сокета мы намеренно отвязываем, поэтому там он не погаснет и выстрелил бы
+  // «Канал не отвечает» уже про исправленное имя (ревью 02.08.2026).
+  clearJoinWatchdog();
 
   log.info(SCOPE, "connecting to channel", channelName);
 
@@ -865,7 +916,12 @@ function connectToTwitch(): void {
     socket = ws;
 
     ws.onopen = () => {
-      log.debug(SCOPE, "IRC websocket open");
+      // Транспорт открыт — это ЕЩЁ НЕ готовность чата: JOIN могут отвергнуть,
+      // канала может не быть. Раньше в файле оставалось только «connecting»,
+      // и «чат замер» не отличалось от «канал не существует» (аудит
+      // наблюдаемости 02.08.2026, TW-1/TW-2).
+      log.info(SCOPE, "twitch: сокет открыт, отправляем вход в канал");
+      ircReady = false;
       // Теги дают цвет ника, display-name и бейджи. Доступны и анониму.
       ws.send("CAP REQ :twitch.tv/tags");
       // Анонимный вход.
@@ -873,10 +929,14 @@ function connectToTwitch(): void {
       ws.send(`NICK justinfan${Math.floor(Math.random() * 100000)}`);
       ws.send(`JOIN #${channelName.toLowerCase()}`);
       isConnected = true;
-      reconnectAttempts = 0;
       lastActivityAt = Date.now();
       startIdleWatchdog();
-      panel?.addSystemMessage("Подключились к чату");
+      // НЕ «подключились»: вход в канал ещё не подтверждён. Для
+      // несуществующего канала Twitch молча игнорирует JOIN, и человек шесть
+      // минут видел бы ложный успех (аудит наблюдаемости 02.08.2026, №8
+      // раздела «Ответ пользователю»).
+      panel?.addSystemMessage("Подключаемся к чату…");
+      startJoinWatchdog();
       sendTwitchStatus(true);
     };
 
@@ -885,10 +945,18 @@ function connectToTwitch(): void {
       handleTwitchData(String(event.data));
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       // Сокет мог смениться, пока ждали close — чужой close игнорируем целиком.
       if (socket !== ws) return;
-      log.debug(SCOPE, "IRC disconnected");
+      log.info(
+        SCOPE,
+        "twitch: соединение закрыто, код",
+        event.code,
+        intentionalClose ? "(по нашей команде)" : `(попытка ${reconnectAttempts})`,
+        ircReady ? "| чат был готов" : "| до готовности чата",
+      );
+      ircReady = false;
+      clearJoinWatchdog();
       isConnected = false;
       socket = null;
       sendTwitchStatus(false);
@@ -898,8 +966,10 @@ function connectToTwitch(): void {
       }
     };
 
-    ws.onerror = (err) => {
-      log.error(SCOPE, "IRC websocket error", err);
+    ws.onerror = () => {
+      // Объект события сериализуется в «{}» и в файле бесполезен — пишем
+      // состояние сокета, а не сам объект (TW-1).
+      log.error(SCOPE, "twitch: ошибка сокета, readyState =", ws.readyState);
       panel?.addSystemMessage("Ошибка подключения к чату");
     };
   } catch (e) {
@@ -913,6 +983,7 @@ function disconnect(): void {
   intentionalClose = true;
   clearReconnect();
   stopIdleWatchdog();
+  clearJoinWatchdog();
   if (socket) {
     // Полная отвязка: висящие onopen/onerror старого сокета после
     // намеренного отключения давали ложные статусы.
@@ -947,6 +1018,21 @@ function handleTwitchData(data: string): void {
     if (line.startsWith("PING")) {
       socket?.send(line.replace("PING", "PONG"));
       continue;
+    }
+
+    // Готовность чата подтверждает ТОЛЬКО вход в канал (366 — конец списка
+    // имён). Регистрация (001) её не доказывает: JOIN могут отвергнуть.
+    if (!ircReady && ircCommandOf(line) === "366") {
+      ircReady = true;
+      reconnectAttempts = 0;
+      clearJoinWatchdog();
+      log.info(SCOPE, "twitch: чат готов — вход в канал подтверждён");
+      panel?.addSystemMessage("Подключились к чату");
+    }
+    // Отказ входа: канала нет, он в бане и т.п. Само сообщение не пишем —
+    // это текст сервиса, а нам нужен факт.
+    if (ircCommandOf(line) === "NOTICE" && !ircReady) {
+      log.warn(SCOPE, "twitch: сервис отклонил вход в канал");
     }
 
     if (line.includes("PRIVMSG")) parsePrivMsg(line);

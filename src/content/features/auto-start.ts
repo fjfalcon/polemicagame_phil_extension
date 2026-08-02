@@ -586,10 +586,20 @@ function startInitialAutoHideRole() {
       return;
     }
     if (autoHideRole()) {
+      log.info(SCOPE, "роль скрыта при входе в игру");
       stopInitialAutoHideRole();
       return;
     }
     if (initialAutoHideAttempts >= 100) {
+      // Десять секунд попыток и молчаливая сдача: у стримера, чья роль не
+      // скрылась, в файле не было ни одной строки (аудит наблюдаемости
+      // 02.08.2026, AS-3 — последняя из 26 находок).
+      log.warn(
+        SCOPE,
+        "роль не удалось скрыть за",
+        initialAutoHideAttempts,
+        "попыток — элемент роли так и не появился",
+      );
       stopInitialAutoHideRole();
     }
   }, 100);
@@ -607,7 +617,9 @@ function scheduleNightRoleAutoShow(delayMs: number) {
     // Игрок только что сам скрыл/показал роль (D-D «глянул и спрятал») —
     // не переигрываем его решение принудительным показом.
     if (Date.now() - lastManualRoleActionAt < 2000) {
-      log.debug(SCOPE, "night-show skipped: recent manual action");
+      // Пользователь только что сам управлял ролью — уступаем. Это решение,
+      // а не шум: происходит раз за ночь и объясняет «роль ночью не показалась».
+      log.info(SCOPE, "ночной показ роли пропущен: игрок только что действовал сам");
       return;
     }
     log.debug(SCOPE, "night-show fire");

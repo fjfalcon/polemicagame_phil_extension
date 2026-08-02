@@ -6,6 +6,7 @@
 import { keyboard, isTypingContext, producesText } from "@core/keyboard";
 import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
+import { showToast } from "@core/toast";
 import { SITE } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
 
@@ -60,7 +61,15 @@ class RoleFaker {
     // роли всё равно скрывались и D блокировался — поле оставалось пустым
     // до E (аудит устойчивости 01.08.2026, находка 9).
     if (!this.changeRole()) {
-      log.debug("role-faker", "своей роли нет — режим подмены не включаем");
+      // Явное действие человека, которое ничего не сделало: он нажал F и
+      // ждёт результата. Раньше обе причины были только в debug, то есть в
+      // файл не попадали вовсе, а на экране не было ничего (аудит
+      // наблюдаемости 02.08.2026, RF-1).
+      log.info("role-faker", "подмена роли не выполнена: своей роли на экране нет");
+      showToast("Подмена роли не сработала: своей роли на экране нет", {
+        key: "role-faker-no-role",
+        kind: "warn",
+      });
       return;
     }
     this.hideOtherRoles();
@@ -199,6 +208,8 @@ class RoleFaker {
       log.debug("role-faker", "my role element not found");
       return false;
     }
+    // Ниже: контейнер роли есть, но внутри нечего менять (сайт пересобрал
+    // разметку). Отдельная причина — и в логе она должна отличаться.
     if (!el.hasAttribute("data-original-role")) {
       const use = el.querySelector("use");
       if (use) {
