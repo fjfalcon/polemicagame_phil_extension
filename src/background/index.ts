@@ -352,7 +352,13 @@ onMessage((msg: ExtMessage, sender) => {
   // Возвращаем ПРОМИС операции, а не void: иначе service worker может уснуть
   // раньше, чем будильник реально создан/снят.
   if ("action" in msg && msg.action === "queueGuardArm") {
-    return armQueueGuard(sender.tab?.id).then(() => ({ ok: true }));
+    // Честный ответ вместо безусловного ok. Раньше без id вкладки
+    // armQueueGuard молча ничего не делал, а вкладке возвращалось {ok:true} —
+    // она считала предупреждение взведённым и больше не пробовала. Ложное
+    // свидетельство в логе хуже тишины (аудит наблюдаемости, QG-1).
+    return armQueueGuard(sender.tab?.id).then((ok) =>
+      ok ? { ok: true } : { ok: false, reason: "нет id вкладки" },
+    );
   }
   if ("action" in msg && msg.action === "queueGuardCancel") {
     const tabId = sender.tab?.id;
@@ -384,12 +390,18 @@ function tabIdFromAlarmName(name: string): number | null {
   return Number.isFinite(id) ? id : null;
 }
 
-async function armQueueGuard(tabId: number | undefined): Promise<void> {
+async function armQueueGuard(tabId: number | undefined): Promise<boolean> {
   // Без id вкладки предупреждение некому адресовать и нечем проверить.
-  if (tabId === undefined) return;
+  if (tabId === undefined) return false;
   const name = queueGuardAlarmName(tabId);
-  await browser.alarms.clear(name);
-  await browser.alarms.create(name, { delayInMinutes: QUEUE_GUARD_DELAY_MIN });
+  try {
+    await browser.alarms.clear(name);
+    await browser.alarms.create(name, { delayInMinutes: QUEUE_GUARD_DELAY_MIN });
+    return true;
+  } catch (e) {
+    log.warn("background", "будильник очереди не создан", e);
+    return false;
+  }
 }
 
 async function fireQueueGuardNotification(alarmName: string): Promise<void> {
@@ -411,9 +423,19 @@ async function fireQueueGuardNotification(alarmName: string): Promise<void> {
   try {
     reply = await browser.tabs.sendMessage(tabId, { action: "queueGuardPing" });
   } catch {
+    // Раньше тишина: «уведомления не было» не отличалось от сломанного
+    // messaging (аудит наблюдаемости 02.08.2026, QG-2).
+    log.info("background", "уведомление об очереди не показано: вкладка не ответила");
     return;
   }
-  if (!reply?.hidden || !reply.searching) return;
+  if (!reply?.hidden || !reply.searching) {
+    log.info(
+      "background",
+      "уведомление об очереди не нужно:",
+      !reply?.hidden ? "вкладка снова на экране" : "поиск уже не идёт",
+    );
+    return;
+  }
 
   try {
     await browser.notifications.create(queueGuardAlarmName(tabId), {
@@ -424,6 +446,7 @@ async function fireQueueGuardNotification(alarmName: string): Promise<void> {
         "Вкладка Polemica скрыта — примерно через полминуты сервер выкинет вас из очереди. " +
         "Верните вкладку на экран, чтобы остаться в поиске.",
     });
+    log.info("background", "уведомление об очереди создано");
   } catch (e) {
     log.error("background", "queue guard notification failed", e);
   }
@@ -523,6 +546,11 @@ browser.alarms.onAlarm.addListener((alarm) => {
     // и предупреждение ещё полезно, а content уже держит armed=true и нового
     // будильника не закажет (аудит lifecycle 01.08.2026, находка 12).
     if (Date.now() - alarm.scheduledTime > STALE_ALARM_CUTOFF_MS) {
+      log.info(
+        "background",
+        "просроченный будильник очереди пропущен, опоздание",
+        `${Math.round((Date.now() - alarm.scheduledTime) / 1000)} с`,
+      );
       void browser.alarms.clear(alarm.name);
       return;
     }

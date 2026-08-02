@@ -49,6 +49,14 @@ let unsubAcceptDom: (() => void) | null = null;
 let acceptScanTimer: ReturnType<typeof setTimeout> | null = null;
 let webcamClickTimer: ReturnType<typeof setTimeout> | null = null;
 let videoButtonClicked = false;
+/** Про подавление разведкой уже сказали (состояние, а не тик). */
+let acceptSuppressLogged = false;
+/** Про исчерпанный бюджет кликов уже сказали. */
+let budgetExhaustedLogged = false;
+/** Про нераспознанное стартовое окно уже сказали. */
+let welcomeUnknownLogged = false;
+/** Про нераспознанную кнопку камеры уже сказали (раз на лобби). */
+let webcamUnknownLogged = false;
 
 // Игровая страница
 let gameInterval: ReturnType<typeof setInterval> | null = null;
@@ -123,11 +131,34 @@ function findAcceptTextElements(): HTMLElement[] {
 const acceptClickCounts = new WeakMap<Element, number>();
 const MAX_ACCEPT_CLICKS_PER_ELEMENT = 3;
 
-function consumeClickBudget(el: Element): boolean {
+function consumeClickBudget(el: Element, kind: string): boolean {
   if (!isVisible(el)) return false;
   const used = acceptClickCounts.get(el) ?? 0;
-  if (used >= MAX_ACCEPT_CLICKS_PER_ELEMENT) return false;
+  if (used >= MAX_ACCEPT_CLICKS_PER_ELEMENT) {
+    // Терминальный исход: по этому элементу больше не жмём. Раньше он был
+    // полностью нем, и «кандидата не было» не отличалось от «три клика не
+    // сработали» (аудит наблюдаемости 02.08.2026, AS-1).
+    if (!budgetExhaustedLogged) {
+      budgetExhaustedLogged = true;
+      log.warn(
+        SCOPE,
+        "автопринятие остановлено:",
+        MAX_ACCEPT_CLICKS_PER_ELEMENT,
+        "клика по цели",
+        kind,
+        "не дали результата",
+      );
+    }
+    return false;
+  }
   acceptClickCounts.set(el, used + 1);
+  // info ТОЛЬКО на первый клик по этому узлу: бюджет живёт на экземпляр, а
+  // сайт пересоздаёт блок принятия (там счётчик «Готовы: N/10»), поэтому у
+  // строки иначе нет потолка — до пяти в секунду на всё окно принятия
+  // (ревью 02.08.2026). Повторы остаются в debug.
+  // Текст элемента НЕ пишем: это подписи сайта, сигнала они не добавляют.
+  if (used === 0) log.info(SCOPE, "автопринятие: жмём цель", kind);
+  else log.debug(SCOPE, "автопринятие: повторный клик", used + 1, kind);
   return true;
 }
 
@@ -139,7 +170,17 @@ function clickAcceptButtons() {
   if (!location.pathname.startsWith("/game-search")) return;
   // Идёт разведка очереди — принимать игру нельзя ни в коем случае
   // (см. content/auto-accept-gate.ts).
-  if (isAutoAcceptSuppressed()) return;
+  if (isAutoAcceptSuppressed()) {
+    if (!acceptSuppressLogged) {
+      acceptSuppressLogged = true;
+      log.info(SCOPE, "автопринятие приостановлено: идёт разведка очереди");
+    }
+    return;
+  }
+  if (acceptSuppressLogged) {
+    acceptSuppressLogged = false;
+    log.info(SCOPE, "автопринятие снова активно: разведка очереди завершена");
+  }
   // Игрок только что кликал сам — не вмешиваемся, он пользуется интерфейсом.
   if (Date.now() - lastUserClickAt < USER_ACTION_BACKOFF_MS) return;
 
@@ -217,7 +258,7 @@ function clickAcceptButtons() {
 
   // Клик по обычным кнопкам
   readyButtons.forEach((button) => {
-    if (!consumeClickBudget(button)) return;
+    if (!consumeClickBudget(button, "кнопка")) return;
     log.debug(SCOPE, "click accept button", button.textContent);
     button.click();
 
@@ -243,13 +284,13 @@ function clickAcceptButtons() {
 
   // Клик по карточкам приёма игры
   gameAcceptDivs.forEach((div) => {
-    if (consumeClickBudget(div)) safeClick(div);
+    if (consumeClickBudget(div, "карточка")) safeClick(div);
   });
 
   // Доп. элементы с текстом «Принять игру»
   acceptGameElements.forEach((el) => {
     if (readyButtons.includes(el as HTMLButtonElement) || gameAcceptDivs.includes(el)) return;
-    if (consumeClickBudget(el)) safeClick(el);
+    if (consumeClickBudget(el, "текстовый блок")) safeClick(el);
   });
 }
 
@@ -285,6 +326,8 @@ function disableAutoAccept() {
     clearTimeout(acceptScanTimer);
     acceptScanTimer = null;
   }
+  acceptSuppressLogged = false;
+  budgetExhaustedLogged = false;
   // Отложенный клик по камере — тот же хвост: через секунду после выключения
   // он бы включил видео от имени уже неактивной фичи.
   if (webcamClickTimer !== null) {
@@ -785,8 +828,10 @@ function clickStartGameButton() {
   const welcomeModal = document.querySelector<HTMLElement>(SITE.welcomeModal);
   if (!welcomeModal) {
     // Окно закрылось — следующее появление получит свежий лимит попыток.
+    if (startModalSeen) log.info(SCOPE, "стартовое окно закрыто");
     startModalSeen = false;
     startClickAttempts = 0;
+    welcomeUnknownLogged = false;
     return;
   }
   if (!startModalSeen) {
@@ -815,7 +860,8 @@ function clickStartGameButton() {
   }
 
   if (startButtons.length > 0) {
-    log.debug(SCOPE, "click start-game button", startButtons[0].textContent);
+    // Подпись кнопки не пишем: это текст сайта, сигнала он не добавляет.
+    log.info(SCOPE, "стартовое окно: попытка", startClickAttempts, "— клик по кнопке");
     startButtons[0].click();
   }
 
@@ -839,7 +885,18 @@ function clickStartGameButton() {
   // Только видимый элемент (§4.2): у окна сайта бывают заготовленные, но
   // скрытые кнопки, а кнопочная ветка выше проходит через isVisible.
   const startTarget = startElements.find((el) => isVisible(el));
-  if (startTarget) safeClick(startTarget);
+  if (startTarget) {
+    log.info(SCOPE, "стартовое окно: попытка", startClickAttempts, "— клик по тексту");
+    safeClick(startTarget);
+    return;
+  }
+  if (startButtons.length > 0) return; // клик уже сделан кнопочной веткой выше
+  // Окно есть, а нажимать нечего: раньше это состояние было полностью немым,
+  // и «не пропустило стартовый экран» не имело в файле ни одного следа (AS-2).
+  if (!welcomeUnknownLogged) {
+    welcomeUnknownLogged = true;
+    log.warn(SCOPE, "стартовое окно найдено, но кнопка запуска не распознана");
+  }
 }
 
 /**
@@ -935,6 +992,7 @@ function disableWebcams() {
     // и в следующей игре той же вкладки камера не отключалась.
     webcamDisabled = false;
     webcamGaveUp = false;
+    webcamUnknownLogged = false;
     return;
   }
   if (webcamDisabled || webcamGaveUp) return;
@@ -965,14 +1023,26 @@ function disableWebcams() {
         if (webcamClickInterval) clearInterval(webcamClickInterval);
         webcamClickInterval = null;
         // Не помогло за 10 кликов — сдаёмся до следующего лобби, а не
-        // начинаем заново с нулевым счётчиком.
+        // начинаем заново с нулевым счётчиком. Латч был полностью нем: у
+        // жалобы «камера не выключилась» не было ни одного следа в файле
+        // (аудит наблюдаемости 02.08.2026, AS-2).
         webcamGaveUp = true;
+        log.warn(
+          SCOPE,
+          "камера не переключилась за",
+          maxClicks,
+          "кликов — автоклики остановлены до следующего лобби",
+        );
         return;
       }
       const currentButton = findWebcamButton();
       if (!currentButton) {
         if (webcamClickInterval) clearInterval(webcamClickInterval);
         webcamClickInterval = null;
+        if (!webcamUnknownLogged) {
+          webcamUnknownLogged = true;
+          log.warn(SCOPE, "кнопка камеры не распознана — автоклик по камере прекращён");
+        }
         return;
       }
       if (currentButton.classList.contains(SITE.webcamButtonOffClass)) {

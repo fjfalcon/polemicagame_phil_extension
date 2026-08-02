@@ -200,9 +200,18 @@ async function readCredentials(): Promise<Credentials | null> {
   try {
     const html = await (await fetchWithTimeout("/game-search")).text();
     const m = html.match(/current-user='([^']+)'/);
-    if (!m) return null;
+    if (!m) {
+      // Категория, а не тишина: соседние поломки контракта сайта раньше были
+      // неразличимы (аудит наблюдаемости 02.08.2026, QP-1). Ни authKey, ни
+      // тело ответа в лог не идут.
+      log.warn(SCOPE, "разведка очереди невозможна: на странице нет данных пользователя");
+      return null;
+    }
     const user = JSON.parse(m[1].replace(/&quot;/g, '"'));
-    if (!user?.id || !user?.authKey) return null;
+    if (!user?.id || !user?.authKey) {
+      log.warn(SCOPE, "разведка очереди невозможна: в данных пользователя нет id или ключа");
+      return null;
+    }
     return {
       id: Number(user.id),
       authKey: String(user.authKey),
@@ -228,9 +237,16 @@ async function fetchQueueCounts(): Promise<Record<string, QueueInfo> | null> {
     // Без заголовков: Content-Type на кросс-доменном GET делает запрос
     // непростым и добавляет preflight, который сервис может не пережить.
     const res = await fetchWithTimeout(SEARCH_API);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      log.warn(SCOPE, "счётчики очередей не получены: код ответа", res.status);
+      return null;
+    }
     const data = await res.json();
-    return (data?.queues as Record<string, QueueInfo>) || null;
+    const queues = (data?.queues as Record<string, QueueInfo>) || null;
+    if (!queues) {
+      log.warn(SCOPE, "счётчики очередей не получены: в ответе нет поля queues");
+    }
+    return queues;
   } catch (e) {
     log.error(SCOPE, "queue counts failed", (e as Error)?.name || "unknown");
     return null;

@@ -148,6 +148,16 @@ let graceTimer: ReturnType<typeof setTimeout> | null = null;
 let elsewhereDone = false;
 /** Мост для этапа 1 уже поставлен в этом сборе лобби. */
 let acceptArmed = false;
+/** Про отложенный из-за действий игрока клик уже сказали (не на каждый тик). */
+let backoffLogged = false;
+/**
+ * Про отложенный выход из распущенной комнаты уже сказали — ОТДЕЛЬНО по
+ * каждой причине: один общий латч глушил бы две другие до конца жизни
+ * страницы, и в файле оставалась бы не та причина (ревью 02.08.2026).
+ */
+const roomExitDeferLogged = { hidden: false, userInput: false, retryScreen: false };
+/** Про «лобби стартует» уже сказали. */
+let gameStartingLogged = false;
 
 function isGameRoomPage(): boolean {
   return isGameRoomPath(location.pathname);
@@ -303,13 +313,30 @@ function roomTick(): void {
   // жива, и наш уход в очередь бросил бы девятерых ждать десятого.
   const retry = document.querySelector<HTMLElement>(SITE.roomRetryButton);
   if (retry && isVisible(retry)) {
-    log.debug(SCOPE, "экран с «Попробовать снова» — обрыв связи, не вмешиваемся");
+    if (!roomExitDeferLogged.retryScreen) {
+      roomExitDeferLogged.retryScreen = true;
+      log.info(SCOPE, "обнаружен обрыв связи (кнопка «Попробовать снова») — в поиск не уводим");
+    }
     return;
   }
 
   // Те же правила, что и на поиске: не в фоне и не поперёк живого человека.
-  if (document.hidden) return;
-  if (Date.now() - lastTrustedInputAt < USER_BACKOFF_MS) return;
+  // Обе отсрочки — по фронту: DOM распущенной комнаты замер, повторной точки
+  // решения может не быть, и молчание тут неотличимо от поломки (QR-2).
+  if (document.hidden) {
+    if (!roomExitDeferLogged.hidden) {
+      roomExitDeferLogged.hidden = true;
+      log.info(SCOPE, "выход из распущенной комнаты отложен: вкладка в фоне");
+    }
+    return;
+  }
+  if (Date.now() - lastTrustedInputAt < USER_BACKOFF_MS) {
+    if (!roomExitDeferLogged.userInput) {
+      roomExitDeferLogged.userInput = true;
+      log.info(SCOPE, "выход из распущенной комнаты отложен: игрок только что действовал сам");
+    }
+    return;
+  }
 
   roomExitDone = true;
   armPending();
@@ -333,7 +360,10 @@ function armPending(): void {
   try {
     sessionStorage.setItem(PENDING_KEY, String(Date.now()));
   } catch {
-    /* приватный режим — просто перейдём без автоклика на поиске */
+    // Приватный режим/запрет хранилища: перейдём без автоклика на поиске.
+    // Раньше отказ был нем, и «мост не сработал» не отличалось от «мост не
+    // ставили» (аудит наблюдаемости 02.08.2026, QR-3).
+    log.warn(SCOPE, "не удалось сохранить мост автовозврата — хранилище страницы недоступно");
   }
 }
 
@@ -400,6 +430,7 @@ function consumePendingFromRoom(): void {
     raw = sessionStorage.getItem(PENDING_KEY);
     if (raw !== null) sessionStorage.removeItem(PENDING_KEY);
   } catch {
+    log.warn(SCOPE, "мост автовозврата пропущен: хранилище страницы недоступно");
     return;
   }
   if (!raw) return;
@@ -408,7 +439,16 @@ function consumePendingFromRoom(): void {
   // age < 0 — метка из БУДУЩЕГО: sessionStorage принадлежит сайту (AGENTS.md
   // §5), и значение Date.now()+1e12 выглядело «вечно свежим» (аудит
   // безопасности 01.08.2026, №15).
-  if (!Number.isFinite(ts) || age < 0 || age > PENDING_TTL_MS) return;
+  if (!Number.isFinite(ts) || age < 0 || age > PENDING_TTL_MS) {
+    // Почему мост не сработал — три разных случая, и раньше они были
+    // неразличимы. Сырое время не пишем: sessionStorage принадлежит сайту.
+    log.info(
+      SCOPE,
+      "мост автовозврата пропущен:",
+      !Number.isFinite(ts) || age < 0 ? "метка повреждена" : "метка устарела",
+    );
+    return;
+  }
   accepted = true;
   armedFromRoom = true;
   disappearedAt = Date.now();
@@ -425,6 +465,7 @@ function isSearchPage(): boolean {
 function reset(): void {
   accepted = false;
   acceptArmed = false;
+  backoffLogged = false;
   armedFromRoom = false;
   disappearedAt = 0;
   attempts = 0;
@@ -484,6 +525,7 @@ function tick(): void {
     // — этап 1 не срабатывал вообще (аудит устойчивости 01.08.2026, №3).
     if (accepted && !acceptArmed) {
       acceptArmed = true;
+      log.info(SCOPE, "принятие игры подтверждено — возврат после развала взведён");
       armPending();
     }
     return;
@@ -493,6 +535,12 @@ function tick(): void {
   // Блок принятия исчез — выясняем, куда всё повернулось.
   if (document.querySelector(SITE.searchInProgress)) {
     // Сайт сам вернул игрока в очередь — не дублируем.
+    // Строка успеха: без неё в файле не было ДОКАЗАТЕЛЬСТВА, что всё
+    // закончилось хорошо, и «работает» не отличалось от «молча сдались»
+    // (аудит наблюдаемости 02.08.2026, QR-1).
+    if (attempts > 0 || armedFromRoom) {
+      log.info(SCOPE, "поиск возобновлён: секундомер очереди подтверждён");
+    }
     clearPending();
     reset();
     return;
@@ -501,6 +549,13 @@ function tick(): void {
     // Все приняли, игра запускается — сейчас уведут со страницы. Мост обязан
     // умереть: иначе возврат на страницу поиска в пределах TTL (например,
     // игрок вышел из начавшейся игры) принял бы его за развал лобби.
+    // Ветка СБРАСЫВАЕТ окно, поэтому терминального warn тут не будет никогда:
+    // если лоадер подвиснет, машина молча сидела бы до ухода со страницы
+    // (ревью 02.08.2026). Говорим по фронту.
+    if (!gameStartingLogged) {
+      gameStartingLogged = true;
+      log.info(SCOPE, "лобби стартует — не вмешиваемся");
+    }
     clearPending();
     disappearedAt = 0;
     return;
@@ -509,7 +564,13 @@ function tick(): void {
   const now = Date.now();
   if (!disappearedAt) disappearedAt = now;
   if (now - disappearedAt > ARM_WINDOW_MS) {
-    log.debug(SCOPE, "окно возврата истекло — не вмешиваемся");
+    // Терминальный исход №1: окно кончилось, кнопку так и не увидели.
+    log.warn(
+      SCOPE,
+      "автовозврат остановлен: за",
+      `${Math.round(ARM_WINDOW_MS / 1000)} с`,
+      "кнопка «Играть» не появилась",
+    );
     reset();
     return;
   }
@@ -525,7 +586,9 @@ function tick(): void {
   const play = document.querySelector<HTMLButtonElement>(SITE.profileSearchButton);
   if (!play || !isVisible(play)) return; // скелетон загрузки — ждём в пределах окна
   if (play.disabled || play.hasAttribute("disabled")) {
-    // Не выбраны очереди — решение за игроком, не за нами.
+    // Не выбраны очереди — решение за игроком, не за нами. Раньше выходили
+    // молча, и в файле это не отличалось от «машина перестала тикать» (QR-1).
+    log.info(SCOPE, "автовозврат остановлен: кнопка «Играть» недоступна — не выбраны очереди");
     reset();
     return;
   }
@@ -536,7 +599,15 @@ function tick(): void {
   }
   if (now - lastClickAt < MIN_CLICK_INTERVAL_MS) return; // пауза между попытками
   // Игрок только что кликал/печатал сам — он у панели, дорога его (ревью №3).
-  if (now - lastTrustedInputAt < USER_BACKOFF_MS) return;
+  if (now - lastTrustedInputAt < USER_BACKOFF_MS) {
+    // По фронту, не на каждый тик: строка нужна, чтобы отличить «мы уступили
+    // человеку» от «машина умерла», но тиков тут четыре в секунду (QR-1).
+    if (!backoffLogged) {
+      backoffLogged = true;
+      log.info(SCOPE, "автовозврат отложен: игрок только что действовал сам");
+    }
+    return;
+  }
   // Фоновая вкладка = игрока может не быть у экрана: клик запрещён, но гейт
   // стоит ИМЕННО ЗДЕСЬ, в кликовой секции — состояние и окно выше живут и в
   // фоне (dom.ts тикает таймером), и окно честно истекает. Ранний return в
@@ -613,6 +684,10 @@ export const queueRequeueFeature: Feature = {
     roomExitDone = false;
     disbandmentSeen = false;
     disbandmentLogged = false;
+    roomExitDeferLogged.hidden = false;
+    roomExitDeferLogged.userInput = false;
+    roomExitDeferLogged.retryScreen = false;
+    gameStartingLogged = false;
     disbandmentGoneAt = 0;
     disbandmentLastSeconds = -1;
     elsewhereDone = false;

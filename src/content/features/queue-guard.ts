@@ -41,21 +41,60 @@ function isSearching(): boolean {
 }
 
 function disarm(reason: string): void {
+  // Счётчик попыток обнуляем и при снятии, и когда взводить уже нечего:
+  // следующий эпизод поиска обязан получить свежий бюджет.
+  armAttempts = 0;
+  armFailureLogged = false;
   if (!armed) return;
   armed = false;
   void sendRuntime({ action: "queueGuardCancel" }).catch(() => {
     /* background спит — будильник и так одноразовый */
   });
-  log.debug(SCOPE, "disarmed", reason);
+  // Переход состояния: без него «уведомления не было» не отличалось от
+  // «оно было снято по делу» (QG-2).
+  log.info(SCOPE, "предупреждение о фоновой очереди снято:", reason);
 }
+
+/**
+ * Сколько раз пробуем взвести будильник, прежде чем сдаться до смены
+ * видимости. Без потолка отказ превращался в поток `warn` со скоростью
+ * мутаций: `arm()` зовётся из onDomChange, секундомер очереди перерисовывается
+ * раз в секунду, а реальные отказы (осиротевшая после обновления вкладка)
+ * стойкие — цикл сам не заканчивался (ревью 02.08.2026).
+ */
+const MAX_ARM_ATTEMPTS = 3;
+let armAttempts = 0;
+let armFailureLogged = false;
 
 function arm(): void {
   if (armed) return;
+  if (armAttempts >= MAX_ARM_ATTEMPTS) return;
+  armAttempts++;
+  // Латч ставим ДО ответа (иначе на каждый тик уйдёт новый запрос), но
+  // «взведено» объявляем только по подтверждению фона: раньше строка
+  // утверждала успех, которого могло не быть — sendRuntime гасит отказ и
+  // возвращает undefined (аудит наблюдаемости 02.08.2026, QG-1).
   armed = true;
-  void sendRuntime({ action: "queueGuardArm" }).catch((e) =>
-    log.debug(SCOPE, "arm failed", e),
-  );
-  log.info(SCOPE, "armed: вкладка скрыта во время поиска");
+  void sendRuntime<{ ok?: boolean; reason?: string }>({ action: "queueGuardArm" })
+    .then((res) => {
+      if (res?.ok) {
+        armFailureLogged = false;
+        log.info(SCOPE, "предупреждение о фоновой очереди взведено: будильник подтверждён");
+        return;
+      }
+      armed = false;
+      // По фронту: строка нужна один раз на эпизод, а не на каждую попытку.
+      if (!armFailureLogged) {
+        armFailureLogged = true;
+        log.warn(
+          SCOPE,
+          "предупреждение о фоновой очереди НЕ взведено:",
+          res?.reason ?? "фон не ответил",
+          `— попыток ${armAttempts}/${MAX_ARM_ATTEMPTS}, игрока о разрыве очереди не предупредим`,
+        );
+      }
+    })
+    .catch((e) => log.debug(SCOPE, "arm failed", e));
 }
 
 /** Две независимые оси: фича включена настройкой И мы на нужном маршруте. */
