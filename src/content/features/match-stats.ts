@@ -11,6 +11,7 @@
 import { SITE } from "@core/selectors";
 import { onDomChange } from "@core/dom";
 import { escapeHtml } from "@core/escape";
+import { actionTip, isLiftBallot, resolveDayOutcome } from "../match-outcome";
 import { log } from "@core/log";
 import { getLastGameData, getMatchId } from "../match-data";
 import type { Feature, FeatureContext } from "@core/feature";
@@ -329,55 +330,6 @@ function renderVotesBlock(
  * ничья в подъёме по-прежнему трактуется как уход — маркер «против» пока
  * не встречался в данных (ожидаемо `candidate: 0`).
  */
-/** Бюллетень «поднимаем всех?» дня: записи голосов без поля num. */
-function isLiftBallot(vote: any): boolean {
-  return vote.num === undefined || vote.num === null;
-}
-
-function resolveDayOutcome(
-  votes: any[],
-  day: number,
-): {
-  finalNum: number;
-  counts: Array<[number, number]>;
-  tied: boolean;
-  departed: number[];
-} {
-  const dayVotes = votes.filter((vote: any) => vote.day === day && !isLiftBallot(vote));
-  const finalNum = dayVotes.reduce(
-    (max: number, vote: any) => Math.max(max, vote.num || 0),
-    0,
-  );
-  const countsByCandidate = new Map<number, number>();
-  dayVotes
-    .filter((vote: any) => (vote.num || 0) === finalNum)
-    .forEach((vote: any) => {
-      countsByCandidate.set(
-        vote.candidate,
-        (countsByCandidate.get(vote.candidate) || 0) + 1,
-      );
-    });
-  const counts = [...countsByCandidate.entries()].sort((a, b) => b[1] - a[1]);
-  const tied = counts.length >= 2 && counts[0][1] === counts[1][1];
-
-  let departed: number[] = [];
-  if (finalNum > 0 && counts.length > 0) {
-    if (!tied) {
-      departed = [counts[0][0]];
-    } else if (finalNum >= 2) {
-      const ballot = votes.filter((v: any) => v.day === day && isLiftBallot(v));
-      const yes = ballot.filter((v: any) => v.candidate === 1).length;
-      const no = ballot.length - yes;
-      // Бюллетень есть → он решает; бюллетеня нет → допущение «попил состоялся».
-      if (ballot.length === 0 || yes > no) {
-        const top = counts[0][1];
-        departed = counts.filter(([, cnt]) => cnt === top).map(([pos]) => pos);
-      }
-    }
-  }
-
-  return { finalNum, counts, tied, departed };
-}
 
 function enhanceTable(table: HTMLElement, gameData: any): void {
   const gameDetails = gameData.data || {};
@@ -926,22 +878,6 @@ function addBestMoveStyles(): void {
 
 // ───────────────────────── фазы / иконки ─────────────────────────
 
-/** Пояснение к иконке ночного действия (показывается на hover). */
-function actionTip(type: string, to: unknown): string {
-  const n = `№${to}`;
-  switch (type) {
-    case "kill":
-      return `Выстрел мафии → ${n}`;
-    case "check":
-      return `Проверка шерифа → ${n}`;
-    case "don_check":
-      return `Проверка дона → ${n}`;
-    case "vote":
-      return `Голос → ${n}`;
-    default:
-      return `Действие → ${n}`;
-  }
-}
 
 /**
  * Эмодзи вместо картинок с трёх сторонних CDN: раньше каждая страница матча

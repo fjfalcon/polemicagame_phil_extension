@@ -231,10 +231,19 @@ describe("AGENTS §4 source safety", () => {
   });
 
   test("§4.8: lift ballots without num remain explicitly separated", () => {
-    const source = read("src/content/features/match-stats.ts");
+    // Логика переехала в чистый src/content/match-outcome.ts: это
+    // единственное место, где расширение делает ВЫВОД о матче, а не
+    // пересказывает данные сайта — и теперь оно проверяется поведением.
+    const source = read("src/content/match-outcome.ts");
     expect(source).toMatch(/vote\.num\s*===\s*undefined\s*\|\|\s*vote\.num\s*===\s*null/);
     expect(source).toMatch(/yes\s*>\s*no/);
     expect(source).toMatch(/departed:\s*number\[\]/);
+    // Рендерер обязан пользоваться модулем, а не заводить свою копию правил.
+    const renderer = read("src/content/features/match-stats.ts");
+    expect(renderer).toMatch(/from "\.\.\/match-outcome"/);
+    expect(renderer, "вторая копия правила исхода дня разъедется с первой").not.toMatch(
+      /function resolveDayOutcome/,
+    );
   });
 });
 
