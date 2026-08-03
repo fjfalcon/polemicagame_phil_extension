@@ -93,6 +93,14 @@ export const SITE = {
   roomDeadLink: ".error a[href='/game-search']",
   /** «Попробовать снова» — это ошибка СВЯЗИ, комната может быть жива. */
   roomRetryButton: ".error a.error__main-buttons-item:not([href])",
+  /**
+   * ВСЕ главные кнопки экрана ошибки комнаты. Нужны целиком: ссылка на поиск
+   * сама по себе развала НЕ доказывает — экран исключения (`on_self_strike`,
+   * kicked) рисует home+search, и клик по search вернул бы исключённого
+   * игрока в очередь (аудит автовозврата 03.08.2026, RQ-5). Развал сайт
+   * рисует ЕДИНСТВЕННОЙ кнопкой-ссылкой на /game-search (`on_stop_game`).
+   */
+  roomErrorButtons: ".error a.error__main-buttons-item",
   // Игровая страница: стартовый экран, лобби, веб-камера (auto-start)
   welcomeModal: ".common-room-modal",
   lobbyStageName: ".new-stage__name",

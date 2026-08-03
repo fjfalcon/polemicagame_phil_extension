@@ -20,6 +20,7 @@ import { keyboard } from "@core/keyboard";
 import { log } from "@core/log";
 import { SITE, TEXT, OWN, classifyPhaseText, endedScreenVisible } from "@core/selectors";
 import { isAutoAcceptSuppressed } from "../auto-accept-gate";
+import { noteAutoAcceptDispatched } from "./queue-requeue";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const SCOPE = "auto-start";
@@ -261,6 +262,11 @@ function clickAcceptButtons() {
     if (!consumeClickBudget(button, "кнопка")) return;
     log.debug(SCOPE, "click accept button", button.textContent);
     button.click();
+    // Клик прошёл синхронно и не бросил — фиксируем принятие для автовозврата
+    // напрямую: наш собственный клик не isTrusted, слушатель queue-requeue его
+    // не увидит, а по любому НЕдоверенному DOM-событию латчиться нельзя —
+    // страница умеет генерировать что угодно (аудит 03.08.2026, RQ-2).
+    noteAutoAcceptDispatched();
 
     // После старта — один раз пытаемся включить видео.
     // Таймер именованный и гасится в disableAutoAccept: без ссылки на него
@@ -284,13 +290,13 @@ function clickAcceptButtons() {
 
   // Клик по карточкам приёма игры
   gameAcceptDivs.forEach((div) => {
-    if (consumeClickBudget(div, "карточка")) safeClick(div);
+    if (consumeClickBudget(div, "карточка") && safeClick(div)) noteAutoAcceptDispatched();
   });
 
   // Доп. элементы с текстом «Принять игру»
   acceptGameElements.forEach((el) => {
     if (readyButtons.includes(el as HTMLButtonElement) || gameAcceptDivs.includes(el)) return;
-    if (consumeClickBudget(el, "текстовый блок")) safeClick(el);
+    if (consumeClickBudget(el, "текстовый блок") && safeClick(el)) noteAutoAcceptDispatched();
   });
 }
 
