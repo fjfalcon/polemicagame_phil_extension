@@ -237,6 +237,8 @@ const SAMPLE_FRESH_MS = 3000;
 let elsewhereDone = false;
 /** Про недоступное хранилище на главной уже сказали (не на каждый тик). */
 let elsewhereStorageWarned = false;
+/** Про невозможность сохранить мост уже сказали (освежение идёт на каждом тике). */
+let armStorageWarned = false;
 /** Мост для этапа 1 уже поставлен в этом сборе лобби. */
 let acceptArmed = false;
 /** Про отложенный из-за действий игрока клик уже сказали (не на каждый тик). */
@@ -434,7 +436,11 @@ function roomTick(): void {
     // рисует home+search, ошибка медиа — search+reload, потеря сессии — один
     // action без ссылок. Клик по search здесь вернул бы в очередь игрока,
     // которого сервер только что исключил (аудит 03.08.2026, RQ-5).
-    // Неоднозначный экран сильнее отсчёта: исключить могли и ВО ВРЕМЯ него.
+    // Неоднозначный экран сильнее отсчёта: исключить могли и ВО ВРЕМЯ него —
+    // и тогда мост, взведённый отсчётом, уже лежит в sessionStorage. Не
+    // погасить его = вернуть исключённого в очередь с задержкой в один клик:
+    // «На главную» → elsewhereTick → поиск → автоклик (ревью 04.08, блокер 1).
+    clearPending();
     if (!ambiguousErrorLogged) {
       ambiguousErrorLogged = true;
       log.info(SCOPE, "автовозврат не выполнен: экран ошибки комнаты не подтверждает развал");
@@ -459,6 +465,9 @@ function roomTick(): void {
   if (!roomReady) {
     if (!notReadyAnnounced) {
       notReadyAnnounced = true;
+      // Эпизод закрыт: чужая метка (например, от принятия на поиске) не
+      // должна утащить неготового игрока с главной сразу после этого тоста.
+      clearPending();
       log.info(SCOPE, "возврат не выполнен: готовность не была подтверждена игроком");
       showToast("Возврат в поиск не выполнен: вы не подтвердили готовность", {
         key: "requeue-not-ready",
@@ -539,14 +548,24 @@ function classifyRoomErrorScreen():
  */
 function armPending(): void {
   try {
-    const raw = sessionStorage.getItem(PENDING_KEY);
-    const prior = raw === null ? null : parseMark(raw);
-    sessionStorage.setItem(PENDING_KEY, serializeMark(refreshMark(prior, Date.now())));
+    const now = Date.now();
+    const verdict = validateMark(sessionStorage.getItem(PENDING_KEY), now);
+    // issuedAt наследуем ТОЛЬКО у живой метки. Остаток мёртвого эпизода
+    // (страница поиска живёт между сборами лобби без перезагрузки) отравил
+    // бы потолок: новый честный мост рождался бы уже «старше 10 минут»
+    // (ревью 04.08.2026, блокер 2).
+    const prior = verdict?.ok ? verdict.mark : null;
+    sessionStorage.setItem(PENDING_KEY, serializeMark(refreshMark(prior, now)));
   } catch {
     // Приватный режим/запрет хранилища: перейдём без автоклика на поиске.
     // Раньше отказ был нем, и «мост не сработал» не отличалось от «мост не
-    // ставили» (аудит наблюдаемости 02.08.2026, QR-3).
-    log.warn(SCOPE, "не удалось сохранить мост автовозврата — хранилище страницы недоступно");
+    // ставили» (аудит наблюдаемости 02.08.2026, QR-3). Латч обязателен:
+    // освежение зовётся на каждом тике живого условия, без него это был бы
+    // warn-флуд на весь отсчёт (ревью 04.08.2026).
+    if (!armStorageWarned) {
+      armStorageWarned = true;
+      log.warn(SCOPE, "не удалось сохранить мост автовозврата — хранилище страницы недоступно");
+    }
   }
 }
 
@@ -770,6 +789,8 @@ function syncRoute(): void {
   resetRoomEpisode();
   reset();
   elsewhereDone = false;
+  hiddenAt = 0;
+  armStorageWarned = false;
   // Мост потребляется на ВХОДЕ на страницу поиска — SPA-переход не проходит
   // через enable(), а метка одноразовая и ждать её больше некому.
   if (isSearchPage()) consumePendingFromRoom();
@@ -870,6 +891,9 @@ function tick(): void {
   if (!disappearedAt) disappearedAt = now;
   if (now - disappearedAt > ARM_WINDOW_MS) {
     // Терминальный исход №1: окно кончилось, кнопку так и не увидели.
+    // Эпизод закрыт — метка гасится: иначе ручная перезагрузка в пределах
+    // TTL реанимировала бы уже сдавшуюся машину (ревью 04.08.2026).
+    clearPending();
     log.warn(
       SCOPE,
       "автовозврат остановлен: за",
@@ -883,6 +907,7 @@ function tick(): void {
   // Сайт открыл модалку (например «Вы уже в поиске» при рассинхроне с
   // сервером) — дальше решает игрок, автоклики прекращаем.
   if (siteModalOpen()) {
+    clearPending();
     log.warn(SCOPE, "открыта модалка сайта — прекращаем автоповтор");
     reset();
     return;
@@ -900,11 +925,13 @@ function tick(): void {
   if (play.disabled || play.hasAttribute("disabled")) {
     // Не выбраны очереди — решение за игроком, не за нами. Раньше выходили
     // молча, и в файле это не отличалось от «машина перестала тикать» (QR-1).
+    clearPending();
     log.info(SCOPE, "автовозврат остановлен: кнопка «Играть» недоступна — не выбраны очереди");
     reset();
     return;
   }
   if (attempts >= MAX_CLICK_ATTEMPTS) {
+    clearPending();
     log.warn(SCOPE, "«Играть» не сработала за", MAX_CLICK_ATTEMPTS, "попытки — сдаёмся");
     reset();
     return;
@@ -1023,6 +1050,10 @@ export const queueRequeueFeature: Feature = {
     resetRoomEpisode();
     elsewhereDone = false;
     elsewhereStorageWarned = false;
+    armStorageWarned = false;
+    // Без этого сброса бэкофф пережил бы выключение фичи, а в тестах —
+    // соседний тест (ревью 04.08.2026: вакуумность «ста тиков без строк»).
+    lastTrustedInputAt = 0;
     lastPathname = "";
     cancelDecision();
     reset();

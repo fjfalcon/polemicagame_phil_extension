@@ -27,6 +27,7 @@ import {
 } from "@content/features/queue-requeue";
 import { log } from "@core/log";
 import { showToast } from "@core/toast";
+import { serializeMark } from "@content/features/requeue-pending";
 import type { Settings } from "@shared/types";
 
 const PENDING_KEY = "pn_requeue_pending";
@@ -239,6 +240,43 @@ describe("RQ-5: экран ошибки должен ДОКАЗЫВАТЬ раз
     expect(sessionStorage.getItem(PENDING_KEY)).not.toBeNull();
   });
 
+  test("кик ВО ВРЕМЯ отсчёта гасит уже взведённый мост", () => {
+    // Блокер ревью 04.08.2026: отсчёт взвёл мост, сервер исключил игрока —
+    // ambiguous-экран обязан УБИТЬ метку, иначе «На главную» → elsewhereTick
+    // → поиск → автоклик, и исключённый игрок вернулся в очередь.
+    pregameWithCountdown(true, "00:02");
+    queueRequeueFeature.enable(ctx);
+    domSubscriber?.();
+    expect(sessionStorage.getItem(PENDING_KEY), "мост взведён отсчётом").not.toBeNull();
+
+    errorScreen([
+      { href: "https://polemicagame.com", title: "На главную" },
+      { href: "/game-search", title: "Поиск игры" },
+    ]);
+    domSubscriber?.(); // тик 1: отсчёт исчез → грейс
+    domSubscriber?.(); // тик 2: экран классифицирован
+    expect(infoHas("не подтверждает развал")).toBe(true);
+    expect(infoHas(EXIT_MESSAGE)).toBe(false);
+    expect(sessionStorage.getItem(PENDING_KEY), "метка исключённого обязана умереть").toBeNull();
+  });
+
+  test("остаток мёртвого эпизода не отравляет issuedAt нового моста", () => {
+    // Блокер ревью 04.08.2026: страница живёт между сборами лобби без
+    // перезагрузки. Наследование issuedAt протухшей метки делало новый
+    // честный мост «старше потолка» с рождения.
+    const ancient = Date.now() - 11 * 60_000;
+    sessionStorage.setItem(
+      PENDING_KEY,
+      serializeMark({ issuedAt: ancient, refreshedAt: ancient }),
+    );
+    pregameWithCountdown(true);
+    queueRequeueFeature.enable(ctx);
+    const mark = JSON.parse(sessionStorage.getItem(PENDING_KEY) as string) as {
+      issuedAt: number;
+    };
+    expect(mark.issuedAt, "новый эпизод начинается сейчас, а не 11 минут назад").toBe(Date.now());
+  });
+
   test("потеря сессии (один action без href) — решает игрок", () => {
     // Такой экран перехватывает вето «Попробовать снова»: action-кнопка без
     // ссылки — признак восстановимой ошибки, комната может быть жива.
@@ -342,6 +380,58 @@ describe("RQ-8/RQ-9: эпизоды и маршруты", () => {
       sessionStorage.getItem(PENDING_KEY),
       "готовность прошлой комнаты не наследуется",
     ).toBeNull();
+  });
+
+  test("SPA-вход на поиск потребляет мост (consume в syncRoute)", () => {
+    // Мутант ревью 04.08: consume жил только в enable(), SPA-переход на
+    // поиск оставлял метку лежать, а автоклик — не взводился.
+    pregameWithCountdown(true, "00:20");
+    queueRequeueFeature.enable(ctx);
+    domSubscriber?.();
+    expect(sessionStorage.getItem(PENDING_KEY)).not.toBeNull();
+
+    history.replaceState(null, "", "/game-search");
+    document.body.innerHTML = "";
+    domSubscriber?.();
+    expect(infoHas("взводим автоклик")).toBe(true);
+    expect(sessionStorage.getItem(PENDING_KEY), "метка одноразовая").toBeNull();
+  });
+
+  test("бэкофф на главной истекает сам: мост доводит до поиска без мутаций", () => {
+    // Мутант ревью 04.08: вечный бэкофф на статичной главной.
+    history.replaceState(null, "", "/");
+    document.body.innerHTML = "";
+    queueRequeueFeature.enable(ctx);
+    noteTrustedInput();
+    sessionStorage.setItem(
+      PENDING_KEY,
+      serializeMark({ issuedAt: Date.now() - 5_000, refreshedAt: Date.now() - 1_000 }),
+    );
+    domSubscriber?.(); // единственный тик: бэкофф уступает игроку
+    expect(infoHas("ведём на страницу поиска")).toBe(false);
+    vi.advanceTimersByTime(2_300);
+    expect(infoHas("ведём на страницу поиска"), "пробуждение после бэкоффа обязано быть").toBe(
+      true,
+    );
+  });
+
+  test("ложное раннее пробуждение не съедает грейс-паузу роспуска", () => {
+    // Мутант ревью 04.08: visibilitychange в середине 12-секундного грейса
+    // коалесцирует единственный таймер на 300 мс; ранний тик обязан
+    // перепланировать остаток — иначе в замёрзшей комнате пауза не истечёт
+    // никогда.
+    pregameWithCountdown(true, "00:01");
+    queueRequeueFeature.enable(ctx);
+    domSubscriber?.();
+    document.querySelector(".disbandment-timer")?.remove();
+    domSubscriber?.();
+
+    vi.advanceTimersByTime(5_000);
+    document.dispatchEvent(new Event("visibilitychange")); // перехват таймера
+    vi.advanceTimersByTime(400); // ранний тик: грейс ещё не истёк
+    expect(infoHas(EXIT_MESSAGE)).toBe(false);
+    vi.advanceTimersByTime(8_000);
+    expect(infoHas(EXIT_MESSAGE), "остаток грейса обязан быть перепланирован").toBe(true);
   });
 
   test("сто тиков на главной без метки — ноль строк про мост", () => {
