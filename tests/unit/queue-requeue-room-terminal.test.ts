@@ -253,11 +253,28 @@ describe("RQ-5: экран ошибки должен ДОКАЗЫВАТЬ раз
       { href: "https://polemicagame.com", title: "На главную" },
       { href: "/game-search", title: "Поиск игры" },
     ]);
-    domSubscriber?.(); // тик 1: отсчёт исчез → грейс
-    domSubscriber?.(); // тик 2: экран классифицирован
+    // ОДИН тик, как в проде: сайт убирает отсчёт и рисует экран одним
+    // рендером — одним mutation batch. Уход в грейс-паузу раньше
+    // классификации оставлял метку живой ещё ~12 секунд — ровно пока
+    // исключённый читает кнопку «На главную» (контрольное ревью 04.08).
+    domSubscriber?.();
+    expect(sessionStorage.getItem(PENDING_KEY), "метка обязана умереть В ЭТОМ ЖЕ тике").toBeNull();
     expect(infoHas("не подтверждает развал")).toBe(true);
+    // И после грейса ничего не «дозревает».
+    vi.advanceTimersByTime(13_000);
     expect(infoHas(EXIT_MESSAGE)).toBe(false);
-    expect(sessionStorage.getItem(PENDING_KEY), "метка исключённого обязана умереть").toBeNull();
+    expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
+  });
+
+  test("узкая форма в одном тике с исчезнувшим отсчётом — уход БЕЗ грейс-паузы", () => {
+    // Экран смерти доказывает развал сам: 12-секундная пауза нужна только
+    // когда комната умерла молча.
+    pregameWithCountdown(true, "00:02");
+    queueRequeueFeature.enable(ctx);
+    domSubscriber?.();
+    errorScreen([{ href: "/game-search", title: "Поиск игры" }]);
+    domSubscriber?.();
+    expect(infoHas(EXIT_MESSAGE), "уход в том же тике, грейс не нужен").toBe(true);
   });
 
   test("остаток мёртвого эпизода не отравляет issuedAt нового моста", () => {
