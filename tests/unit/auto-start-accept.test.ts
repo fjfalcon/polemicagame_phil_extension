@@ -107,6 +107,36 @@ describe("стартовое окно: один клик на попытку", (
     expect(vi.mocked(safeClick), "safeClick — путь текстовой ветки").not.toHaveBeenCalled();
   });
 
+  test("выключенная кнопка не съедает попытку — текстовый фолбэк спасает", () => {
+    // Ранний return кнопочной ветки глушит фолбэк: без фильтра !disabled
+    // клик по мёртвой кнопке молча съедал бы попытку целиком.
+    document.body.innerHTML = `
+      <div class="common-room-modal">
+        <p>Добро пожаловать</p>
+        <button disabled>НАЧАТЬ ИГРУ</button>
+        <div class="button">НАЧАТЬ ИГРУ</div>
+      </div>`;
+    autoStartFeature.enable(ctx);
+    vi.advanceTimersByTime(1_100);
+    expect(infoCount("клик по кнопке")).toBe(0);
+    expect(infoCount("клик по тексту")).toBe(1);
+  });
+
+  test("текст «Принять игру» внутри ПРИНЯТОГО блока не кликается (симметрия фильтра)", () => {
+    // Сегодня принятая карточка меняет подпись, но защита текстового пути
+    // не должна держаться на подписи сайта.
+    history.replaceState(null, "", "/game-search");
+    document.body.innerHTML = `
+      <div class="p-play__profile-panel"><div class="p-play-profile__wr">
+        <div class="p-play__profile-game p-play__profile-accept">
+          <div class="animation-on-active-child">Принять игру</div>
+        </div>
+      </div></div>`;
+    autoStartFeature.enable(ctx);
+    vi.advanceTimersByTime(2_200);
+    expect(vi.mocked(safeClick)).not.toHaveBeenCalled();
+  });
+
   test("окно без <button> — текстовый фолбэк работает", () => {
     document.body.innerHTML = `
       <div class="common-room-modal">

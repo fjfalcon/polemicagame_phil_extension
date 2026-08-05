@@ -109,6 +109,24 @@ const ACCEPT_CANDIDATE_SELECTOR =
 const ACCEPT_SCOPE_SELECTOR =
   ".p-play__profile-accept, .p-play-profile__wr, .p-play__profile-panel";
 
+/**
+ * Кандидат НЕ лежит внутри уже принятого блока принятия.
+ *
+ * УЖЕ ПРИНЯТЫЙ блок — не цель, и фильтр обязан быть центральным для ВСЕХ
+ * путей сбора (primary-селектор, fallback, wrapper-дети, текстовые цели):
+ * cursor-pointer сайт держит ровно до принятия (бандл game-search:
+ * :class="{cursor-pointer: !isGameAccepted}"), а сам блок после принятия
+ * ОСТАЁТСЯ в DOM — он же показывает «Готовы: N/10». Клики по принятому не
+ * делают ничего (acceptGame сам гардится isGameAccepted), но сжигали бюджет
+ * за ~2 секунды и ложили терминальный warn «не дали результата» на путь
+ * УСПЕХА — мина под разбор любой жалобы на автопринятие (лог 04.08.2026,
+ * разбор «через раз» 05.08.2026).
+ */
+function notInsideAcceptedBlock(el: HTMLElement): boolean {
+  const acceptRoot = el.closest<HTMLElement>(SITE.profileAccept);
+  return !(acceptRoot && !acceptRoot.classList.contains("cursor-pointer"));
+}
+
 function findAcceptTextElements(): HTMLElement[] {
   const matched = Array.from(
     document.querySelectorAll<HTMLElement>(ACCEPT_CANDIDATE_SELECTOR),
@@ -185,7 +203,10 @@ function clickAcceptButtons() {
   // Игрок только что кликал сам — не вмешиваемся, он пользуется интерфейсом.
   if (Date.now() - lastUserClickAt < USER_ACTION_BACKOFF_MS) return;
 
-  const acceptGameElements = findAcceptTextElements();
+  // Симметрия центрального фильтра: сегодня текстовый путь спасает смена
+  // текста принятой карточки, но держать защиту на подписи сайта нельзя
+  // (контрольное ревью 05.08.2026).
+  const acceptGameElements = findAcceptTextElements().filter(notInsideAcceptedBlock);
 
   // ТОЧНОЕ совпадение текста, а не подстрока: «Не готов» содержит «готов»,
   // «Подтвердить пароль» — «подтвердить». Прежний вариант жал любую такую
@@ -258,10 +279,7 @@ function clickAcceptButtons() {
   // делают ничего, но сжигали бюджет за ~2 секунды и ложили терминальный
   // warn «не дали результата» на путь УСПЕХА — мина под разбор любой жалобы
   // на автопринятие (лог 04.08.2026, разбор «через раз» 05.08.2026).
-  gameAcceptDivs = gameAcceptDivs.filter((el) => {
-    const acceptRoot = el.closest<HTMLElement>(SITE.profileAccept);
-    return !(acceptRoot && !acceptRoot.classList.contains("cursor-pointer"));
-  });
+  gameAcceptDivs = gameAcceptDivs.filter(notInsideAcceptedBlock);
 
   gameAcceptDivs = Array.from(new Set(gameAcceptDivs));
   // Оставляем только самые глубокие совпадения: textContent наследуется, и в
@@ -880,8 +898,16 @@ function clickStartGameButton() {
   const modalText = norm(welcomeModal);
   const hasWelcomeText = containsAny(modalText, TEXT.welcome);
 
+  // Видимость и disabled обязательны: ранний return кнопочной ветки теперь
+  // глушит текстовый фолбэк, и скрытая/выключенная кнопка молча съедала бы
+  // попытку. Сегодня бандл рисует единственную всегда активную кнопку
+  // (ButtonComp без disabled-байндинга), но защита держится на нашем фильтре,
+  // а не на везении разметки (контрольное ревью 05.08.2026).
   const startButtons = Array.from(welcomeModal.querySelectorAll<HTMLButtonElement>("button")).filter(
-    (btn) => containsAny((btn.textContent || "").toLowerCase(), TEXT.startGameButton),
+    (btn) =>
+      containsAny((btn.textContent || "").toLowerCase(), TEXT.startGameButton) &&
+      !btn.disabled &&
+      isVisible(btn),
   );
 
   if (!hasWelcomeText && startButtons.length === 0) return;
@@ -920,7 +946,7 @@ function clickStartGameButton() {
   );
 
   // Только видимый элемент (§4.2): у окна сайта бывают заготовленные, но
-  // скрытые кнопки, а кнопочная ветка выше проходит через isVisible.
+  // скрытые узлы. Кнопочная ветка выше фильтрует по isVisible и !disabled.
   const startTarget = startElements.find((el) => isVisible(el));
   if (startTarget) {
     log.info(SCOPE, "стартовое окно: попытка", startClickAttempts, "— клик по тексту");
