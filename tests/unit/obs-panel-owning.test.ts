@@ -17,6 +17,7 @@ const running = {
   pathname: "/game",
   phaseKnown: true,
   phaseSeenLive: true,
+  pregameVisible: false,
   matchFinished: false,
 };
 
@@ -43,6 +44,13 @@ describe("ведёт ли вкладка автосцену (ответ на п�
     // Вкладка только открылась: сцену она пока не переключала, и держать
     // владение ей не за что.
     expect(drivesAutoScene({ ...running, phaseKnown: false })).toBe(false);
+  });
+
+  test("виден экран набора игроков — матч не идёт, не ведём", () => {
+    // Прямой сигнал для «та же комната, новая игра» (лог 05.08.2026):
+    // .new-stage сайт рисует ровно при voting_for_game_start — владение
+    // отдаётся сразу, не дожидаясь протухания по непониманию.
+    expect(drivesAutoScene({ ...running, pregameVisible: true })).toBe(false);
   });
 
   test("фаза лишь ВОССТАНОВЛЕНА из общего storage — не ведём", () => {

@@ -84,6 +84,14 @@ export function drivesAutoScene(input: {
    * «фаза подтверждена» держал владение весь вечер).
    */
   phaseSeenLive: boolean;
+  /**
+   * Виден экран набора игроков (`.new-stage`) — сайт рисует его РОВНО при
+   * `voting_for_game_start`, то есть это прямое доказательство, что матч в
+   * этой вкладке НЕ идёт. Главный сигнал для сценария «та же комната, новая
+   * игра»: владение отдаётся сразу, а протухание по непониманию остаётся
+   * страховкой для комнат, где не видно ни маркеров, ни пре-гейма.
+   */
+  pregameVisible: boolean;
   matchFinished: boolean;
 }): boolean {
   return (
@@ -91,6 +99,7 @@ export function drivesAutoScene(input: {
     isGameRoomPath(input.pathname) &&
     input.phaseKnown &&
     input.phaseSeenLive &&
+    !input.pregameVisible &&
     !input.matchFinished
   );
 }
@@ -102,6 +111,12 @@ export function drivesAutoScene(input: {
  */
 function fixedStateScreenVisible(): boolean {
   const el = document.querySelector<HTMLElement>(SITE.roomFixedState);
+  return !!el && isElementVisible(el);
+}
+
+/** Виден ли экран набора игроков — см. pregameVisible в drivesAutoScene. */
+function pregameScreenVisible(): boolean {
+  const el = document.querySelector<HTMLElement>(SITE.pregameScreen);
   return !!el && isElementVisible(el);
 }
 
@@ -1337,6 +1352,7 @@ export const obsPanelFeature: Feature = {
               (phaseUnknownSince === 0 ||
                 Date.now() - phaseUnknownSince <= OWNER_PHASE_STALE_MS ||
                 fixedStateScreenVisible()),
+            pregameVisible: pregameScreenVisible(),
             matchFinished: matchFinishedVisible(),
           }),
         });
