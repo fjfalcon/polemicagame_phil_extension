@@ -1293,7 +1293,10 @@ export const obsPanelFeature: Feature = {
             autoModeOn: autoModeEnabled,
             pathname: location.pathname,
             phaseKnown: currentTimeOfDay !== null,
-            phaseSeenLive: phaseConfirmedLive,
+            // Сверка комнаты прямо здесь, а не только в детекторе: быстрый
+            // SPA-прыжок в другую комнату оставлял флаг истинным до первого
+            // тика детектора (~2 с) — окно ложного «веду» (ревью 05.08.2026).
+            phaseSeenLive: phaseConfirmedLive && location.pathname === phaseFlagPathname,
             matchFinished: matchFinishedVisible(),
           }),
         });

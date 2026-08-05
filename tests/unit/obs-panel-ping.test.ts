@@ -192,6 +192,19 @@ describe("пинг владения: только живая фаза делае
     expect(await ping(), "фаза прошлой комнаты не защищает владение в новой").toBe(false);
   });
 
+  test("пинг сразу после SPA-прыжка — «не веду», не дожидаясь тика детектора", async () => {
+    // Сброс в детекторе ленивый (~2 с до первого тика); пинг обязан сверять
+    // комнату сам — иначе в эту щель вкладка отвечает «веду» чужой фазой.
+    seedRestoredDay();
+    await obsPanelFeature.enable(ctx);
+    nightMarkers();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(await ping()).toBe(true);
+
+    history.replaceState(null, "", "/game/999");
+    expect(await ping(), "ни одного тика в новой комнате — владения нет").toBe(false);
+  });
+
   test("запись старше потолка не восстанавливается и не трогает сцену эфира", async () => {
     // Контрольное ревью, находка 5: часовая запись проходила проверку
     // sessionId и уезжала в autoSwitchScene.
