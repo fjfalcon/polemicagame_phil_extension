@@ -249,6 +249,20 @@ function clickAcceptButtons() {
     log.debug(SCOPE, "profileAccept selector failed", e);
   }
 
+  // УЖЕ ПРИНЯТЫЙ блок — не цель, и фильтр обязан быть центральным: принятая
+  // карточка приходит и из primary-селектора (`.p-play__profile-game
+  // .p-play__profile-accept` без cursor-pointer), и из fallback, и детьми
+  // через wrapper. cursor-pointer сайт держит ровно до принятия (бандл:
+  // :class="{cursor-pointer: !isGameAccepted}"), а сам блок после принятия
+  // ОСТАЁТСЯ в DOM — он же показывает «Готовы: N/10». Клики по принятому не
+  // делают ничего, но сжигали бюджет за ~2 секунды и ложили терминальный
+  // warn «не дали результата» на путь УСПЕХА — мина под разбор любой жалобы
+  // на автопринятие (лог 04.08.2026, разбор «через раз» 05.08.2026).
+  gameAcceptDivs = gameAcceptDivs.filter((el) => {
+    const acceptRoot = el.closest<HTMLElement>(SITE.profileAccept);
+    return !(acceptRoot && !acceptRoot.classList.contains("cursor-pointer"));
+  });
+
   gameAcceptDivs = Array.from(new Set(gameAcceptDivs));
   // Оставляем только самые глубокие совпадения: textContent наследуется, и в
   // список попадали родитель И дитя — оба получали клик (дедуп 8.1.22 закрыл
@@ -881,6 +895,11 @@ function clickStartGameButton() {
     // Подпись кнопки не пишем: это текст сайта, сигнала он не добавляет.
     log.info(SCOPE, "стартовое окно: попытка", startClickAttempts, "— клик по кнопке");
     startButtons[0].click();
+    // Текстовая ветка ниже — ФОЛБЭК для окна без <button>, а не второй клик:
+    // раньше обе ветки срабатывали одним тиком («клик по кнопке» и «клик по
+    // тексту» в одну миллисекунду в логе 04.08.2026) — окно получало два
+    // синтетических клика подряд.
+    return;
   }
 
   // Доп. элементы с точным текстом «НАЧАТЬ ИГРУ». Только кликабельные
@@ -908,7 +927,6 @@ function clickStartGameButton() {
     safeClick(startTarget);
     return;
   }
-  if (startButtons.length > 0) return; // клик уже сделан кнопочной веткой выше
   // Окно есть, а нажимать нечего: раньше это состояние было полностью немым,
   // и «не пропустило стартовый экран» не имело в файле ни одного следа (AS-2).
   if (!welcomeUnknownLogged) {
