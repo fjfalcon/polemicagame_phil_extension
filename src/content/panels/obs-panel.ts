@@ -68,12 +68,22 @@ export function drivesAutoScene(input: {
   autoModeOn: boolean;
   pathname: string;
   phaseKnown: boolean;
+  /**
+   * Фаза подтверждена ЖИВЬЁМ в этой вкладке (детектор увидел маркеры стадии),
+   * а не восстановлена из общего storage. Без этого признака вкладка, ни разу
+   * не распознавшая фазу, отвечала «автосцену веду я» чужой фазой из
+   * `obs_auto_scene_state` — и живой матч в соседней вкладке получал отказ на
+   * каждой смене дня/ночи (жалоба 04.08.2026, лог: owner без единой строки
+   * «фаза подтверждена» держал владение весь вечер).
+   */
+  phaseSeenLive: boolean;
   matchFinished: boolean;
 }): boolean {
   return (
     input.autoModeOn &&
     isGameRoomPath(input.pathname) &&
     input.phaseKnown &&
+    input.phaseSeenLive &&
     !input.matchFinished
   );
 }
@@ -242,6 +252,12 @@ let currentScene: string | null = null;
 let obsSessionId: string | null = null;
 
 let currentTimeOfDay: TimeOfDay | null = null;
+/**
+ * Хоть раз за жизнь страницы фаза подтверждена детектором по живому DOM.
+ * `currentTimeOfDay` сюда не годится: его заполняет и restorePersistedAutoState
+ * из ОБЩЕГО storage.local — то есть фазой другой вкладки из прошлой игры.
+ */
+let phaseConfirmedLive = false;
 let lastAppliedRoleVisibility: string | null = null;
 const roleVisibilityDelayMs = 3000;
 /**
@@ -410,6 +426,7 @@ async function clearPersistedAutoState(resetRuntimeState = false): Promise<void>
     }
     obsSessionId = null;
     currentTimeOfDay = null;
+    phaseConfirmedLive = false;
     lastAppliedRoleVisibility = null;
   }
 }
@@ -915,6 +932,7 @@ function evaluateTimeOfDay(): void {
         // не видно даже того, распознали мы фазу или нет.
         log.info(SCOPE, "фаза подтверждена:", currentTimeOfDay, "→", confirmedTimeOfDay);
         currentTimeOfDay = confirmedTimeOfDay;
+        phaseConfirmedLive = true;
         pendingTimeOfDay = null;
         if (confirmedTimeOfDay === "day") await hideRoleBeforeDaySceneSwitch();
         scheduleRoleVisibility(confirmedTimeOfDay);
@@ -1238,6 +1256,7 @@ export const obsPanelFeature: Feature = {
             autoModeOn: autoModeEnabled,
             pathname: location.pathname,
             phaseKnown: currentTimeOfDay !== null,
+            phaseSeenLive: phaseConfirmedLive,
             matchFinished: matchFinishedVisible(),
           }),
         });
@@ -1304,6 +1323,7 @@ export const obsPanelFeature: Feature = {
     currentScene = null;
     obsSessionId = null;
     currentTimeOfDay = null;
+    phaseConfirmedLive = false;
     lastAppliedRoleVisibility = null;
     autoModeEnabled = false;
     dayScene = "";

@@ -16,6 +16,7 @@ const running = {
   autoModeOn: true,
   pathname: "/game",
   phaseKnown: true,
+  phaseSeenLive: true,
   matchFinished: false,
 };
 
@@ -42,5 +43,14 @@ describe("ведёт ли вкладка автосцену (ответ на п�
     // Вкладка только открылась: сцену она пока не переключала, и держать
     // владение ей не за что.
     expect(drivesAutoScene({ ...running, phaseKnown: false })).toBe(false);
+  });
+
+  test("фаза лишь ВОССТАНОВЛЕНА из общего storage — не ведём", () => {
+    // Жалоба 04.08.2026: restorePersistedAutoState читает obs_auto_scene_state,
+    // записанный ДРУГОЙ вкладкой в ПРОШЛОЙ игре, — currentTimeOfDay становится
+    // непустым без единой живой детекции. Такая вкладка отвечала «автосцену
+    // веду я» и весь вечер блокировала смену ночей у живого матча
+    // (owner=…220 в логе — ни одной строки «фаза подтверждена»).
+    expect(drivesAutoScene({ ...running, phaseSeenLive: false })).toBe(false);
   });
 });
