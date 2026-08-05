@@ -35,6 +35,12 @@ import type { ObsConnectionState, ObsScene } from "@shared/types";
 
 const SCOPE = "obs-panel";
 const OBS_STATE_MAX_AGE_MS = 2 * 60_000;
+/**
+ * Потолок возраста восстановимого состояния автосцены. Больше пары минут
+ * (смерть service worker + переподключение), но конечный: фаза — величина,
+ * живущая минуты, и «восстанавливать» её из другого часа бессмысленно.
+ */
+const RESTORE_MAX_AGE_MS = 10 * 60_000;
 
 type TimeOfDay = "day" | "night";
 type ConnStatus = "default" | "connected" | "error";
@@ -253,11 +259,20 @@ let obsSessionId: string | null = null;
 
 let currentTimeOfDay: TimeOfDay | null = null;
 /**
- * Хоть раз за жизнь страницы фаза подтверждена детектором по живому DOM.
- * `currentTimeOfDay` сюда не годится: его заполняет и restorePersistedAutoState
- * из ОБЩЕГО storage.local — то есть фазой другой вкладки из прошлой игры.
+ * Фаза распознана детектором ЭТОЙ вкладки по живым маркерам стадий — без
+ * фолбэка — хотя бы раз в ТЕКУЩЕЙ комнате (pathname). Два «не годится»:
+ *  • `currentTimeOfDay` — его заполняет и restorePersistedAutoState из ОБЩЕГО
+ *    storage.local, то есть фазой другой вкладки из прошлой игры;
+ *  • «подтверждённая СМЕНА фазы» — после F5 restore уже дал актуальную фазу,
+ *    смены не будет всю дневную фазу, и живой владелец не смог бы защитить
+ *    владение (контрольное ревью 04.08.2026, блокер 2); а фолбэк-«day» при
+ *    нераспознанных маркерах, наоборот, «подтверждал» смену из null и делал
+ *    флаг вакуумным (блокер 1).
+ * Единственная точка взведения — обёртка detectTimeOfDay при распознании.
  */
 let phaseConfirmedLive = false;
+/** Комната, в которой флаг взведён: смена pathname делает фазу «не живой». */
+let phaseFlagPathname = "";
 let lastAppliedRoleVisibility: string | null = null;
 const roleVisibilityDelayMs = 3000;
 /**
@@ -445,6 +460,16 @@ async function restorePersistedAutoState(status: any = null): Promise<boolean> {
     const res = await browser.storage.local.get(["obs_auto_scene_state"]);
     const stored = (res as any).obs_auto_scene_state as AutoSceneState | undefined;
     if (!stored || stored.sessionId !== obsSessionId || !stored.currentTimeOfDay) return false;
+    // Возраст обязателен: восстановление существует для F5 и смерти service
+    // worker — это секунды-минуты. Старая запись означает давно ушедшую игру,
+    // и восстановив её, вкладка утверждала бы в эфире фазу той игры (и шла бы
+    // с ней в autoSwitchScene ниже) — контрольное ревью 04.08.2026, находка 5.
+    if (
+      !Number.isFinite(stored.timestamp) ||
+      Date.now() - stored.timestamp > RESTORE_MAX_AGE_MS
+    ) {
+      return false;
+    }
 
     currentTimeOfDay = stored.currentTimeOfDay;
     lastAppliedRoleVisibility = stored.lastAppliedRoleVisibility || null;
@@ -668,6 +693,13 @@ let phaseUnknownReported = false;
 const PHASE_UNKNOWN_GRACE_MS = 8000;
 
 function detectTimeOfDay(): TimeOfDay {
+  // Смена комнаты внутри документа: фаза, распознанная в прошлой, для новой
+  // не «живая» — иначе вкладка, ушедшая SPA-переходом в другую комнату,
+  // держала бы владение чужой фазой (контрольное ревью 04.08.2026).
+  if (location.pathname !== phaseFlagPathname) {
+    phaseFlagPathname = location.pathname;
+    phaseConfirmedLive = false;
+  }
   phaseUnknownHit = false;
   const result = detectTimeOfDayInner();
   if (phaseUnknownHit) {
@@ -683,19 +715,25 @@ function detectTimeOfDay(): TimeOfDay {
         result,
       );
     }
-  } else if (phaseUnknownSince) {
-    // О восстановлении говорим только если жаловались: иначе здоровый старт
-    // порождал бы пару строк на ровном месте.
-    if (phaseUnknownReported) {
-      log.info(
-        SCOPE,
-        "фаза снова распознаётся:",
-        result,
-        `(не понимали ${Math.round((Date.now() - phaseUnknownSince) / 1000)} с)`,
-      );
+  } else {
+    // ЕДИНСТВЕННАЯ точка, где фаза становится «живой»: маркеры распознаны
+    // без фолбэка. Взводится и при совпадении с текущей фазой — после F5
+    // смены не будет, а владение вкладка обязана уметь защитить (блокер 2).
+    phaseConfirmedLive = true;
+    if (phaseUnknownSince) {
+      // О восстановлении говорим только если жаловались: иначе здоровый
+      // старт порождал бы пару строк на ровном месте.
+      if (phaseUnknownReported) {
+        log.info(
+          SCOPE,
+          "фаза снова распознаётся:",
+          result,
+          `(не понимали ${Math.round((Date.now() - phaseUnknownSince) / 1000)} с)`,
+        );
+      }
+      phaseUnknownSince = 0;
+      phaseUnknownReported = false;
     }
-    phaseUnknownSince = 0;
-    phaseUnknownReported = false;
   }
   return result;
 }
@@ -932,7 +970,6 @@ function evaluateTimeOfDay(): void {
         // не видно даже того, распознали мы фазу или нет.
         log.info(SCOPE, "фаза подтверждена:", currentTimeOfDay, "→", confirmedTimeOfDay);
         currentTimeOfDay = confirmedTimeOfDay;
-        phaseConfirmedLive = true;
         pendingTimeOfDay = null;
         if (confirmedTimeOfDay === "day") await hideRoleBeforeDaySceneSwitch();
         scheduleRoleVisibility(confirmedTimeOfDay);
@@ -1324,6 +1361,7 @@ export const obsPanelFeature: Feature = {
     obsSessionId = null;
     currentTimeOfDay = null;
     phaseConfirmedLive = false;
+    phaseFlagPathname = "";
     lastAppliedRoleVisibility = null;
     autoModeEnabled = false;
     dayScene = "";
