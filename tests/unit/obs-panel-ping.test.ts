@@ -220,8 +220,41 @@ describe("пинг владения: только живая фаза делае
     document.body.innerHTML = ""; // пре-гейм: ни одного маркера стадии
     await vi.advanceTimersByTimeAsync(30_000);
     expect(await ping(), "полминуты непонимания — ещё не смерть матча").toBe(true);
-    await vi.advanceTimersByTimeAsync(40_000);
-    expect(await ping(), "минута непонимания — матч тут не идёт").toBe(false);
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(await ping(), "полторы минуты непонимания — матч тут не идёт").toBe(false);
+  });
+
+  test("судейская пауза ДЛИННЕЕ порога не отдаёт владение (блокер ревью 05.08)", async () => {
+    // Роллер на паузе демонтирован целиком, маркеров нет, а .ended-pause
+    // исключена из endedScreenVisible (ревью 01.08) — непонимание копится.
+    // Видимый fixedState-экран — доказательство идущего матча: владение
+    // у живого стримера посреди двухминутного разбора отбирать нельзя.
+    seedRestoredDay();
+    await obsPanelFeature.enable(ctx);
+    nightMarkers();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(await ping()).toBe(true);
+
+    document.body.innerHTML = `
+      <div class="roller"><div class="ended ended-pause"><div class="ended__title">Пауза</div></div></div>`;
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(await ping(), "пауза сохраняет владение").toBe(true);
+
+    // Пауза кончилась, роллер вернулся — жизнь продолжается как обычно.
+    nightMarkers();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(await ping()).toBe(true);
+  });
+
+  test("пауза живость лишь СОХРАНЯЕТ: без прежнего распознания владения нет", async () => {
+    // Вкладка, открытая посреди чужой паузы с восстановленной фазой, не
+    // должна сфабриковать «веду» через fixedState-эскейп.
+    seedRestoredDay();
+    await obsPanelFeature.enable(ctx);
+    document.body.innerHTML = `
+      <div class="roller"><div class="ended ended-pause"><div class="ended__title">Пауза</div></div></div>`;
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(await ping(), "fixedState без заработанной живости — не владение").toBe(false);
   });
 
   test("запись старше потолка не восстанавливается и не трогает сцену эфира", async () => {
