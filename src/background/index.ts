@@ -6,6 +6,7 @@
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
+import { isFreshInstall, maybeShowOnboardingOnUpdate, showOnboarding } from "./onboarding";
 import { onMessage, sendToTab } from "@core/messaging";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
 import { applyNoteOps, mergeNotesViaCoordinator } from "./notes-coordinator";
@@ -570,7 +571,9 @@ browser.runtime.onStartup.addListener(() => {
   }).catch((e) => log.error("background", "startup OBS restore failed", e));
   void clearStaleQueueGuards();
 });
-browser.runtime.onInstalled.addListener(() => {
+browser.runtime.onInstalled.addListener((details) => {
+  if (isFreshInstall(details)) void showOnboarding();
+  else if (details?.reason === "update") void maybeShowOnboardingOnUpdate();
   void runUpgradeMigrations();
   // Обновление могло привезти исправление ПРОТОКОЛА OBS: держать блокировку
   // 4010/4011 после апдейта бессмысленно — она снималась только перезапуском

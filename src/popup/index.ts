@@ -87,6 +87,16 @@ const SCOPE = "popup";
 document.addEventListener("DOMContentLoaded", () => {
   installErrorCapture("popup");
 
+  // Онбординг: попап открыт — настройки найдены. Снимаем точку с иконки и
+  // больше никогда не навязываем страницу-приветствие (см. background,
+  // ONBOARDING_SHOWN_KEY; жалоба 06.08.2026 «стримеры не находят настройки»).
+  try {
+    void browser.action?.setBadgeText?.({ text: "" });
+  } catch {
+    /* старые браузеры без action в попапе */
+  }
+  void browser.storage.local.set({ onboarding_shown: true }).catch(() => undefined);
+
   // Настройка «вести логи» управляет и попапом тоже. Раньше он её не читал, и
   // у выключившего логирование ошибки попапа всё равно оседали в хранилище —
   // тумблер врал (аудит наблюдаемости 02.08.2026, LOG-4).

@@ -294,6 +294,9 @@ describe("settings, release and manifest consistency", () => {
       runtime: null,
       tabs: null,
       windows: null,
+      // Бейдж/getUserSettings онбординга (06.08.2026): API доступно через
+      // ключ "action" манифеста, записи в permissions не требует.
+      action: null,
     };
     const unknown = [...apiNamespaces].filter((name) => !(name in permissionByApi)).sort();
     expect(unknown, "New browser API namespace needs an explicit permission review").toEqual([]);
