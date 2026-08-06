@@ -146,14 +146,19 @@ setupDiagnostics();
 
 // Сторож осиротевшей вкладки (F5-баннер). Гейт по мастер-выключателю:
 // выключенное расширение не имеет права напоминать о себе баннером.
+// Флаг от слушателя побеждает boot-чтение: выключение тумблера в момент
+// загрузки страницы иначе проигрывало бы устаревшему getSetting (ревью
+// 06.08.2026; тот же паттерн, что в setupUrlRouter).
+let orphanMasterOff = false;
 void getSetting("extension_enabled")
   .catch(() => true)
   .then((on) => {
-    if (on !== false) startOrphanWatch();
+    if (on !== false && !orphanMasterOff) startOrphanWatch();
   });
 onSettingsChanged((patch) => {
   if (!("extension_enabled" in patch)) return;
-  if (patch.extension_enabled === false) stopOrphanWatch();
+  orphanMasterOff = patch.extension_enabled === false;
+  if (orphanMasterOff) stopOrphanWatch();
   else startOrphanWatch();
 });
 

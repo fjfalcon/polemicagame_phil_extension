@@ -112,4 +112,35 @@ describe("сторож", () => {
     renderOrphanBanner(document);
     expect(document.querySelectorAll(`#${ORPHAN_BANNER_ID}`).length).toBe(1);
   });
+
+  test("повторный start не плодит второй интервал: stop глушит ЕДИНСТВЕННЫЙ таймер", () => {
+    // Штатная топология проводки — два вызова start (boot + мастер-тумблер).
+    // Без гарда в start первый интервал утекал бы и не глушился stop-ом
+    // (мутант ревью 06.08.2026).
+    startOrphanWatch();
+    startOrphanWatch();
+    stopOrphanWatch();
+    seam.runtime = {};
+    vi.advanceTimersByTime(60_000);
+    expect(banner(), "после stop не должно остаться ни одного живого интервала").toBeNull();
+  });
+
+  test("кнопка «Обновить страницу» действительно перезагружает", () => {
+    const reloadSpy = vi.fn();
+    // jsdom не даёт шпионить за location.reload — подсовываем фасад документа:
+    // renderOrphanBanner берёт reload через doc.location, всё остальное — DOM.
+    const doc = new Proxy(document, {
+      get(target, prop) {
+        if (prop === "location") return { reload: reloadSpy };
+        const v = Reflect.get(target, prop);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    }) as unknown as Document;
+    renderOrphanBanner(doc);
+    const reload = Array.from(banner()?.querySelectorAll("button") ?? []).find((b) =>
+      (b.textContent || "").includes("Обновить"),
+    );
+    reload?.click();
+    expect(reloadSpy, "клик игрока обязан вести к reload").toHaveBeenCalledTimes(1);
+  });
 });

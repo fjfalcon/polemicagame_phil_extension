@@ -83,14 +83,17 @@ let timer: ReturnType<typeof setInterval> | null = null;
 export function startOrphanWatch(): void {
   if (timer) return;
   timer = setInterval(() => {
-    if (isContextAlive(browser?.runtime)) return;
-    // Контекст мёртв. Сторож гаснет НАВСЕГДА: если игрок закроет баннер,
-    // перерисовывать его — значит переигрывать решение человека.
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
-    }
+    // Весь тик под try/catch: экзотическая обёртка polyfill могла бы бросить
+    // уже на доступе к browser.runtime — исключение из колбэка интервала
+    // превратило бы сторож в тихий труп (ревью 06.08.2026).
     try {
+      if (isContextAlive(browser?.runtime)) return;
+      // Контекст мёртв. Сторож гаснет НАВСЕГДА: если игрок закроет баннер,
+      // перерисовывать его — значит переигрывать решение человека.
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
       renderOrphanBanner(document);
     } catch {
       // Умер и DOM (вкладка выгружается) — молчим, сказать уже некому.
