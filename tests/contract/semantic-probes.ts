@@ -85,15 +85,20 @@ export const gameSearchProbes: Record<string, Probe> = {
   ),
   /** Подпись непринятой карточки. */
   acceptLabel: has("Принять игру", "текст «Принять игру» в ветке непринятой карточки"),
-  /** Переход в комнату — POST-форма на /game (полная загрузка, не SPA). */
-  postFormToGame: (text) => {
-    const origin = /location\.origin\+"\/game"/.test(text);
-    const post = /setAttribute\("method","post"\)/.test(text);
-    return {
-      ok: origin && post,
-      detail: "on_game_found делает POST-форму на /game (queue-requeue опирается на полную загрузку)",
-    };
-  },
+  /**
+   * Переход в комнату — POST-форма на /game ИМЕННО в хендлере on_game_found
+   * (queue-requeue опирается на полную загрузку). Два несвязанных «где-то в
+   * бандле» здесь не доказательство: в game-search ДВЕ формы на /game, и
+   * перевод целевой на GET оставался бы зелёным (контрольное ревью
+   * 06.08.2026) — поэтому оба признака ищутся в окне самого хендлера.
+   */
+  postFormToGame: inWindow(
+    'on("on_game_found"',
+    900,
+    ['location.origin+"/game"', 'setAttribute("method","post")'],
+    [],
+    "on_game_found строит POST-форму на /game",
+  ),
 };
 
 // ─────────────────────────── room/main.js ───────────────────────────
@@ -182,9 +187,14 @@ export const roomProbes: Record<string, Probe> = {
   }),
 };
 
-/** Длительность анимации перехода роллера (мс) — для сверки с нашим confirm. */
+/**
+ * Длительность анимации перехода роллера (мс) — для сверки с нашим confirm.
+ * Якорь по соседнему полю data-блока РОЛЛЕРА: в бандле два animationDuration
+ * (у другого компонента — 0), и first-match после перестановки модулей
+ * минификатором отдал бы 0, вакуумно «пройдя» сверку (ревью 06.08.2026).
+ */
 export function siteRollerAnimationMs(text: string): number | null {
-  const m = /animationDuration:(\d+)/.exec(text);
+  const m = /animationDuration:(\d+),currentSubstage:/.exec(text);
   return m ? Number(m[1]) : null;
 }
 

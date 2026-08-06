@@ -51,6 +51,12 @@ export async function download(url: string): Promise<Download> {
 export async function json(url: string): Promise<{ response: Response; body: unknown }> {
   const response = await fetchWithRetry(url);
   if (!response.ok) return { response, body: null };
-  const body = await response.json();
-  return { response, body };
+  try {
+    const body = await response.json();
+    return { response, body };
+  } catch (error) {
+    // «200, но не JSON» — заглушка CDN/WAF: транзиент, а не сломанный
+    // контракт. Иначе редкий ложный красный в CI (ревью 06.08.2026).
+    throw new TransientNetworkError(`${url}: ответ 200, но тело не JSON (${String(error)})`);
+  }
 }

@@ -19,7 +19,7 @@ vi.mock("@core/messaging", () => ({
 }));
 vi.mock("@core/toast", () => ({ showToast: vi.fn(), clearToasts: vi.fn() }));
 
-import { findSummaryRows, winnerBadge } from "@content/features/match-stats";
+import { applyAutoHeight, findSummaryRows, winnerBadge } from "@content/features/match-stats";
 
 describe("winnerBadge: сырой winnerCode SSR", () => {
   test("0 — победа мирных (живая фикстура match_610180)", () => {
@@ -72,6 +72,35 @@ describe("findSummaryRows: семантика вместо порядка", () =
 
   test("строк нет вовсе — оба null, без падения", () => {
     expect(findSummaryRows([])).toEqual({ totalRow: null, mmrRow: null });
+  });
+});
+
+describe("applyAutoHeight: проводка семантического выбора", () => {
+  test("на живой разметке («Итог» без MMR) стилизуется сумма, а не строка игрока", () => {
+    // Ревью 06.08.2026: чистая findSummaryRows сторожилась, а её вызов — нет;
+    // мутант-возврат к порядковому «последние две строки» проходил все тесты.
+    document.body.innerHTML = `
+      <div class="game-stats-table">
+        <div class="table">
+          <div class="row"><div class="cell title">№</div></div>
+          <div class="row"><div class="cell title">Роль</div></div>
+        </div>
+        <div class="table">
+          <div class="row" id="last-player"><div class="cell title">10 ночь</div><div class="cell player">1.5</div></div>
+        </div>
+        <div class="table">
+          <div class="row" id="sum-row"><div class="cell title sum">Итог</div><div class="cell player sum">3.2</div></div>
+        </div>
+      </div>`;
+    applyAutoHeight();
+    expect(
+      document.getElementById("sum-row")?.getAttribute("style") || "",
+      "строка «Итог» обязана получить стилизацию итога",
+    ).toContain("border-top");
+    expect(
+      document.getElementById("last-player")?.getAttribute("style") || "",
+      "последняя строка ИГРОКА не должна краситься ни итогом, ни MMR",
+    ).not.toMatch(/border-top|border-bottom/);
   });
 });
 

@@ -1134,7 +1134,11 @@ export function findSummaryRows(rows: HTMLElement[]): {
   };
 }
 
-function applyAutoHeight(): void {
+// export — тестовый шов: ревью 06.08.2026 показало, что чистая
+// findSummaryRows сторожится, а её ВЫЗОВ отсюда — нет: мутант-возврат к
+// порядковому «последние две строки» проходил все тесты, а это ровно
+// возвращение исправленного бага.
+export function applyAutoHeight(): void {
   const gameStatsTable = document.querySelector<HTMLElement>(SITE.statsTableRoot);
   if (!gameStatsTable) return;
 
