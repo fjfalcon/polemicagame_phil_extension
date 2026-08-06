@@ -228,6 +228,22 @@ describe("общий бюджет попыток подключения (PERF-8)
     expect(degradedAttempts()).toBe(2);
   });
 
+  test("успешный Identify возвращает бюджет: второй обрыв чинится плотно", async () => {
+    // Ревью 07.08 предлагало добавить сброс — оказалось, семантика УЖЕ есть
+    // (инлайн-обнуление в connect-флоу на Identified, obs-client ~203), но
+    // нигде не сторожилась. Пригвождаем: успешно восстановленная редким
+    // режимом связь обязана вернуть плотный бюджет на следующий обрыв.
+    store.data[OBS_RECONNECT_ATTEMPTS_KEY] = 10;
+    await bootBackground(); // редкая попытка → сокет 1
+    expect(FakeSocket.created).toBe(1);
+
+    FakeSocket.last!.hello();
+    await flushMicrotasks();
+    FakeSocket.last!.identified();
+    await flushMicrotasks();
+    expect(store.data[OBS_RECONNECT_ATTEMPTS_KEY], "Identify заслуживает бюджет заново").toBe(0);
+  });
+
   test("ручное подключение сбрасывает бюджет и подключается плотно", async () => {
     store.data[OBS_RECONNECT_ATTEMPTS_KEY] = 10;
     // Свежая метка редкого режима: boot не должен тратить редкую попытку —
