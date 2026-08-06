@@ -36,14 +36,22 @@ export function onboardingUpdateDecision(
   return "skip";
 }
 
-export async function showOnboarding(): Promise<void> {
+export async function showOnboarding(activate: boolean): Promise<void> {
   try {
     await browser.storage.local.set({ [ONBOARDING_SHOWN_KEY]: true });
   } catch (e) {
     log.debug("onboarding", "flag save failed", e);
   }
   try {
-    await browser.tabs.create({ url: browser.runtime.getURL("onboarding.html") });
+    // activate=false на update-пути ОБЯЗАТЕЛЕН: обновление применяется в
+    // произвольный момент сессии, и активная вкладка вылезла бы поверх
+    // идущего матча — у стримера В ЭФИРЕ (ревью 06.08.2026, блокер).
+    // Страница ждёт в фоне; точка на иконке доведёт до неё. При установке
+    // activate=true честен: пользователь сам только что нажал «установить».
+    await browser.tabs.create({
+      url: browser.runtime.getURL("onboarding.html"),
+      active: activate,
+    });
   } catch (e) {
     log.debug("onboarding", "tab failed", e);
   }
@@ -68,11 +76,22 @@ export async function maybeShowOnboardingOnUpdate(): Promise<void> {
       st[ONBOARDING_SHOWN_KEY] === true,
       settings?.isOnToolbar,
     );
-    if (decision === "show") await showOnboarding();
+    if (decision === "show") await showOnboarding(false);
     else if (decision === "remember-pinned") {
       await browser.storage.local.set({ [ONBOARDING_SHOWN_KEY]: true });
     }
   } catch (e) {
     log.debug("onboarding", "update check failed", e);
   }
+}
+
+/**
+ * Диспетчер onInstalled — здесь, а не в background/index: третий коммит
+ * подряд ревью ловило несторожимый call-site при покрытой чистой функции
+ * (мутант перестановки веток проходил всю сюиту).
+ */
+export function handleInstalled(details: { reason?: string } | undefined): Promise<void> {
+  if (isFreshInstall(details)) return showOnboarding(true);
+  if (details?.reason === "update") return maybeShowOnboardingOnUpdate();
+  return Promise.resolve();
 }

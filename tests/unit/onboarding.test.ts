@@ -22,7 +22,12 @@ vi.mock("@core/log", () => ({
 }));
 
 import fs from "node:fs";
-import { isFreshInstall, onboardingUpdateDecision } from "../../src/background/onboarding";
+import {
+  handleInstalled,
+  isFreshInstall,
+  onboardingUpdateDecision,
+} from "../../src/background/onboarding";
+import { browser } from "@core/env";
 
 /**
  * Онбординг (жалоба 06.08.2026: стримеры не находят настройки). Закрепить
@@ -57,6 +62,46 @@ describe("onboardingUpdateDecision: обновление у живых поль�
 
   test("getUserSettings недоступен (старый браузер) — не наглеем", () => {
     expect(onboardingUpdateDecision(false, undefined)).toBe("skip");
+  });
+});
+
+describe("handleInstalled: проводка диспетчера", () => {
+  // Ревью 06.08: мутант перестановки веток install/update в слушателе
+  // проходил всю сюиту — третий подобный случай, поэтому диспетчер вынесен
+  // в модуль и сторожится здесь.
+  const tabs = () => vi.mocked(browser.tabs.create);
+  const storage = () => vi.mocked(browser.storage.local.get);
+
+  test("установка: вкладка открывается АКТИВНОЙ (пользователь в контексте стора)", async () => {
+    tabs().mockClear();
+    await handleInstalled({ reason: "install" });
+    expect(tabs()).toHaveBeenCalledTimes(1);
+    expect(tabs().mock.calls[0][0]).toMatchObject({ active: true });
+  });
+
+  test("обновление без закрепления: вкладка открывается ФОНОВОЙ — фокус у стримера в эфире красть нельзя", async () => {
+    tabs().mockClear();
+    storage().mockResolvedValueOnce({ onboarding_shown: false });
+    (browser.action as Record<string, unknown>).getUserSettings = vi.fn(async () => ({
+      isOnToolbar: false,
+    }));
+    await handleInstalled({ reason: "update" });
+    expect(tabs()).toHaveBeenCalledTimes(1);
+    expect(tabs().mock.calls[0][0]).toMatchObject({ active: false });
+    delete (browser.action as Record<string, unknown>).getUserSettings;
+  });
+
+  test("обновление на старом браузере (нет getUserSettings) — тишина", async () => {
+    tabs().mockClear();
+    storage().mockResolvedValueOnce({ onboarding_shown: false });
+    await handleInstalled({ reason: "update" });
+    expect(tabs()).not.toHaveBeenCalled();
+  });
+
+  test("chrome_update — тишина", async () => {
+    tabs().mockClear();
+    await handleInstalled({ reason: "chrome_update" });
+    expect(tabs()).not.toHaveBeenCalled();
   });
 });
 
