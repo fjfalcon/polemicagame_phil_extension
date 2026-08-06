@@ -27,6 +27,7 @@ import { escapeHtml } from "@core/escape";
 import { log } from "@core/log";
 import { onMessage, sendRuntime } from "@core/messaging";
 import { SITE } from "@core/selectors";
+import { isGameRoomPath } from "@shared/routes";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { TwitchControlMsg } from "@shared/types";
 
@@ -782,6 +783,13 @@ function startJoinWatchdog(): void {
 function startIdleWatchdog(): void {
   if (idleWatchdog) return;
   idleWatchdog = setInterval(() => {
+    // Страховка PERF-7: если уход с игрового маршрута прошёл без единой
+    // childList-мутации (и sync его не заметил), тик watchdog'а добивает
+    // соединение сам — сокет вне /game не нужен никому.
+    if (!isGameRoomPath(location.pathname)) {
+      disconnect();
+      return;
+    }
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     if (Date.now() - lastActivityAt > IDLE_TIMEOUT_MS) {
       log.warn(SCOPE, "IRC idle timeout, forcing reconnect");
@@ -821,6 +829,22 @@ function ensurePanel(): TwitchChatPanel {
   return panel;
 }
 
+/**
+ * Сокет уже жив (CONNECTING или OPEN) — второй не нужен.
+ *
+ * Гейт «не больше одного сокета» обязан смотреть на transport, а не на
+ * isConnected: тот становится true только в асинхронном onopen, и пока сокет
+ * в CONNECTING, проверка isConnected пропускала второй connectToTwitch(),
+ * который убивал первый и открывал новый — две auth-попытки на каждый вход
+ * в игру (PERF-7).
+ */
+function hasLiveSocket(): boolean {
+  return (
+    socket !== null &&
+    (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)
+  );
+}
+
 // ── видимость в зависимости от игрового интерфейса (порт sync...) ──
 
 function showPanel(): void {
@@ -830,8 +854,8 @@ function showPanel(): void {
   }
   const p = ensurePanel();
   p.show();
-  // Подключаемся к чату при показе, если есть канал и ещё не подключены.
-  if (channelName && !isConnected) connectToTwitch();
+  // Подключаемся к чату при показе, если есть канал и живого сокета ещё нет.
+  if (channelName && !hasLiveSocket()) connectToTwitch();
 }
 
 function hidePanel(): void {
@@ -839,6 +863,17 @@ function hidePanel(): void {
 }
 
 function syncVisibilityWithGameState(): void {
+  // Уход с игрового маршрута: панель и сокет не нужны никому — IRC-парсинг,
+  // DOM-вставки чата и 60-секундный watchdog продолжались на поиске/лобби всю
+  // сессию (PERF-7). Скрытие панели ПОЛЬЗОВАТЕЛЕМ (panelWanted) — отдельная
+  // политика и здесь не трогается: она про видимость, а не про маршрут.
+  if (!isGameRoomPath(location.pathname)) {
+    gameUiVisible = false;
+    hidePanel();
+    if (socket || reconnectTimer || idleWatchdog || joinWatchdog) disconnect();
+    return;
+  }
+
   const hasGameUi = hasActiveGameInterface();
   gameUiVisible = hasGameUi;
 
@@ -849,6 +884,31 @@ function syncVisibilityWithGameState(): void {
   // Игровой UI есть — показываем, если пользователь панель не скрывал.
   if (panelWanted && (!panel || !panel.isShown)) {
     showPanel();
+  }
+}
+
+// ── дебаунс сверки видимости (бюджет «Game UI subscribers») ──
+
+/** Не чаще двух полных сверок в секунду: сверка — это до 3 document-QSA. */
+const SYNC_MIN_INTERVAL_MS = 500;
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSyncAt = 0;
+
+/** Trailing-дебаунс: последний батч всегда доводит состояние до актуального. */
+function scheduleVisibilitySync(): void {
+  if (syncTimer) return;
+  const delay = Math.max(0, SYNC_MIN_INTERVAL_MS - (Date.now() - lastSyncAt));
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    lastSyncAt = Date.now();
+    syncVisibilityWithGameState();
+  }, delay);
+}
+
+function clearVisibilitySync(): void {
+  if (syncTimer) {
+    clearTimeout(syncTimer);
+    syncTimer = null;
   }
 }
 
@@ -886,6 +946,12 @@ function scheduleReconnect(): void {
   const delay = Math.min(RECONNECT_DELAY * reconnectAttempts, 30_000);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
+    // За время задержки могли уйти с игрового маршрута — переподключаться
+    // не к чему, и остаточные watchdog'и здесь же гасим (PERF-7).
+    if (!isGameRoomPath(location.pathname)) {
+      disconnect();
+      return;
+    }
     log.info(SCOPE, `twitch: переподключение, попытка ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
     connectToTwitch();
   }, delay);
@@ -898,6 +964,16 @@ function connectToTwitch(): void {
     // страницы игры» — пользователь перезагружал вкладку вместо исправления
     // имени канала (кириллица/мусор нормализуются в пустую строку).
     sendTwitchStatus(false, "Некорректное имя канала — укажите имя латиницей");
+    return;
+  }
+
+  // Сокет живёт только на игровом маршруте: панель вне /game всё равно не
+  // видна (hasActiveGameInterface требует игровой UI), а соединение «в никуда»
+  // жгло сеть и CPU до конца сессии (PERF-7). Явное подключение из попапа на
+  // другой странице честно отвечает отказом вместо ложного успеха.
+  if (!isGameRoomPath(location.pathname)) {
+    log.debug(SCOPE, "twitch: не игровой маршрут — подключение не выполняем");
+    sendTwitchStatus(false, "Чат подключается только на странице игры");
     return;
   }
 
@@ -1184,14 +1260,32 @@ export const twitchPanelFeature: TwitchFeature = {
     });
 
     // Слежение за игровым интерфейсом (порт MutationObserver-логики).
-    unsubDom = onDomChange(() => syncVisibilityWithGameState());
+    //
+    // Бюджет «Game UI subscribers»: сверка видимости — до 3 document-QSA,
+    // поэтому (1) attribute-only батчи отсекаются ДО неё — смена class/style
+    // не меняет числа плиток/камер, по которым считается видимость;
+    // (2) сверка дебаунсится до ≤2/с (trailing — финальное состояние не
+    // теряется).
+    unsubDom = onDomChange((mutations) => {
+      let hasChildList = false;
+      for (const m of mutations) {
+        if (m.type === "childList") {
+          hasChildList = true;
+          break;
+        }
+      }
+      if (!hasChildList) return;
+      scheduleVisibilitySync();
+    });
 
     // Первичная синхронизация: показать панель и подключиться, если уже в игре.
     // (Раньше здесь был второй безусловный connectToTwitch() — он убивал
     // только что созданный showPanel'ом CONNECTING-сокет и открывал новый:
-    // две auth-попытки на каждый вход в игру.)
+    // две auth-попытки на каждый вход в игру. Гейт — hasLiveSocket, а не
+    // isConnected: CONNECTING-сокет уже «занял место», см. PERF-7.)
+    lastSyncAt = Date.now();
     syncVisibilityWithGameState();
-    if (channelName && gameUiVisible && !isConnected) connectToTwitch();
+    if (channelName && gameUiVisible && !hasLiveSocket()) connectToTwitch();
   },
 
   update(ctx: FeatureContext) {
@@ -1224,6 +1318,7 @@ export const twitchPanelFeature: TwitchFeature = {
       unsubDom = null;
     }
     clearReconnect();
+    clearVisibilitySync();
 
     panel?.unmount();
     panel = null;

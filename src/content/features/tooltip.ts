@@ -159,7 +159,8 @@ let styleEl: HTMLStyleElement | null = null;
 // Состояние по каждой обработанной точке, чтобы корректно снять всё в disable().
 const dotStates = new WeakMap<Element, DotState>();
 const processed = new WeakSet<Element>();
-const activeTooltips = new Set<HTMLDivElement>();
+/** Активные body-тултипы → их владелец-точка (нужен для чистки при удалении владельца). */
+const activeTooltips = new Map<HTMLDivElement, Element>();
 let tooltipOwnerId = 0;
 
 function getPlayers(): MatchPlayer[] | null {
@@ -345,7 +346,7 @@ function enhanceTooltip(element: HTMLElement): void {
     tooltip.classList.add("penalty-tooltip");
     tooltip.dataset.tooltipOwner = owner;
     document.body.appendChild(tooltip);
-    activeTooltips.add(tooltip);
+    activeTooltips.set(tooltip, element);
 
     const rect = element.getBoundingClientRect();
     tooltip.style.position = "fixed";
@@ -392,10 +393,32 @@ function scanRoot(root: ParentNode): void {
   // appendChild в существующую ячейку — в мутации addedNodes лежит сама
   // точка, и без проверки корня она навсегда оставалась с нативным
   // title-тултипом (штрафные точки везло: они приходят контейнером).
-  if (root instanceof Element && root.matches(DOT_SELECTOR)) {
-    enhanceTooltip(root as HTMLElement);
+  if (root instanceof Element) {
+    if (root.matches(DOT_SELECTOR)) enhanceTooltip(root as HTMLElement);
+    // QSA-обход — только когда в поддереве точно есть целевые узлы: дешёвая
+    // проверка querySelector на корне отсекает подавляющее большинство
+    // добавленных поддеревьев без аллокации NodeList (PERF-11).
+    if (!root.firstElementChild || !root.querySelector(DOT_SELECTOR)) return;
   }
   root.querySelectorAll<HTMLElement>(DOT_SELECTOR).forEach((dot) => enhanceTooltip(dot));
+}
+
+/**
+ * Владельца тултипа удалили из DOM (сайт перерисовал ячейку/таблицу) — «его»
+ * тултип раньше висел в document.body до самого disable() (PERF-11: «Removed
+ * owner не очищает body tooltip»). Активных тултипов практически всегда 0–1,
+ * поэтому проверка связности владельцев дешевле любого обхода удалённых
+ * поддеревьев селекторами.
+ */
+function pruneDetachedOwners(): void {
+  if (activeTooltips.size === 0) return;
+  for (const [tooltip, owner] of activeTooltips) {
+    if (owner.isConnected) continue;
+    activeTooltips.delete(tooltip);
+    tooltip.remove();
+    const state = dotStates.get(owner);
+    if (state && state.tooltip === tooltip) state.tooltip = null;
+  }
 }
 
 export const tooltipFeature: Feature = {
@@ -424,15 +447,25 @@ export const tooltipFeature: Feature = {
     // Обработать уже присутствующие точки
     scanRoot(document);
 
-    // Реагировать на новые точки через общий наблюдатель
+    // Реагировать на новые точки через общий наблюдатель.
+    //
+    // Бюджет «Tooltip» (PERF-11): attribute-only записи точек не создают и не
+    // удаляют — фильтр по типу стоит ПЕРВЫМ, до любого чтения addedNodes;
+    // QSA достаются только поддеревьям, где корень подтвердил наличие целевых
+    // узлов (см. scanRoot). Удаления обрабатываются один раз на батч —
+    // связностью владельцев, без обхода удалённых поддеревьев.
     unsubscribeDom = onDomChange((mutations) => {
+      let sawRemovals = false;
       for (const mutation of mutations) {
-        mutation.addedNodes.forEach((node) => {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            scanRoot(node as Element);
-          }
-        });
+        if (mutation.type !== "childList") continue;
+        if (mutation.removedNodes.length > 0) sawRemovals = true;
+        const added = mutation.addedNodes;
+        for (let i = 0; i < added.length; i++) {
+          const node = added[i];
+          if (node.nodeType === Node.ELEMENT_NODE) scanRoot(node as Element);
+        }
       }
+      if (sawRemovals) pruneDetachedOwners();
     });
   },
   disable() {
@@ -454,7 +487,7 @@ export const tooltipFeature: Feature = {
     }
 
     // удалить любые оставшиеся tooltip-элементы
-    for (const tooltip of activeTooltips) {
+    for (const tooltip of activeTooltips.keys()) {
       tooltip.remove();
     }
     activeTooltips.clear();
