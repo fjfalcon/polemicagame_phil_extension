@@ -107,7 +107,12 @@ async function reconcileObsConnection(probe = false, ignorePersistedBlock = fals
 
   if (obs.isConnectedTo(s.obs_host, s.obs_password)) {
     await setObsWatchdog(true);
-    if (!probe || (await obs.verifyConnection())) return;
+    if (!probe) return;
+    // Живой heartbeat уже проверил канал — минутная alarm-проба поверх него
+    // была 4-й GetVersion-пробой в минуту при бюджете ≤3 (PERF-8). Watchdog
+    // пробует сам только когда heartbeat протух (воркер спал, интервал молчит).
+    if (obs.hasFreshHeartbeat()) return;
+    if (await obs.verifyConnection()) return;
     // Проба не прошла — соединение сейчас заменят. Без этой строки в файле
     // появлялось новое «подключено» без всякой причины (OC-3).
     log.warn("background", "проверка живости OBS не прошла — переподключаемся");
@@ -132,6 +137,22 @@ async function reconcileObsConnection(probe = false, ignorePersistedBlock = fals
           : // Блокировка могла достаться с версий до 9.0, где причина не
             // записывалась: называть её аутентификацией — уводить разбор.
             "причина не записана (блокировка с прежней версии)",
+    );
+    await setObsWatchdog(false);
+    return;
+  }
+  // Бюджет попыток — ОБЩИЙ: исчерпанные 10 ретраев останавливают не только
+  // цепочку attemptReconnect внутри клиента, но и watchdog с restore при
+  // пробуждении — раньше они заходили в connect() заново каждую минуту,
+  // бесконечно (перф-аудит 06.08.2026, PERF-8). Оживает по тем же легитимным
+  // событиям, что и раньше: ручное «Подключиться», правка настроек OBS,
+  // onStartup, onInstalled — все они сбрасывают счётчик. Блокировку по
+  // паролю (4008/4009) это не касается: она проверена выше и священна.
+  if (await obs.isAttemptBudgetExhausted()) {
+    log.warn(
+      "background",
+      "подключение к OBS не выполняется: бюджет попыток исчерпан —",
+      "ждём ручного подключения или правки настроек",
     );
     await setObsWatchdog(false);
     return;
@@ -484,10 +505,28 @@ async function clearStaleQueueGuards(): Promise<void> {
   }
 }
 
+/**
+ * Когда последний reconcile через restoreObsConnection ЗАВЕРШИЛСЯ.
+ * Свежий service worker, разбуженный watchdog-будильником, выполняет restore
+ * дважды — при загрузке модуля и в onAlarm — то есть до двух connect-попыток
+ * за одно пробуждение (перф-аудит 06.08.2026, PERF-8: «one reconcile/wake»).
+ * Дедупликация только для alarm-пробы (probe=true): явные restore
+ * (onInstalled после сброса блокировки, загрузка модуля) идут всегда.
+ * Окно меньше периода будильника (1 мин), поэтому штатные минутные пробы
+ * живого воркера не задевает.
+ */
+let lastReconcileAt = 0;
+const WAKE_RECONCILE_DEDUPE_MS = 30_000;
+
 function restoreObsConnection(probe = false): void {
-  void enqueueObs(() => reconcileObsConnection(probe)).catch((e) =>
-    log.error("background", "restore OBS failed", e),
-  );
+  void enqueueObs(async () => {
+    if (probe && Date.now() - lastReconcileAt < WAKE_RECONCILE_DEDUPE_MS) return;
+    try {
+      await reconcileObsConnection(probe);
+    } finally {
+      lastReconcileAt = Date.now();
+    }
+  }).catch((e) => log.error("background", "restore OBS failed", e));
 }
 
 /**
@@ -595,6 +634,11 @@ browser.runtime.onInstalled.addListener((details) => {
     } catch (e) {
       log.debug("background", "retry block reset failed", e);
     }
+    // Установка/обновление — легитимная точка сброса ОБЩЕГО бюджета попыток:
+    // раньше reconcile не смотрел на счётчик и restore после апдейта пробовал
+    // подключиться всегда — сохраняем этот контракт (PERF-8). Блокировку по
+    // паролю (4008/4009) сброс счётчика не снимает — она проверяется раньше.
+    obs.resetReconnectAttempts();
     restoreObsConnection();
   })();
   void clearStaleQueueGuards();

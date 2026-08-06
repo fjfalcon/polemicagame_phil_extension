@@ -56,7 +56,14 @@ export function closeCategory(code: number): string {
   return "прочее";
 }
 
-type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
+type Pending = {
+  resolve: (v: unknown) => void;
+  reject: (e: Error) => void;
+  /** Таймер «ответа нет 10с»: гасится при ответе, иначе каждый успешный
+   * запрос оставлял no-op callback — 240 пустых пробуждений/час на одних
+   * heartbeat'ах (перф-аудит 06.08.2026, PERF-8). */
+  timer: ReturnType<typeof setTimeout>;
+};
 export const OBS_RETRY_BLOCKED_KEY = "obs_retry_blocked";
 /**
  * Причина блокировки: "auth" — неверный пароль (сбрасывать можно только при
@@ -109,6 +116,19 @@ export class ObsClient {
   private connectionTimer: ReturnType<typeof setTimeout> | null = null;
   private connectionReject: ((error: Error) => void) | null = null;
   private retryBlocked = false;
+  /** Когда obs_connection_state писался в последний раз (см. refreshConnectionState). */
+  private lastStateWrite = 0;
+  /**
+   * Минимальный интервал между ЧИСТО freshness-записями obs_connection_state.
+   *
+   * Heartbeat раз в 20с освежал timestamp на каждом успехе — 240 записей
+   * storage.local в час на пустом месте (перф-аудит 06.08.2026, PERF-8).
+   * 45с при шаге heartbeat 20с даёт фактическую запись раз в 60с — с
+   * двукратным запасом до OBS_STATE_MAX_AGE_MS (2 мин) в obs-panel, иначе
+   * restore автосцены в content счёл бы state протухшим. Записи-СОБЫТИЯ
+   * (подключение, обрыв, смена сцены, список сцен) не троттлятся.
+   */
+  private readonly stateRefreshMinIntervalMs = 45_000;
 
   /** Подтянуть счётчик попыток с диска (воркер мог выгружаться). */
   private async restoreReconnectAttempts(): Promise<void> {
@@ -310,7 +330,10 @@ export class ObsClient {
     this.clearConnectionAttempt();
     this.teardownSocket();
     reject?.(new Error(reason));
-    for (const [, pending] of this.pending) pending.reject(new Error(reason));
+    for (const [, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+    }
     this.pending.clear();
   }
 
@@ -480,6 +503,7 @@ export class ObsClient {
     const p = this.pending.get(data.requestId);
     if (!p) return;
     this.pending.delete(data.requestId);
+    clearTimeout(p.timer);
     if (data.requestStatus?.result) p.resolve(data.responseData);
     else p.reject(new Error(data.requestStatus?.comment || "OBS request failed"));
   }
@@ -487,20 +511,21 @@ export class ObsClient {
   private request<T = any>(requestType: string, requestData: object = {}): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const requestId = this.requestId++;
-      this.pending.set(requestId, { resolve: resolve as (v: unknown) => void, reject });
-      try {
-        this.send({ op: 6, d: { requestType, requestId, requestData } });
-      } catch (e) {
-        this.pending.delete(requestId);
-        reject(e as Error);
-        return;
-      }
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pending.has(requestId)) {
           this.pending.delete(requestId);
           reject(new Error("Request timeout"));
         }
       }, 10_000);
+      this.pending.set(requestId, { resolve: resolve as (v: unknown) => void, reject, timer });
+      try {
+        this.send({ op: 6, d: { requestType, requestId, requestData } });
+      } catch (e) {
+        this.pending.delete(requestId);
+        clearTimeout(timer);
+        reject(e as Error);
+        return;
+      }
     });
   }
 
@@ -550,20 +575,55 @@ export class ObsClient {
     return this.retryBlocked;
   }
 
+  /**
+   * Свежо ли последнее подтверждение живости (входящий кадр или успешная
+   * проба)? Порог — тот же, что у самого heartbeat: пока он не считает
+   * соединение потерянным, внешняя alarm-проба не добавляет знания.
+   *
+   * Нужен watchdog'у: его минутная GetVersion-проба поверх живого heartbeat
+   * давала 4-ю пробу в минуту (перф-аудит 06.08.2026, PERF-8, бюджет ≤3/мин).
+   */
+  hasFreshHeartbeat(): boolean {
+    return this.isConnected && Date.now() - this.lastHeartbeat <= this.heartbeatInterval * 2;
+  }
+
+  /**
+   * Исчерпан ли ОБЩИЙ бюджет попыток подключения — с учётом диска (воркер
+   * мог перезапуститься). Раньше лимит в 10 попыток останавливал только
+   * цепочку attemptReconnect, а watchdog/restore заходили через connect()
+   * заново каждую минуту — бесконечно (перф-аудит 06.08.2026, PERF-8).
+   */
+  async isAttemptBudgetExhausted(): Promise<boolean> {
+    await this.restoreReconnectAttempts();
+    return this.reconnectAttempts >= this.maxReconnectAttempts;
+  }
+
   /** Проверка живого сокета; успешный ответ освежает persisted timestamp. */
   async verifyConnection(): Promise<boolean> {
     if (!this.isConnected) return false;
     try {
       await this.request("GetVersion");
       this.lastHeartbeat = Date.now();
-      await this.saveConnectionState(true);
+      await this.refreshConnectionState();
       return true;
     } catch {
       return false;
     }
   }
 
+  /**
+   * Freshness-запись с троттлингом: содержимое state не меняется, обновляется
+   * только timestamp — писать его на каждый heartbeat (раз в 20с) незачем.
+   * Событийные записи идут напрямую через saveConnectionState и сбрасывают
+   * отсчёт интервала.
+   */
+  private async refreshConnectionState(): Promise<void> {
+    if (Date.now() - this.lastStateWrite < this.stateRefreshMinIntervalMs) return;
+    await this.saveConnectionState(true);
+  }
+
   private async saveConnectionState(connected: boolean): Promise<void> {
+    this.lastStateWrite = Date.now();
     const state: ObsConnectionState = {
       connected,
       scenes: connected ? this.scenes : [],

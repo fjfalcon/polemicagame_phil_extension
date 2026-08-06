@@ -30,6 +30,7 @@ vi.mock("@core/messaging", () => ({
   broadcastToGameTabs: vi.fn(async () => undefined),
 }));
 
+import { browser } from "@core/env";
 import { log } from "@core/log";
 import {
   OBS_RECONNECT_ATTEMPTS_KEY,
@@ -42,11 +43,14 @@ import {
 class FakeSocket {
   static last: FakeSocket | null = null;
   static created = 0;
+  /** Отвечать ли на op:6 самим (для тестов heartbeat-каденса на фейковых таймерах). */
+  static autoRespondAll = false;
   onopen: ((e: unknown) => void) | null = null;
   onmessage: ((e: { data: string }) => void) | null = null;
   onclose: ((e: { code: number; reason: string }) => void) | null = null;
   onerror: ((e: unknown) => void) | null = null;
   readonly sent: string[] = [];
+  autoRespond = FakeSocket.autoRespondAll;
 
   constructor(public readonly url: string) {
     FakeSocket.last = this;
@@ -54,6 +58,22 @@ class FakeSocket {
   }
   send(data: string): void {
     this.sent.push(data);
+    if (!this.autoRespond) return;
+    const msg = JSON.parse(data) as { op: number; d?: { requestType?: string; requestId?: number } };
+    if (msg.op !== 6) return;
+    this.onmessage?.({
+      data: JSON.stringify({
+        op: 7,
+        d: {
+          requestId: msg.d?.requestId,
+          requestStatus: { result: true },
+          responseData:
+            msg.d?.requestType === "GetSceneList"
+              ? { scenes: [], currentProgramSceneName: "Сцена" }
+              : {},
+        },
+      }),
+    });
   }
   close(code = 1000, reason = ""): void {
     this.onclose?.({ code, reason });
@@ -89,6 +109,7 @@ beforeEach(() => {
   store.data = {};
   FakeSocket.last = null;
   FakeSocket.created = 0;
+  FakeSocket.autoRespondAll = false;
   vi.stubGlobal("WebSocket", FakeSocket as unknown as typeof WebSocket);
 });
 
@@ -182,5 +203,95 @@ describe("политика повторов", () => {
     expect(store.data[OBS_RECONNECT_ATTEMPTS_KEY]).toBe(0);
     expect(store.data[OBS_RETRY_BLOCKED_KEY]).toBe(false);
     expect(infoLines()).toContain("автоповторы разблокированы");
+  });
+
+  test("общий бюджет попыток читается с диска и оживает после сброса", async () => {
+    // Гейт для watchdog/restore в background: исчерпанные 10 попыток должны
+    // останавливать и их, а не только цепочку attemptReconnect (PERF-8).
+    store.data[OBS_RECONNECT_ATTEMPTS_KEY] = 10;
+    const client = new ObsClient();
+    expect(await client.isAttemptBudgetExhausted()).toBe(true);
+    client.resetReconnectAttempts();
+    expect(await client.isAttemptBudgetExhausted()).toBe(false);
+    expect(store.data[OBS_RECONNECT_ATTEMPTS_KEY]).toBe(0);
+  });
+});
+
+describe("бюджет проб и записей в connected-состоянии (PERF-8)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    FakeSocket.autoRespondAll = true;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function flushMicrotasks(times = 20): Promise<void> {
+    for (let i = 0; i < times; i++) await Promise.resolve();
+  }
+
+  /** connectOk без vi.waitFor: на фейковых таймерах хватает микрозадач. */
+  async function connectOkFake(client: ObsClient): Promise<void> {
+    const promise = client.connect("ws://localhost:4455");
+    await flushMicrotasks();
+    FakeSocket.last!.hello();
+    await flushMicrotasks();
+    FakeSocket.last!.identified();
+    await promise;
+    await flushMicrotasks();
+  }
+
+  function getVersionProbes(socket: FakeSocket): number {
+    return socket.sent.filter((raw) => {
+      const msg = JSON.parse(raw) as { op: number; d?: { requestType?: string } };
+      return msg.op === 6 && msg.d?.requestType === "GetVersion";
+    }).length;
+  }
+
+  /** Timestamp'ы всех записей obs_connection_state — в порядке записи. */
+  function stateWriteStamps(): number[] {
+    return vi
+      .mocked(browser.storage.local.set)
+      .mock.calls.map((args) => args[0] as Record<string, { timestamp?: number }>)
+      .filter((patch) => "obs_connection_state" in patch)
+      .map((patch) => patch.obs_connection_state.timestamp ?? 0);
+  }
+
+  test("за 10 минут ≤30 GetVersion-проб и ≤10 записей state, паузы записи < 2 мин", async () => {
+    const client = new ObsClient();
+    await connectOkFake(client);
+    const socket = FakeSocket.last!;
+    const probesAtConnect = getVersionProbes(socket);
+    const writesAtConnect = stateWriteStamps().length;
+
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    // Бюджет проб: heartbeat 3/мин и НИЧЕГО сверх него (было 4/мин с alarm-пробой).
+    const probes = getVersionProbes(socket) - probesAtConnect;
+    expect(probes).toBeLessThanOrEqual(30);
+    // Нижняя граница: «0 проб» тоже уложился бы в бюджет, но означал бы
+    // мёртвый heartbeat — потерю соединения заметить некому.
+    expect(probes).toBeGreaterThanOrEqual(28);
+
+    // Бюджет записей: freshness-запись реже прежних 4/мин…
+    const stamps = stateWriteStamps();
+    expect(stamps.length - writesAtConnect).toBeLessThanOrEqual(10);
+    // …но БЕЗ пауз ≥2 мин: getStoredConnectionState в obs-panel считает state
+    // старше OBS_STATE_MAX_AGE_MS (2 мин) протухшим, и restore автосцены
+    // перестал бы работать.
+    for (let i = 1; i < stamps.length; i++) {
+      expect(stamps[i] - stamps[i - 1]).toBeLessThan(120_000);
+    }
+    expect(Date.now() - stamps[stamps.length - 1]).toBeLessThan(120_000);
+  });
+
+  test("hasFreshHeartbeat протухает после тишины дольше двух интервалов", async () => {
+    const client = new ObsClient();
+    await connectOkFake(client);
+    expect(client.hasFreshHeartbeat()).toBe(true);
+    // OBS замолчал: пробы уходят, ответов нет — свежесть кончается через 2×20с.
+    FakeSocket.last!.autoRespond = false;
+    await vi.advanceTimersByTimeAsync(41_000);
+    expect(client.hasFreshHeartbeat()).toBe(false);
   });
 });
