@@ -307,6 +307,25 @@ describe("пинг владения: только живая фаза делае
     );
   });
 
+  test("третий пояс PERF-4: restore на неигровой странице не шлёт set_scene", async () => {
+    // Ревью 07.08 (W3): пояса детектора убиваются тестами, а restore-путь
+    // (restorePersistedAutoState → autoSwitchScene) прикрывает только гейт в
+    // самом autoSwitchScene — сторожим его отдельно.
+    history.replaceState(null, "", "/game-search");
+    seam.obsStatus = {
+      success: true,
+      data: { connected: true, sessionId: "s1", currentScene: "день", scenes: ["день", "я"] },
+    };
+    seam.storage["obs_auto_scene_state"] = {
+      sessionId: "s1",
+      currentTimeOfDay: "night", // не совпадает с текущей сценой — без пояса ушёл бы set_scene
+      lastAppliedRoleVisibility: null,
+      timestamp: Date.now() - 1000,
+    };
+    await obsPanelFeature.enable(ctx);
+    expect(seam.setSceneCalls, "restore с неигровой страницы не трогает эфир").toEqual([]);
+  });
+
   test("запись старше потолка не восстанавливается и не трогает сцену эфира", async () => {
     // Контрольное ревью, находка 5: часовая запись проходила проверку
     // sessionId и уезжала в autoSwitchScene.

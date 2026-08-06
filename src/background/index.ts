@@ -46,6 +46,13 @@ const QUEUE_GUARD_DELAY_MIN = 1;
  */
 const STALE_ALARM_CUTOFF_MS = 90_000;
 const OBS_MANUAL_DISCONNECT_KEY = "obs_manual_disconnect";
+/** Последняя попытка редкого режима (бюджет исчерпан). В storage: SW смертен. */
+const OBS_DEGRADED_ATTEMPT_KEY = "obs_degraded_attempt_at";
+/**
+ * Каденс редкого режима: самовосстановление ≤5 минут после того, как стример
+ * перезапустил OBS, при ~12 наборах localhost в час вместо прежних 60.
+ */
+const DEGRADED_RETRY_MS = 5 * 60_000;
 let obsQueue: Promise<void> = Promise.resolve();
 
 function enqueueObs<T>(task: () => Promise<T> | T): Promise<T> {
@@ -141,20 +148,36 @@ async function reconcileObsConnection(probe = false, ignorePersistedBlock = fals
     await setObsWatchdog(false);
     return;
   }
-  // Бюджет попыток — ОБЩИЙ: исчерпанные 10 ретраев останавливают не только
-  // цепочку attemptReconnect внутри клиента, но и watchdog с restore при
-  // пробуждении — раньше они заходили в connect() заново каждую минуту,
-  // бесконечно (перф-аудит 06.08.2026, PERF-8). Оживает по тем же легитимным
-  // событиям, что и раньше: ручное «Подключиться», правка настроек OBS,
-  // onStartup, onInstalled — все они сбрасывают счётчик. Блокировку по
-  // паролю (4008/4009) это не касается: она проверена выше и священна.
+  // Бюджет попыток — ОБЩИЙ: исчерпанные 10 ретраев глушат плотную цепочку
+  // attemptReconnect и переводят watchdog в РЕДКИЙ режим — одна попытка в
+  // DEGRADED_RETRY_MS, а не каждую минуту (перф-аудит 06.08.2026, PERF-8).
+  // Полная остановка была бы регрессом самовосстановления: OBS упал посреди
+  // эфира → 10 попыток сгорают за ~2 минуты → стример перезапускает OBS —
+  // и без редкого режима подключение не вернулось бы до ручных действий
+  // (контрольное ревью 07.08.2026, блокер). Плотный режим возвращают ручное
+  // «Подключиться», правка настроек OBS, onStartup, onInstalled — как и
+  // раньше. Блокировка по паролю (4008/4009) проверена выше и священна.
   if (await obs.isAttemptBudgetExhausted()) {
-    log.warn(
+    const st = (await browser.storage.local.get({ [OBS_DEGRADED_ATTEMPT_KEY]: 0 })) as Record<
+      string,
+      unknown
+    >;
+    const lastAt = typeof st[OBS_DEGRADED_ATTEMPT_KEY] === "number" ? (st[OBS_DEGRADED_ATTEMPT_KEY] as number) : 0;
+    const now = Date.now();
+    if (now - lastAt < DEGRADED_RETRY_MS) {
+      // Будильник ЖИВ (иначе редкому режиму не от чего просыпаться), но
+      // набирать OBS в этот тик рано.
+      await setObsWatchdog(true);
+      return;
+    }
+    await browser.storage.local.set({ [OBS_DEGRADED_ATTEMPT_KEY]: now });
+    log.info(
       "background",
-      "подключение к OBS не выполняется: бюджет попыток исчерпан —",
-      "ждём ручного подключения или правки настроек",
+      "бюджет плотных попыток OBS исчерпан — пробуем в редком режиме (раз в",
+      `${Math.round(DEGRADED_RETRY_MS / 60_000)} мин)`,
     );
-    await setObsWatchdog(false);
+    await setObsWatchdog(true);
+    await obs.connect(s.obs_host, s.obs_password);
     return;
   }
   await setObsWatchdog(true);

@@ -206,6 +206,26 @@ describe("TW-P7: жизненный цикл сокета Twitch", () => {
     expect(liveSockets()).toHaveLength(1);
   });
 
+  test("панель мигнула при CONNECTING-сокете — второй сокет не создаётся (W5)", () => {
+    // Ревью 07.08: мутант hasLiveSocket→isConnected в showPanel-путе проходил
+    // сюиту. Гейт исполняется на переходе «скрыта→показана»: игровой UI
+    // мигнул (перерисовка), панель спряталась и вернулась, а сокет всё ещё
+    // CONNECTING — isConnected здесь открывал бы второй connect.
+    enableFeature(); // сокет CONNECTING, панель показана
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    document.body.innerHTML = ""; // UI исчез — панель прячется, сокет живёт
+    h.domSub?.([childRecord()]);
+    vi.advanceTimersByTime(600);
+    expect(liveSockets(), "скрытие панели не трогает сокет").toHaveLength(1);
+
+    mountGameUi(); // UI вернулся — showPanel при всё ещё CONNECTING-сокете
+    h.domSub?.([childRecord()]);
+    vi.advanceTimersByTime(600);
+    expect(FakeWebSocket.instances, "второй аллокации быть не должно").toHaveLength(1);
+    expect(liveSockets()).toHaveLength(1);
+  });
+
   test("повторный connect из попапа заменяет сокет, не плодя живых", () => {
     enableFeature();
     const first = lastSocket();

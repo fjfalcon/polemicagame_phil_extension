@@ -156,10 +156,10 @@ async function fireWatchdogAlarm(): Promise<void> {
   await flushMicrotasks();
 }
 
-function budgetRefusals(): number {
+function degradedAttempts(): number {
   return vi
-    .mocked(log.warn)
-    .mock.calls.filter((args) => args.join(" ").includes("бюджет попыток исчерпан")).length;
+    .mocked(log.info)
+    .mock.calls.filter((args) => args.join(" ").includes("редком режиме")).length;
 }
 
 function getVersionProbes(socket: FakeSocket): number {
@@ -200,44 +200,39 @@ afterEach(() => {
 });
 
 describe("общий бюджет попыток подключения (PERF-8)", () => {
-  test("после исчерпания бюджета ни restore, ни alarm не создают подключений", async () => {
+  test("исчерпанный бюджет — РЕДКИЙ режим: ≤1 попытки в 5 минут, но не стоп", async () => {
+    // Контрольное ревью 07.08.2026 (блокер): полная остановка watchdog'а
+    // отнимала самовосстановление — стример перезапустил OBS посреди эфира,
+    // и подключение не возвращалось до ручных действий. Редкий режим держит
+    // и бюджет (~12 наборов/час вместо 60), и самовосстановление ≤5 минут.
     store.data[OBS_RECONNECT_ATTEMPTS_KEY] = 10;
     await bootBackground();
 
-    // Restore при пробуждении упёрся в бюджет: ноль сокетов, watchdog снят.
-    expect(FakeSocket.created).toBe(0);
-    expect(budgetRefusals()).toBe(1);
-    expect(wiring.alarms.has(OBS_WATCHDOG_ALARM)).toBe(false);
+    // Пробуждение — первая редкая попытка; будильник ЖИВ.
+    expect(FakeSocket.created).toBe(1);
+    expect(degradedAttempts()).toBe(1);
+    expect(wiring.alarms.has(OBS_WATCHDOG_ALARM)).toBe(true);
 
-    // Будильники (снятый мог уже быть в очереди доставки) — по-прежнему ноль
-    // подключений, сколько бы минут ни прошло.
-    for (let i = 0; i < 3; i++) {
+    // Ближайшие минуты будильник просыпается, но НЕ набирает OBS.
+    for (let i = 0; i < 4; i++) {
       await vi.advanceTimersByTimeAsync(61_000);
       await fireWatchdogAlarm();
     }
-    expect(FakeSocket.created).toBe(0);
-    expect(wiring.alarms.has(OBS_WATCHDOG_ALARM)).toBe(false);
-  });
+    expect(FakeSocket.created, "внутри 5-минутного окна попыток нет").toBe(1);
+    expect(wiring.alarms.has(OBS_WATCHDOG_ALARM), "будильник обязан жить").toBe(true);
 
-  test("один reconcile на пробуждение: alarm сразу после restore дедуплицируется", async () => {
-    store.data[OBS_RECONNECT_ATTEMPTS_KEY] = 10;
-    await bootBackground();
-    expect(budgetRefusals()).toBe(1);
-
-    // Свежий воркер, разбуженный будильником: restore при загрузке модуля уже
-    // выполнил reconcile — onAlarm в ту же секунду не должен повторять его.
-    await fireWatchdogAlarm();
-    expect(budgetRefusals()).toBe(1);
-
-    // А спустя больше минуты alarm-проба легитимна (окно дедупликации меньше
-    // периода будильника) — reconcile выполняется снова.
+    // Окно вышло — следующая редкая попытка.
     await vi.advanceTimersByTimeAsync(61_000);
     await fireWatchdogAlarm();
-    expect(budgetRefusals()).toBe(2);
+    expect(FakeSocket.created).toBe(2);
+    expect(degradedAttempts()).toBe(2);
   });
 
-  test("ручное подключение сбрасывает бюджет и подключается", async () => {
+  test("ручное подключение сбрасывает бюджет и подключается плотно", async () => {
     store.data[OBS_RECONNECT_ATTEMPTS_KEY] = 10;
+    // Свежая метка редкого режима: boot не должен тратить редкую попытку —
+    // здесь проверяется именно РУЧНОЙ путь.
+    store.data["obs_degraded_attempt_at"] = Date.now();
     await bootBackground();
     expect(FakeSocket.created).toBe(0);
 

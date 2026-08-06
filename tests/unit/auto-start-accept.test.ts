@@ -2,8 +2,18 @@
 // @vitest-environment-options { "url": "https://polemicagame.com/game-search" }
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+const seam = vi.hoisted(() => ({
+  // У auto-start НЕСКОЛЬКО подписчиков (принятие + игровая страница) —
+  // держим всех и дёргаем всех, как это делает настоящий наблюдатель.
+  subs: [] as Array<(muts: Array<{ addedNodes: unknown[] }>) => void>,
+}));
 vi.mock("@core/dom", () => ({
-  onDomChange: vi.fn(() => () => {}),
+  onDomChange: vi.fn((cb: (muts: Array<{ addedNodes: unknown[] }>) => void) => {
+    seam.subs.push(cb);
+    return () => {
+      seam.subs = seam.subs.filter((s) => s !== cb);
+    };
+  }),
   safeClick: vi.fn(() => true),
   isVisible: vi.fn(() => true),
 }));
@@ -86,6 +96,31 @@ describe("автопринятие: принятый блок — путь ус�
     autoStartFeature.enable(ctx);
     vi.advanceTimersByTime(1_100);
     expect(vi.mocked(safeClick)).toHaveBeenCalled();
+  });
+});
+
+describe("PERF-3: единый планировщик сканов принятия", () => {
+  test("наблюдатель и интервал не дают второго скана внутри 250 мс", () => {
+    // Раньше это были независимые пути: наблюдатель кликал через 250 мс от
+    // мутации, интервал — сам по себе; в худшем случае двойной скан (и
+    // двойной клик) внутри одного окна.
+    document.body.innerHTML = `
+      <div class="p-play__profile-panel"><div class="p-play-profile__wr">
+        <div class="p-play__profile-game p-play__profile-accept cursor-pointer">Принять игру</div>
+      </div></div>`;
+    autoStartFeature.enable(ctx);
+    vi.mocked(safeClick).mockClear();
+
+    // Шквал: три «мутации» подряд + тик интервала внутри того же окна.
+    const fire = () => seam.subs.forEach((s) => s([{ addedNodes: [document.createElement("div")] }]));
+    fire();
+    fire();
+    fire();
+    vi.advanceTimersByTime(260);
+    expect(vi.mocked(safeClick).mock.calls.length, "ровно один скан за окно").toBe(1);
+
+    vi.advanceTimersByTime(1_100); // следующий интервал-тик — новый скан легитимен
+    expect(vi.mocked(safeClick).mock.calls.length).toBe(2);
   });
 });
 
