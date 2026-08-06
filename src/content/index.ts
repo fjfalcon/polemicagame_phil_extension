@@ -13,6 +13,7 @@ import { browser } from "@core/env";
 import { clearToasts } from "@core/toast";
 import { setupNicknameLengthsResponder } from "./nickname-lengths";
 import { setupDiagnostics } from "./diag";
+import { startOrphanWatch, stopOrphanWatch } from "./orphan-watch";
 
 import { searchFeature } from "./features/search";
 import { autoStartFeature } from "./features/auto-start";
@@ -143,14 +144,29 @@ void getSetting("extension_enabled")
 setupNicknameLengthsResponder();
 setupDiagnostics();
 
+// Сторож осиротевшей вкладки (F5-баннер). Гейт по мастер-выключателю:
+// выключенное расширение не имеет права напоминать о себе баннером.
+void getSetting("extension_enabled")
+  .catch(() => true)
+  .then((on) => {
+    if (on !== false) startOrphanWatch();
+  });
+onSettingsChanged((patch) => {
+  if (!("extension_enabled" in patch)) return;
+  if (patch.extension_enabled === false) stopOrphanWatch();
+  else startOrphanWatch();
+});
+
 /**
  * Ответ на вопрос «на какой версии ты работаешь».
  *
  * Браузер НЕ переинжектит content-скрипт в уже открытый документ после
  * обновления расширения: игра продолжает работать на старом коде, и понять
  * это со стороны попапа было нельзя (аудит lifecycle 01.08.2026, находка 3).
- * Баннер поверх игры мы намеренно НЕ показываем — сообщение появляется
- * только в попапе, когда пользователь сам его открыл.
+ * Ответ отсюда возможен, пока контекст жив; ПОСЛЕ обновления этот скрипт
+ * сиротеет и на сообщения не отвечает вовсе — тот случай закрывает
+ * orphan-watch: единственный баннер поверх игры, разрешённый владельцем
+ * (решение 06.08.2026; прежнее «только попап» касалось живого контекста).
  */
 onMessage((msg) => {
   if ("type" in msg && msg.type === "getContentVersion") {
