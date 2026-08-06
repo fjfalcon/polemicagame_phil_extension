@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,59 +5,12 @@ import { describe, expect, test } from "vitest";
 import phaseFixture from "../fixtures/phase-labels.ru.json";
 import siteFixture from "../fixtures/site-contract.json";
 import { SITE, TEXT, classifyPhaseText } from "@core/selectors";
+import { TransientNetworkError, download, json, type Download } from "./fetch";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const UPDATE_FIXTURES = process.env.UPDATE_CONTRACT_FIXTURES === "1";
-const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 type BundleKey = keyof typeof siteFixture.bundles;
-type Download = { text: string; sha256: string; bytes: number };
-
-class TransientNetworkError extends Error {}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchWithRetry(url: string, attempts = 3): Promise<Response> {
-  let last: unknown;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8_000);
-    try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: { Accept: "application/javascript, application/json, text/plain, */*" },
-      });
-      if (!RETRYABLE.has(response.status)) return response;
-      last = new TransientNetworkError(`${url}: HTTP ${response.status}`);
-    } catch (error) {
-      last = error;
-    } finally {
-      clearTimeout(timer);
-    }
-    if (attempt + 1 < attempts) await sleep(400 * 2 ** attempt);
-  }
-  throw new TransientNetworkError(`${url}: unavailable after ${attempts} attempts (${String(last)})`);
-}
-
-async function download(url: string): Promise<Download> {
-  const response = await fetchWithRetry(url);
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  return {
-    text: new TextDecoder().decode(bytes),
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-    bytes: bytes.byteLength,
-  };
-}
-
-async function json(url: string): Promise<{ response: Response; body: unknown }> {
-  const response = await fetchWithRetry(url);
-  if (!response.ok) return { response, body: null };
-  const body = await response.json();
-  return { response, body };
-}
 
 function classesFromSelector(selector: string): string[] {
   return [...selector.matchAll(/\.(-?[_a-zA-Z]+[\w-]*)/g)].map((match) => match[1]);
@@ -214,6 +166,23 @@ describe("live Polemica bundle contracts", () => {
       }
     }
     expect(unclassified, "A live stage label is not classified into its expected phase").toEqual([]);
+
+    // EN-локаль: раньше английские маркеры были best-effort и НЕ проверялись
+    // живьём — аудит хрупкости 06.08.2026 нашёл два настоящих промаха
+    // («Card distribution», «Player's speach» с опечаткой сайта). Теперь EN
+    // сторожится той же классификацией, что и RU.
+    const parsedEn = localeEntries(downloads.localeEn.text);
+    const unclassifiedEn: string[] = [];
+    for (const [key, phase] of Object.entries(knownPhaseKeys)) {
+      const values = parsedEn.get(key) ?? [];
+      if (values.length === 0) unclassifiedEn.push(`${key}: ключ не найден в EN.js`);
+      for (const value of values) {
+        if (classifyPhaseText(value.toLowerCase()) !== phase) {
+          unclassifiedEn.push(`${key}: ${value}`);
+        }
+      }
+    }
+    expect(unclassifiedEn, "Живой EN-лейбл стадии не классифицируется в свою фазу").toEqual([]);
 
     if (UPDATE_FIXTURES && changed.length) {
       const next = structuredClone(siteFixture) as typeof siteFixture;

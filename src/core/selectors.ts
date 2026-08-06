@@ -175,6 +175,9 @@ export const TEXT = {
     "auction",
     "night",
     "card deal",
+    // Живая EN-локаль: card_distribution:"Card distribution" — без этого
+    // маркера классификатор давал null (аудит хрупкости 06.08.2026).
+    "card distribution",
     "dealing",
     "mafia",
     "doctor",
@@ -206,6 +209,11 @@ export const TEXT = {
     "player's speech",
     "player speech",
     "speech",
+    // Живая EN-локаль пишет discussion:"Player's speach" — С ОПЕЧАТКОЙ (sic).
+    // Правильное "speech" её не ловило, и день на EN давал null
+    // (аудит хрупкости 06.08.2026). Если сайт исправит опечатку, маркер
+    // станет мёртвым, но безвредным — "speech" выше подхватит.
+    "speach",
     "additional speech",
     "farewell",
     // best-effort, не проверено на живом EN-интерфейсе

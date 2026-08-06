@@ -88,27 +88,43 @@ const DEFAULT_PREFS: PanelPrefs = {
 const FONT_PX = { s: 11, m: 12.5, l: 14 } as const;
 const VISIBLE_VARIANTS = [3, 5, 10, 25, 50] as const;
 
-function loadPrefs(): PanelPrefs {
-  let raw: Partial<PanelPrefs> | null = null;
+/**
+ * Экспорт — тестовый шов: property-тесты page-storage-trust кормят парсер
+ * враждебным localStorage (по паттерну noteTrustedInput в queue-requeue.ts).
+ *
+ * Каждое поле читается только как СОБСТВЕННОЕ (Object.hasOwn): раньше доступ
+ * через точку шёл по цепочке прототипов, и унаследованное поле подходящего
+ * типа (например, clickThrough: true на Object.prototype) проходило схему как
+ * выбор пользователя (аудит хрупкости 06.08.2026). JSON.parse прототип не
+ * подменяет, но парсер обязан быть безопасен сам по себе, а не за счёт
+ * предположений о вызывающем.
+ */
+export function loadPrefs(): PanelPrefs {
+  let raw: unknown = null;
   try {
     raw = JSON.parse(localStorage.getItem(PREFS_KEY) || "null");
   } catch {
     raw = null;
   }
   const d = DEFAULT_PREFS;
-  if (!raw || typeof raw !== "object") return { ...d };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...d };
+  const own = (key: keyof PanelPrefs): unknown =>
+    Object.hasOwn(raw as object, key) ? (raw as Record<string, unknown>)[key] : undefined;
+  const bgOpacity = own("bgOpacity");
+  const fontSize = own("fontSize");
+  const visibleCount = own("visibleCount");
   return {
-    headerHidden: raw.headerHidden === true,
+    headerHidden: own("headerHidden") === true,
     bgOpacity:
-      typeof raw.bgOpacity === "number" && Number.isFinite(raw.bgOpacity)
-        ? Math.min(100, Math.max(0, Math.round(raw.bgOpacity)))
+      typeof bgOpacity === "number" && Number.isFinite(bgOpacity)
+        ? Math.min(100, Math.max(0, Math.round(bgOpacity)))
         : d.bgOpacity,
-    fontSize: raw.fontSize === "s" || raw.fontSize === "l" ? raw.fontSize : "m",
-    timestamps: raw.timestamps !== false,
-    highlightMentions: raw.highlightMentions !== false,
-    clickThrough: raw.clickThrough === true,
-    visibleCount: (VISIBLE_VARIANTS as readonly number[]).includes(raw.visibleCount as number)
-      ? (raw.visibleCount as number)
+    fontSize: fontSize === "s" || fontSize === "l" ? fontSize : "m",
+    timestamps: own("timestamps") !== false,
+    highlightMentions: own("highlightMentions") !== false,
+    clickThrough: own("clickThrough") === true,
+    visibleCount: (VISIBLE_VARIANTS as readonly number[]).includes(visibleCount as number)
+      ? (visibleCount as number)
       : d.visibleCount,
   };
 }

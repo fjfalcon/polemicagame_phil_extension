@@ -7,7 +7,9 @@
  *
  * Уровни:
  *   - консоль: по умолчанию warn; поднять — localStorage.setItem('polemica:loglevel','debug')
- *   - буфер:   по умолчанию info; поднять — localStorage.setItem('polemica:buflevel','debug')
+ *   - буфер:   фиксированный info; из page-storage НЕ настраивается (см.
+ *     resolveConsoleLevel — сайт включал себе сбор чужих данных), только
+ *     log.setBufferLevel из кода расширения.
  */
 import { browser } from "./env";
 

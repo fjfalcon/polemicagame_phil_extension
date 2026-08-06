@@ -16,6 +16,10 @@
     "localeRu": {
       "url": "https://polemicagame.com/room/bundle/locales/RU.js",
       "sha256": "b5ce5268540d7fa5b4daa954618e4c48939e27510f46feaf1a5f2a730aaa6cec"
+    },
+    "localeEn": {
+      "url": "https://polemicagame.com/room/bundle/locales/EN.js",
+      "sha256": "6c11dcdb847e840f46abf4727d91c5acca87b0f75d632312dca25dc01206d16c"
     }
   }
 }

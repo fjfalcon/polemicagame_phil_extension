@@ -156,15 +156,14 @@ function enhance(gameData: any): void {
       originalHeaderHtml = header.innerHTML;
       originalHeaderElement = header;
       originalHeaderStyle = header.getAttribute("style");
-      originalHeaderHadScopeAttr = header.hasAttribute("data-v-33ae8458");
+      // data-pn-stats — НАШ маркер для нашей же CSS. Исторически здесь были
+      // Vue-scope-ID сайта (data-v-33ae8458/1db9d42a), но сайт давно на
+      // другом scope: селекторы и так матчили только проштампованные нами
+      // узлы, а имена врали о происхождении (аудит хрупкости 06.08.2026).
+      originalHeaderHadScopeAttr = header.hasAttribute("data-pn-stats");
     }
 
-    // winnerCode: 0 = мирные. Отсутствие поля раньше уверенно рисовало
-    // «Победа мафии» — теперь нейтральный заголовок.
-    const hasWinner = typeof gameData.winnerCode === "number";
-    const isMafiaWin = hasWinner && gameData.winnerCode !== 0;
-    const winnerColor = !hasWinner ? "#94a3b8" : isMafiaWin ? "#ef4444" : "#22c55e";
-    const winnerText = !hasWinner ? "" : isMafiaWin ? "Победа мафии" : "Победа мирных";
+    const { color: winnerColor, text: winnerText } = winnerBadge(gameData.winnerCode);
 
     header.style.cssText = `
       background: rgba(30, 41, 59, 0.5);
@@ -187,7 +186,7 @@ function enhance(gameData: any): void {
       )}</span>
     `;
 
-    header.setAttribute("data-v-33ae8458", "");
+    header.setAttribute("data-pn-stats", "");
   }
 
   log.debug(SCOPE, "Starting page enhancement");
@@ -241,7 +240,7 @@ function restoreHeader(): void {
     header.innerHTML = originalHeaderHtml;
     if (originalHeaderStyle === null) header.removeAttribute("style");
     else header.setAttribute("style", originalHeaderStyle);
-    if (!originalHeaderHadScopeAttr) header.removeAttribute("data-v-33ae8458");
+    if (!originalHeaderHadScopeAttr) header.removeAttribute("data-pn-stats");
   }
   originalHeaderHtml = null;
   originalHeaderElement = null;
@@ -361,7 +360,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
     // Строка дня.
     const dayRow = document.createElement("div");
     dayRow.className = "row";
-    dayRow.setAttribute("data-v-1db9d42a", "");
+    dayRow.setAttribute("data-pn-stats", "");
     dayRow.setAttribute("data-phase", `day-${phaseNumber}`);
 
     const dayTitleCell = document.createElement("div");
@@ -633,7 +632,7 @@ function buildPhaseTimeline(
 function createNightRow(phaseNumber: number, phase: any, players: any[]): HTMLElement {
   const nightRow = document.createElement("div");
   nightRow.className = "row";
-  nightRow.setAttribute("data-v-1db9d42a", "");
+  nightRow.setAttribute("data-pn-stats", "");
   nightRow.setAttribute("data-phase", `night-${phaseNumber}`);
 
   const nightTitleCell = document.createElement("div");
@@ -1094,6 +1093,47 @@ function addPenaltyDot(
 
 // ───────────────────────── авто-высота таблицы ─────────────────────────
 
+/**
+ * Заголовок исхода матча по сырому winnerCode SSR-пейлоада.
+ *
+ * Живые фикстуры: 0 — победа мирных (match_610180), 1 — победа мафии
+ * (match_314446). Любой ДРУГОЙ код — нейтраль, а не «мафия по умолчанию»:
+ * прежняя проверка `!== 0` молча красила бы будущий код сайта в победу мафии
+ * (аудит хрупкости 06.08.2026, раздел 6). ВНИМАНИЕ: room-API статистики
+ * использует ДРУГУЮ шкалу с тем же именем поля (1=red, 2=black) — эти
+ * форматы не смешивать.
+ */
+export function winnerBadge(winnerCode: unknown): { color: string; text: string } {
+  if (winnerCode === 0) return { color: "#22c55e", text: "Победа мирных" };
+  if (winnerCode === 1) return { color: "#ef4444", text: "Победа мафии" };
+  return { color: "#94a3b8", text: "" };
+}
+
+/**
+ * Семантический выбор строк «Итог» и «MMR» вместо порядкового.
+ *
+ * «Последние две строки таблицы» было правдой прошлого поколения разметки.
+ * Сейчас .game-stats-table — ТРИ отдельных корня (header/main/footer),
+ * строки MMR не существует вовсе, и порядковый выбор красил последнюю строку
+ * ИГРОКА как «итог», а строку суммы — как MMR (аудит хрупкости 06.08.2026,
+ * живой дрифт). Строку суммы сайт подписывает захардкоженным «Итог»
+ * (бандл: code:"sum",title:"Итог" — сторожится живой пробой sumRowTitle);
+ * MMR стилизуется, только если сайт снова начнёт её рисовать. Наши строки
+ * фаз (data-phase) из кандидатов исключены.
+ */
+export function findSummaryRows(rows: HTMLElement[]): {
+  totalRow: HTMLElement | null;
+  mmrRow: HTMLElement | null;
+} {
+  const siteRows = rows.filter((row) => !row.hasAttribute("data-phase"));
+  const titleOf = (row: HTMLElement) =>
+    row.querySelector(SITE.statsCellTitle)?.textContent?.trim() ?? "";
+  return {
+    totalRow: siteRows.find((row) => titleOf(row) === "Итог") ?? null,
+    mmrRow: siteRows.find((row) => titleOf(row) === "MMR") ?? null,
+  };
+}
+
 function applyAutoHeight(): void {
   const gameStatsTable = document.querySelector<HTMLElement>(SITE.statsTableRoot);
   if (!gameStatsTable) return;
@@ -1138,50 +1178,44 @@ function applyAutoHeight(): void {
     hops++;
   }
 
-  // Строки итога и MMR.
-  const tableRows = gameStatsTable.querySelectorAll<HTMLElement>(SITE.statsRow);
-  if (tableRows.length >= 2) {
-    const mmrRow = tableRows[tableRows.length - 1];
-    const totalRow = tableRows[tableRows.length - 2];
+  // Строки итога и MMR — семантически, по заголовку (см. findSummaryRows).
+  const allRows = Array.from(gameStatsTable.querySelectorAll<HTMLElement>(SITE.statsRow));
+  const { totalRow, mmrRow } = findSummaryRows(allRows);
 
-    // Гонка «Итог/MMR ещё не отрендерены сайтом»: последними строками могут
-    // оказаться НАШИ скрытые строки фаз — setStyleAttr переписал бы весь
-    // style, включая display:none, и выдернул их из тоггла таймлайна.
-    if (mmrRow?.hasAttribute("data-phase") || totalRow?.hasAttribute("data-phase")) return;
-
-    if (mmrRow && totalRow) {
-      setStyleAttr(mmrRow, "background: #1a1c29 !important; border-bottom: 2px solid #2c3347 !important;");
-      setStyleAttr(totalRow, "background: #1a1c29 !important; border-top: 2px solid #2c3347 !important;");
-
-      const mmrTitle = mmrRow.querySelector(SITE.statsCellTitle);
-      const totalTitle = totalRow.querySelector(SITE.statsCellTitle);
-      if (mmrTitle && totalTitle) {
-        setStyleAttr(mmrTitle, "background: #151824 !important; font-weight: 700 !important; color: #d1d5db !important;");
-        setStyleAttr(totalTitle, "background: #151824 !important; font-weight: 700 !important; color: #d1d5db !important;");
-      }
-
-      totalRow.querySelectorAll<HTMLElement>(".cell:not(.title)").forEach((cell) => {
-        const value = parseFloat(cell.textContent?.trim() || "") || 0;
-        if (value > 0) {
-          setStyleAttr(cell, "color: #10b981 !important; font-weight: 600 !important; font-size: 16px !important;");
-        } else if (value < 0) {
-          setStyleAttr(cell, "color: #ef4444 !important; font-weight: 600 !important; font-size: 16px !important;");
-        } else {
-          setStyleAttr(cell, "color: #94a3b8 !important; font-weight: 600 !important; font-size: 16px !important;");
-        }
-      });
-
-      mmrRow.querySelectorAll<HTMLElement>(".cell:not(.title)").forEach((cell) => {
-        const value = parseInt(cell.textContent?.trim() || "", 10) || 0;
-        if (value > 0) {
-          setStyleAttr(cell, "color: #10b981 !important; font-weight: 700 !important; font-size: 17px !important;");
-        } else if (value < 0) {
-          setStyleAttr(cell, "color: #ef4444 !important; font-weight: 700 !important; font-size: 17px !important;");
-        } else {
-          setStyleAttr(cell, "color: #94a3b8 !important; font-weight: 700 !important; font-size: 17px !important;");
-        }
-      });
+  if (totalRow) {
+    setStyleAttr(totalRow, "background: #1a1c29 !important; border-top: 2px solid #2c3347 !important;");
+    const totalTitle = totalRow.querySelector(SITE.statsCellTitle);
+    if (totalTitle) {
+      setStyleAttr(totalTitle, "background: #151824 !important; font-weight: 700 !important; color: #d1d5db !important;");
     }
+    totalRow.querySelectorAll<HTMLElement>(".cell:not(.title)").forEach((cell) => {
+      const value = parseFloat(cell.textContent?.trim() || "") || 0;
+      if (value > 0) {
+        setStyleAttr(cell, "color: #10b981 !important; font-weight: 600 !important; font-size: 16px !important;");
+      } else if (value < 0) {
+        setStyleAttr(cell, "color: #ef4444 !important; font-weight: 600 !important; font-size: 16px !important;");
+      } else {
+        setStyleAttr(cell, "color: #94a3b8 !important; font-weight: 600 !important; font-size: 16px !important;");
+      }
+    });
+  }
+
+  if (mmrRow) {
+    setStyleAttr(mmrRow, "background: #1a1c29 !important; border-bottom: 2px solid #2c3347 !important;");
+    const mmrTitle = mmrRow.querySelector(SITE.statsCellTitle);
+    if (mmrTitle) {
+      setStyleAttr(mmrTitle, "background: #151824 !important; font-weight: 700 !important; color: #d1d5db !important;");
+    }
+    mmrRow.querySelectorAll<HTMLElement>(".cell:not(.title)").forEach((cell) => {
+      const value = parseInt(cell.textContent?.trim() || "", 10) || 0;
+      if (value > 0) {
+        setStyleAttr(cell, "color: #10b981 !important; font-weight: 700 !important; font-size: 17px !important;");
+      } else if (value < 0) {
+        setStyleAttr(cell, "color: #ef4444 !important; font-weight: 700 !important; font-size: 17px !important;");
+      } else {
+        setStyleAttr(cell, "color: #94a3b8 !important; font-weight: 700 !important; font-size: 17px !important;");
+      }
+    });
   }
 }
 
@@ -1189,30 +1223,30 @@ function applyAutoHeight(): void {
 
 function injectBaseStyles(): void {
   appendStyle(`
-    .game-stats-header[data-v-33ae8458] {
+    .game-stats-header[data-pn-stats] {
       background: rgba(45, 48, 57, .03) !important;
     }
-    .table .row .cell.username[data-v-1db9d42a],
-    .table .row .cell.title[data-v-1db9d42a],
-    .table .row .cell.position[data-v-1db9d42a] {
+    .table .row .cell.username[data-pn-stats],
+    .table .row .cell.title[data-pn-stats],
+    .table .row .cell.position[data-pn-stats] {
       background: rgba(45, 48, 57, .03) !important;
     }
-    .table .row .cell.sum[data-v-1db9d42a],
-    .table .row .cell.mmr_diff[data-v-1db9d42a] {
+    .table .row .cell.sum[data-pn-stats],
+    .table .row .cell.mmr_diff[data-pn-stats] {
       background: rgba(45, 48, 57, .09) !important;
     }
-    .cell.mmr_diff[data-v-1db9d42a] { font-weight: 500; }
-    .cell.mmr_diff[data-v-1db9d42a] span { padding: 4px 8px; border-radius: 4px; }
-    .cell.mmr_diff[data-v-1db9d42a] span[style*="color: rgb(239, 68, 68)"] { background: rgba(239, 68, 68, 0.1); }
-    .cell.mmr_diff[data-v-1db9d42a] span[style*="color: rgb(34, 197, 94)"] { background: rgba(34, 197, 94, 0.1); }
-    .cell.mmr_diff[data-v-1db9d42a] span[style*="color: rgb(255, 255, 255)"] { background: rgba(255, 255, 255, 0.1); }
-    .cell.sum[data-v-1db9d42a] { font-weight: 500; }
-    .cell.sum[data-v-1db9d42a] span { padding: 4px 8px; border-radius: 4px; }
-    .cell.sum[data-v-1db9d42a] span:not([style]) { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
-    .cell.sum[data-v-1db9d42a] span[style*="color: rgb(239, 68, 68)"] { background: rgba(239, 68, 68, 0.1); }
-    .cell.sum[data-v-1db9d42a] span[style*="color: rgb(34, 197, 94)"] { background: rgba(34, 197, 94, 0.1); }
-    .table .row .cell.mmr_diff[data-v-1db9d42a] > span,
-    .table .row .cell.sum[data-v-1db9d42a] > span {
+    .cell.mmr_diff[data-pn-stats] { font-weight: 500; }
+    .cell.mmr_diff[data-pn-stats] span { padding: 4px 8px; border-radius: 4px; }
+    .cell.mmr_diff[data-pn-stats] span[style*="color: rgb(239, 68, 68)"] { background: rgba(239, 68, 68, 0.1); }
+    .cell.mmr_diff[data-pn-stats] span[style*="color: rgb(34, 197, 94)"] { background: rgba(34, 197, 94, 0.1); }
+    .cell.mmr_diff[data-pn-stats] span[style*="color: rgb(255, 255, 255)"] { background: rgba(255, 255, 255, 0.1); }
+    .cell.sum[data-pn-stats] { font-weight: 500; }
+    .cell.sum[data-pn-stats] span { padding: 4px 8px; border-radius: 4px; }
+    .cell.sum[data-pn-stats] span:not([style]) { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
+    .cell.sum[data-pn-stats] span[style*="color: rgb(239, 68, 68)"] { background: rgba(239, 68, 68, 0.1); }
+    .cell.sum[data-pn-stats] span[style*="color: rgb(34, 197, 94)"] { background: rgba(34, 197, 94, 0.1); }
+    .table .row .cell.mmr_diff[data-pn-stats] > span,
+    .table .row .cell.sum[data-pn-stats] > span {
       padding: 0.5rem 1rem;
       border-radius: 8px;
       font-size: 0.875rem;
@@ -1221,25 +1255,25 @@ function injectBaseStyles(): void {
       gap: 0.5rem;
       border: 1px solid;
     }
-    .table .row .cell.mmr_diff[data-v-1db9d42a] > span[style*="color: rgb(239, 68, 68)"],
-    .table .row .cell.sum[data-v-1db9d42a] > span[style*="color: rgb(239, 68, 68)"] {
+    .table .row .cell.mmr_diff[data-pn-stats] > span[style*="color: rgb(239, 68, 68)"],
+    .table .row .cell.sum[data-pn-stats] > span[style*="color: rgb(239, 68, 68)"] {
       background: rgba(239, 68, 68, 0.1);
       border-color: rgba(239, 68, 68, 0.3);
     }
-    .table .row .cell.mmr_diff[data-v-1db9d42a] > span[style*="color: rgb(34, 197, 94)"],
-    .table .row .cell.sum[data-v-1db9d42a] > span[style*="color: rgb(34, 197, 94)"] {
+    .table .row .cell.mmr_diff[data-pn-stats] > span[style*="color: rgb(34, 197, 94)"],
+    .table .row .cell.sum[data-pn-stats] > span[style*="color: rgb(34, 197, 94)"] {
       background: rgba(34, 197, 94, 0.15);
       border-color: rgba(34, 197, 94, 0.3);
     }
-    .table .row .cell.mmr_diff[data-v-1db9d42a] > span[style*="color: rgb(255, 255, 255)"],
-    .table .row .cell.sum[data-v-1db9d42a] > span[style*="color: rgb(255, 255, 255)"],
-    .table .row .cell.mmr_diff[data-v-1db9d42a] > span:not([style]),
-    .table .row .cell.sum[data-v-1db9d42a] > span:not([style]) {
+    .table .row .cell.mmr_diff[data-pn-stats] > span[style*="color: rgb(255, 255, 255)"],
+    .table .row .cell.sum[data-pn-stats] > span[style*="color: rgb(255, 255, 255)"],
+    .table .row .cell.mmr_diff[data-pn-stats] > span:not([style]),
+    .table .row .cell.sum[data-pn-stats] > span:not([style]) {
       background: rgba(255, 255, 255, 0.1);
       border-color: rgba(255, 255, 255, 0.2);
     }
-    .table .row .cell.mmr_diff[data-v-1db9d42a] span,
-    .table .row .cell.sum[data-v-1db9d42a] span {
+    .table .row .cell.mmr_diff[data-pn-stats] span,
+    .table .row .cell.sum[data-pn-stats] span {
       display: inline-flex !important;
       align-items: center !important;
       justify-content: center !important;
@@ -1248,23 +1282,23 @@ function injectBaseStyles(): void {
       border-radius: 6px !important;
       font-weight: 500 !important;
     }
-    .table .row .cell.mmr_diff[data-v-1db9d42a] span[style*="color: #ef4444"],
-    .table .row .cell.sum[data-v-1db9d42a] span[style*="color: #ef4444"] {
+    .table .row .cell.mmr_diff[data-pn-stats] span[style*="color: #ef4444"],
+    .table .row .cell.sum[data-pn-stats] span[style*="color: #ef4444"] {
       background: rgba(239, 68, 68, 0.15) !important;
       border: 1px solid rgba(239, 68, 68, 0.3) !important;
     }
-    .table .row .cell.mmr_diff[data-v-1db9d42a] span[style*="color: #22c55e"],
-    .table .row .cell.sum[data-v-1db9d42a] span[style*="color: #22c55e"] {
+    .table .row .cell.mmr_diff[data-pn-stats] span[style*="color: #22c55e"],
+    .table .row .cell.sum[data-pn-stats] span[style*="color: #22c55e"] {
       background: rgba(34, 197, 94, 0.15) !important;
       border: 1px solid rgba(34, 197, 94, 0.3) !important;
     }
-    .table .row .cell.mmr_diff[data-v-1db9d42a] span[style*="color: #ffffff"],
-    .table .row .cell.sum[data-v-1db9d42a] span[style*="color: #ffffff"] {
+    .table .row .cell.mmr_diff[data-pn-stats] span[style*="color: #ffffff"],
+    .table .row .cell.sum[data-pn-stats] span[style*="color: #ffffff"] {
       background: rgba(255, 255, 255, 0.1) !important;
       border: 1px solid rgba(255, 255, 255, 0.2) !important;
     }
     [style*="overflow: scroll hidden"] { overflow: hidden !important; }
-    .game-stats-table[data-v-33ae8458], .game-stats-table [data-v-33ae8458], .game-stats-header[data-v-33ae8458] { height: auto !important; }
+    .game-stats-table[data-pn-stats], .game-stats-table [data-pn-stats], .game-stats-header[data-pn-stats] { height: auto !important; }
     .__vuescroll { height: auto !important; }
     .__panel, .__view { height: auto !important; }
     .game-stats-table {
@@ -1347,7 +1381,7 @@ function injectBaseStyles(): void {
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
-    .table .row[data-v-1db9d42a] {
+    .table .row[data-pn-stats] {
       border-bottom: 1px solid rgba(255, 255, 255, 0.1);
       background: rgba(20, 20, 35, 0.95);
     }

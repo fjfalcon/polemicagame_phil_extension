@@ -89,6 +89,11 @@ class SharedDomObserver {
       if (muts.length > room) this.dropped += muts.length - Math.max(room, 0);
       this.schedule();
     });
+    // Набор опций — осознанный минимум (закреплён инвариантом в
+    // tests/invariants/architecture.test.ts): childList + только атрибуты
+    // class/style. characterData НЕ включён намеренно — текстовые тики
+    // (таймеры, счётчики готовности) мутируют каждую секунду и затопили бы
+    // очередь; подписчики и так пересканируют DOM по батчу childList.
     this.observer.observe(document.documentElement, {
       childList: true,
       subtree: true,

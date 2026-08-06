@@ -187,6 +187,25 @@ describe("AGENTS §4 source safety", () => {
     ]);
   });
 
+  test("§4.1: the shared observer watches childList + class/style only, without characterData", () => {
+    // Набор опций — осознанное решение (комментарий у observe() в dom.ts):
+    // characterData ловил бы каждый текстовый тик таймеров сайта и затопил бы
+    // очередь мутаций; атрибуты сужены до class/style, по которым сайт
+    // переключает фазы. Расширение набора — только через ревью.
+    const source = read("src/core/dom.ts");
+    const observed = source.match(/\.observe\(document\.documentElement,\s*\{([\s\S]*?)\}\s*\)/);
+    expect(observed, "§4.1: the shared observer must observe document.documentElement").not.toBeNull();
+    const options = observed![1];
+    expect(options).toMatch(/childList:\s*true/);
+    expect(options).toMatch(/subtree:\s*true/);
+    expect(options).toMatch(/attributes:\s*true/);
+    expect(options).toMatch(/attributeFilter:\s*\["class",\s*"style"\]/);
+    expect(options, "§4.1: characterData floods the queue with per-second text ticks").not.toMatch(
+      /characterData/,
+    );
+    expect(count(source, /\.observe\s*\(/g), "§4.1: a second observe() call widens the watched set").toBe(1);
+  });
+
   test("§4.5: central hotkey router keeps code/typing/modifier/repeat gates", () => {
     const source = read("src/core/keyboard.ts");
     for (const required of ["e.code", "isTypingContext(e)", "e.ctrlKey", "e.metaKey", "e.altKey", "e.repeat"]) {

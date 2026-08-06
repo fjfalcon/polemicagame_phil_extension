@@ -274,7 +274,14 @@ function modeAllowed(mode: string, creds: Credentials): boolean {
   return true;
 }
 
-function peekOnce(creds: Credentials, mode: string): Promise<Record<string, QueueInfo>> {
+/**
+ * Экспорт — тестовый шов (как noteTrustedInput в queue-requeue): это
+ * единственное место, где расширение говорит с сервером от имени аккаунта
+ * игрока, и живой мутирующий тест здесь запрещён. Протокол покрывается
+ * fake-WebSocket-транскриптами (tests/unit/queue-peek-transcript.test.ts),
+ * которым нужна прямая точка входа в сетевую часть.
+ */
+export function peekOnce(creds: Credentials, mode: string): Promise<Record<string, QueueInfo>> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(socketUrl(creds));
     let settled = false;

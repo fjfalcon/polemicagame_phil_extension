@@ -1,0 +1,9 @@
+ss:"p-play__profile-game p-play__profile-accept animation-on-active-with-child",class:{"cursor-pointer":!t.isGameAccepted},on:{click:function(e){return e.preventD
+/*—SNIPPET—*/
+isGameAccepted:function(){var e;return null===(e=this.searchState)||void 0===e||null===(e=e.group)||void 0===e?void 0:e.ready}}),methods:ka(ka({},E({storeChangeUserInGame:"userInGame/setValue",setIsShowQuiz:"isShowQuiz/setValue"})),{},{reloadPage:function(){return window.location.re
+/*—SNIPPET—*/
+trics("polemica_gameSearch_cancel",{}),e.disconnectSocket(),"game_not_accepted"===t.reason?window.location.reload():"another_search_started"===t.reason?e.$
+/*—SNIPPET—*/
+display:"flex","flex-direction":"column"}},[n("span",[t._v("Принять игру")]),t._v(" "),n("span",{stati
+/*—SNIPPET—*/
+n(){e.leavingPage=!0;var n=document.createElement("form"),a=location.origin+"/game";n.setAttribute("action",a),n.setAttribute("method","post");var r=document.createElement("input");r.setAttribute("name",document.head.getElementsByTagName("meta")["csrf-param"].content),r.setAttribute

@@ -1,0 +1,13 @@
+ из ${_}`,start_game_readiness_button_not_ready:"Готов",start_game_readiness_button_not_ready_hover:"Подтвердить",start_game_readiness_button_ready:"Готов",start_game_readiness_button_ready_hover:"Отменить",player_start_game_readiness_state:"Готов",readiness_timeout:"Игра будет распущена через",confirm_continue_ga
+/*—SNIPPET—*/
+тив",pause:"Пауза",restart_pause:"Продлить",end_pause:"Завершить",pause_accepted:"Пауза скоро начнется",pause_canceled:"Проголосовали против паузы",pause_on_roller:"Пауза",pause_timeout:e=>`Возобновление игры через ${e
+/*—SNIPPET—*/
+сть",continue_game_button_not_ready:"Продолжить игру",continue_game_button_not_ready_hover:"Подтвердить",continue
+/*—SNIPPET—*/
+...",welcome:"Добро пожаловать",connect_to_game:"Начать игру",viewer_mode:"Режим зрителя",start_watching:"Начать просмотр",all_players_plugin:"Все игроки подключились",success_connect_media_server:"Соединение с 
+/*—SNIPPET—*/
+йки",show_roles:"Скрыть роли",hide_roles:"Показать роли",refresh_camera:"Обновить камеру"
+/*—SNIPPET—*/
+Ник",game_stats_role:"Роль",game_stats_day:"день",game_stats_night:
+/*—SNIPPET—*/
+тов",readiness_timeout:"Игра будет распущена через",confirm_continue_ga

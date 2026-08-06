@@ -1,0 +1,29 @@
+ent.votingForGameStart.inProgress?(to(),co(s,{key:0,class:d({active:e.$parent.votingForGameStart.voted}),"icon-src":__webpack_require__(8008)("./ready".concat(e.$p
+/*—SNIPPET—*/
+layerNumber");return"voting_for_game_start"===(null===(s=e.$store.state.gameView)||void 0===s?void 0:s.stage.type)?(to(),ao("div",iv,[yo("div",{class:"new-stage__name",textContent:v(e.$root.Loc.voting_for_game_start)},null,8,nv),yo("sp
+/*—SNIPPET—*/
+mer"};var iv={key:0,class:"new-stage"},nv=["textContent"],rv={class:"new-stag
+/*—SNIPPET—*/
+cket.on("on_game_disbandment",(function(t){e.$refs.roller.startDisbandmentCountdown(t.time)})),this.socket.on("on_choice_self_role",(function(t){e.Logger.log("SOCKET: on_choice_self_role",t),e.socketCallback&&e.socketCallback("on","on_choice_self_role",t),e.isBot||(e.selectedCards=t.selec
+/*—SNIPPET—*/
+ber},on_start_stage:function(e){var t=this;this.resetVotingInfo(!0),this.$store.state.gameDidStart||(this.$store.commit("setGameDidStart"),this.$store.state.audioTrackAvailable&&this.$store.state.videoTrackAvailable||this.toggleStreamStatus({video:!0,audio:!0}));for(var i=0;i<this.gameInfo.playersNumber;i++)this.updatePlayer(i,{isOutcry:!1});this.removeNotification({id:this.userActionNotificationId,callback:function(){t.userActionNotificationId=null}});var n=function(){switch(e.type){case"waiting_for_game":localStorage.removeItem("guesses_".c
+/*—SNIPPET—*/
+cket.on("on_stop_game",(function(t){e.roomSounds.onRoomDestroy(),setTimeout((function(){var i;t.gameId===e.$store.state.gameId&&"gameOver"===(null===(i=t.reason)||void 0===i?void 0:i.code)&&(e.breakConnection(),location="/game-search");var n=(t.reason.code?e.$root.Loc[t.reason.code]:t.reason.message)||"";e.showError({title:e.$root.Loc.game_stop,description:e.$root.Loc.game_stop_description(n),links:[{title:e.$root.Loc.link_search_game,link:e.links.gameSearch}]}),e.breakConnection()}),2e3)})),this.socket.on("on_session_dropped",(function(t){e.showError({title:e.$root.Loc.drop_session(t.reason),description:e.$root.Loc.drop_session_description(t.reason),links:[{title:e.$root.Loc.try_again,action:function(){return location.reload()}}]}),e.breakConnection()}))}var pf={class:"error"},df={class:"error__header"},hf={href:"/"},mf=["src"],ff={class:"error__main"},yf={class:"error__main-container"},xf=["src"],gf={class:"error__main-texts"},vf={class:"error__main-texts-header"},kf={class:"error__main-texts-desc"},bf={key:1,class:"error__main-texts-header"},_f={class:"error__main-buttons"},Sf=["href"],Ef=["onClick"],A
+/*—SNIPPET—*/
+cket.on("on_self_strike",(function(t){if(e.Logger.log("SOCKET: on_self_strike",t),e.socketCallback&&e.socketCallback("on","on_self_strike",t),e.breakConnection(),"kicked_out"!=t.reason&&e.$store.state.gameDidStart)location="/game?role=viewer&game_id=".concat(e.$store.state.gameId);else{var i=[{title:e.$root.Loc.link_home_redirect,link:location.origin},{title:e.$root.Loc.link_search_game,link:e.links.gameSearch}];e.$store.state.gameDidStart&&(i.push({title:e.$root.Loc.continue_as_viewer,link:"/game?role=viewer&game_id=".concat(e.$store.state.gameId)}),e.appealsAvailable&&i.push({title:e.$root.Loc.make_appeal,action:function(){return e.showAppealModal(e.$store.state.gameId)}})),e.showError({title:e.$root.Loc["you_strike_".concat(t.reason)],description:e.$root.Loc.you_strike_description(t.reason,t.message),links:i})}})),this.socket.on("on_remote_strike",(function(t){if(e.Logger.log("SOCKET: on_remote_strike",t),e.socketCallback&&e.socketCallback("on","on_remote_strike",t),e.$store.state.bestMove.id===t.id&&e.$store.commit("setBestMove",{}),e.$store.state.gameDidStart)switch(t.reason){case"killed_by_mafia":e.updatePlayer(t.id,{isKilled:!0});break;case"voted":e.updatePlayer(t.id,{isKilled:!0,votedBy:t.votedBy});break;case"strike":case"kicked_out":e.updatePlayer(t.id,{state:"disqualified",isDisqualified:!0})}else e.updatePlayer(t.id,{isPlugin:!1})})),this.socket.on("on_reveal_role",(function(t){(e.Logger.log("SOCKET: on_reveal_role",t),e.socketCallback&&e.socketCallback("on","on_reveal_role",t),t.role)&&e.$root.players["player-".concat(t.id)].addNotification("roleReveal");e.updatePlayer(t.id,{role:t.rol
+/*—SNIPPET—*/
+cket.on("on_session_dropped",(function(t){e.showError({title:e.$root.Loc.drop_session(t.reason),description:e.$root.Loc.drop_session_description(t.reason),links:[{title:e.$root.Loc.try_again,action:function(){return location.reload()}}]}),e.breakConnection()}))}var pf={class:"error"},df={class:"error__header"},hf={href:"/"},mf=["src"],ff={class:"error__main"},yf={class:"error__main-container"},xf=["src"],gf={class:"error__main-texts"},vf={class:"error__main-texts-header"},kf={class:"error__main-texts-desc"},bf={key:1,class:"error__main-texts-header"},_f={class:"error__main-buttons"
+/*—SNIPPET—*/
+eoEnabled?(to(),co(l,{key:0,"icon-src":o.cameraIcon,class:d({off:!this.$store.state.videoTrackAvailable}),size:"small",hotKey:"V",onClick:o.toggleVideoTrackStatus},
+/*—SNIPPET—*/
+ext:function(){return this.$store.state.roleDisplay?this.$root.Loc.hide_roles:this.$root.Loc.show_roles},streamerModeStatusText:function(){retu
+/*—SNIPPET—*/
+turn[yo("span",ak,[yo("span",{class:"without-hover",textContent:v(e.$parent.readinessTextWithoutHoverContinue)},null,8,ck),yo("span",{class:"with-hove
+/*—SNIPPET—*/
+),achievementIndex:2*n}),t.push({id:e++,code:"sum",title:"Итог"}),t},totalDays:func
+/*—SNIPPET—*/
+t)?(to(),ao("div",mA,[yo("div",{class:d(["cell","title",e.code]),textContent:v(e.ti
+/*—SNIPPET—*/
+ods:{getCellClasses:function(e,t){var i=["cell","player",e.code];switch(e.code){case
+/*—SNIPPET—*/
+Roller:!1,animationDuration:250,currentSubstage:"",nextSubstage:"",temp
