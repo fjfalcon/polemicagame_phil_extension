@@ -282,6 +282,53 @@ const THEME_COLORS: Record<string, string> = {
 
 // ───────────────────────── Менеджер фичи ─────────────────────────
 
+/**
+ * Классификация батча мутаций для полного прохода по плиткам (PERF-1).
+ *
+ * «identity» — появилась/ушла ЦЕЛАЯ плитка/строка участника: проход нужен
+ * немедленно (игрок сел за стол / ушёл). «inner» — шевеление ВНУТРИ
+ * существующих (таймеры речи, индикаторы, нотификации): проход дросселируется
+ * — до этого любой такой чих запускал полный проход на каждом flush, до
+ * 63 querySelectorAll/с (перф-аудит 06.08.2026). Чистая функция — для тестов.
+ */
+export type PlayerMutationTouch = "none" | "inner" | "identity";
+
+export function classifyPlayerMutations(muts: MutationRecord[]): PlayerMutationTouch {
+  const SCOPE_SEL =
+    ".player, .participants-item, .participants, .profileinfo__main-info, .profileinfo";
+  const CONTENT_SEL = ".player, .participants-item, .profileinfo__main-info";
+  let inner = false;
+  for (const m of muts) {
+    if (m.type !== "childList") continue;
+    for (const n of m.addedNodes) {
+      if (n instanceof Element && (n.matches(CONTENT_SEL) || n.querySelector(CONTENT_SEL)))
+        return "identity";
+    }
+    for (const n of m.removedNodes) {
+      if (n instanceof Element && (n.matches(CONTENT_SEL) || n.querySelector(CONTENT_SEL)))
+        return "identity";
+    }
+    if (!inner) {
+      const t = m.target;
+      const el = t instanceof Element ? t : t.parentElement;
+      if (el?.closest(SCOPE_SEL)) inner = true;
+    }
+  }
+  return inner ? "inner" : "none";
+}
+
+/** Пускать ли полный проход по этому батчу (identity — всегда, inner — дроссель). */
+export function shouldRunMutationPass(
+  touch: PlayerMutationTouch,
+  now: number,
+  lastPassAt: number,
+  minIntervalMs = 1000,
+): boolean {
+  if (touch === "identity") return true;
+  if (touch !== "inner") return false;
+  return now - lastPassAt >= minIntervalMs;
+}
+
 class PlayerNotesManager {
   private settings: Settings;
   /**
@@ -396,7 +443,16 @@ class PlayerNotesManager {
           this.removeStatisticsElements();
           return;
         }
-        if (this.mutationsTouchPlayers(muts)) this.processExistingElements();
+        // Дроссель (перф-аудит 06.08.2026, PERF-1): «внутреннее» шевеление
+        // плиток (таймеры речи, индикаторы) запускало полный проход на каждом
+        // flush — до 63 QSA/с при страховочном интервале всего 0.5/с.
+        // Появление/уход ЦЕЛОЙ плитки — немедленно; остальное — не чаще
+        // раза в секунду, хвост добирает интервал ниже.
+        const touch = classifyPlayerMutations(muts);
+        if (shouldRunMutationPass(touch, Date.now(), this.lastMutationPassAt)) {
+          this.lastMutationPassAt = Date.now();
+          this.processExistingElements();
+        }
       }),
     );
 
@@ -3300,26 +3356,8 @@ class PlayerNotesManager {
    * содержимому added/removed-узлов. Пропущенное добирает страховочный
    * 2с-проход.
    */
-  private mutationsTouchPlayers(muts: MutationRecord[]): boolean {
-    const SCOPE_SEL =
-      ".player, .participants-item, .participants, .profileinfo__main-info, .profileinfo";
-    const CONTENT_SEL = ".player, .participants-item, .profileinfo__main-info";
-    for (const m of muts) {
-      if (m.type !== "childList") continue;
-      const t = m.target;
-      const el = t instanceof Element ? t : t.parentElement;
-      if (el?.closest(SCOPE_SEL)) return true;
-      for (const n of m.addedNodes) {
-        if (n instanceof Element && (n.matches(CONTENT_SEL) || n.querySelector(CONTENT_SEL)))
-          return true;
-      }
-      for (const n of m.removedNodes) {
-        if (n instanceof Element && (n.matches(CONTENT_SEL) || n.querySelector(CONTENT_SEL)))
-          return true;
-      }
-    }
-    return false;
-  }
+  /** Последний полный проход, запущенный МУТАЦИЯМИ (интервал-страховка отдельно). */
+  private lastMutationPassAt = 0;
 
   private processExistingElements(): void {
     if (this.settings.statistics_enabled === false) {

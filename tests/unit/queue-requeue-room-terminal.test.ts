@@ -217,6 +217,31 @@ describe("RQ-4: живой отсчёт освежает мост", () => {
   });
 });
 
+describe("PERF-6: освежение моста дросселировано", () => {
+  test("шквал тиков живого отсчёта — не больше одной записи в 5 секунд", () => {
+    // Раньше синхронная пара parse+stringify+setItem шла на КАЖДОМ тике —
+    // до 4 записей/с. TTL скользит 45 секундами: чаще раза в 5с незачем.
+    // Проверка семантическая (refreshedAt метки): jsdom-storage — прокси,
+    // шпион на Storage.prototype его вызовов не видит.
+    pregameWithCountdown(true, "00:30");
+    queueRequeueFeature.enable(ctx);
+    const markAt = () =>
+      (JSON.parse(sessionStorage.getItem(PENDING_KEY) as string) as { refreshedAt: number })
+        .refreshedAt;
+    const first = markAt();
+
+    for (let i = 0; i < 12; i++) {
+      vi.advanceTimersByTime(250);
+      domSubscriber?.();
+    }
+    expect(markAt(), "3 секунды шквала — метка не переписывалась").toBe(first);
+
+    vi.advanceTimersByTime(5_100);
+    domSubscriber?.();
+    expect(markAt(), "через 5 секунд освежение обязано пройти").toBeGreaterThan(first);
+  });
+});
+
 describe("RQ-5: экран ошибки должен ДОКАЗЫВАТЬ развал", () => {
   test("экран исключения (home + search) не возвращает игрока в очередь", () => {
     pregameWithButton(true); // готовность залатчена по active-кнопке

@@ -332,22 +332,42 @@ function clickAcceptButtons() {
   });
 }
 
+/** Последний фактический скан принятия (общий для интервала и наблюдателя). */
+let lastAcceptScanAt = 0;
+/** Бюджет из перф-аудита 06.08.2026 (PERF-3): не чаще одного скана в 250 мс. */
+const ACCEPT_SCAN_MIN_GAP_MS = 250;
+
+/**
+ * ЕДИНЫЙ планировщик сканов: интервал и наблюдатель мутаций раньше были
+ * независимыми путями и в худшем случае давали двойной скан внутри одного
+ * 250-мс окна (6 QSA за скан × до 5 сканов/с = 30 QSA/с). Теперь оба идут
+ * через один таймер с общим минимальным зазором.
+ */
+function scheduleAcceptScan(delayMs: number): void {
+  if (acceptScanTimer !== null) return;
+  const gap = lastAcceptScanAt + ACCEPT_SCAN_MIN_GAP_MS - Date.now();
+  acceptScanTimer = setTimeout(
+    () => {
+      acceptScanTimer = null;
+      lastAcceptScanAt = Date.now();
+      clickAcceptButtons();
+    },
+    Math.max(delayMs, gap, 0),
+  );
+}
+
 function enableAutoAccept() {
   if (acceptInterval !== null) return;
   log.info(SCOPE, "auto-accept enabled");
   videoButtonClicked = false;
-  acceptInterval = setInterval(clickAcceptButtons, 1000);
+  acceptInterval = setInterval(() => scheduleAcceptScan(0), 1000);
   // Подписка на мутации нужна только чтобы отреагировать на появление карточки
   // быстрее, чем раз в секунду. Без дросселя она вызывала скан+клики на каждый
   // батч мутаций (до 60 раз/с) и обходила интервал-ограничитель: клик порождал
   // перерисовку, перерисовка — новый клик.
   unsubAcceptDom = onDomChange((muts) => {
-    if (acceptScanTimer !== null) return;
     if (!muts.some((m) => m.addedNodes.length)) return;
-    acceptScanTimer = setTimeout(() => {
-      acceptScanTimer = null;
-      clickAcceptButtons();
-    }, 250);
+    scheduleAcceptScan(250);
   });
 }
 
@@ -360,6 +380,7 @@ function disableAutoAccept() {
   unsubAcceptDom = null;
   // Хвост дросселя: без этого через ≤250 мс после выключения прилетал
   // ещё один скан с кликами.
+  lastAcceptScanAt = 0;
   if (acceptScanTimer !== null) {
     clearTimeout(acceptScanTimer);
     acceptScanTimer = null;

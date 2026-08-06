@@ -274,6 +274,39 @@ describe("пинг владения: только живая фаза делае
     expect(await ping(), "fixedState без заработанной живости — не владение").toBe(false);
   });
 
+  test("вне игровой комнаты детектор молчит и сцену эфира не трогает (PERF-4)", async () => {
+    // Перф-аудит: на /game-search автомод дважды за проверку сериализовал
+    // body.textContent и был способен «подтвердить день» и дёрнуть сцену.
+    seedRestoredDay();
+    await obsPanelFeature.enable(ctx);
+    nightMarkers();
+    await vi.advanceTimersByTimeAsync(4_000);
+    const switchesInRoom = seam.setSceneCalls.length;
+    expect(switchesInRoom, "в комнате сцена переключилась").toBeGreaterThan(0);
+
+    history.replaceState(null, "", "/game-search");
+    document.body.innerHTML = "";
+    const { log } = await import("@core/log");
+    const confirms = () =>
+      vi
+        .mocked(log.info)
+        .mock.calls.filter((args) => args.some((a) => String(a).includes("фаза подтверждена")))
+        .length;
+    const confirmedBefore = confirms();
+    document.body.innerHTML = `
+      <div class="roller"><span class="stage">
+        <div class="substages"><div class="substage current">День. Обсуждение</div></div>
+      </span></div>`; // маркеры есть (и другой фазы!), но страница НЕ игровая
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(
+      confirms(),
+      "детектор не имеет права даже подтверждать фазу вне комнаты (перф: сериализация body)",
+    ).toBe(confirmedBefore);
+    expect(seam.setSceneCalls.length, "с неигровой страницы сцену не трогаем").toBe(
+      switchesInRoom,
+    );
+  });
+
   test("запись старше потолка не восстанавливается и не трогает сцену эфира", async () => {
     // Контрольное ревью, находка 5: часовая запись проходила проверку
     // sessionId и уезжала в autoSwitchScene.

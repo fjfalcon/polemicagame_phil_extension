@@ -966,6 +966,11 @@ function detectTimeOfDayInner(): TimeOfDay {
 
 function requestTimeOfDayCheck(): void {
   if (!autoModeEnabled) return;
+  // Route-гейт (перф-аудит 06.08.2026, PERF-4): вне игровой комнаты фаз не
+  // существует, а детектор на /game-search дважды за проверку сериализовал
+  // document.body.textContent и был способен «подтвердить день» и дёрнуть
+  // сцену эфира с посторонней страницы.
+  if (!isGameRoomPath(location.pathname)) return;
 
   if (timeOfDayCheckDebounceTimer) {
     timeOfDayCheckQueued = true;
@@ -1004,6 +1009,10 @@ function evaluateTimeOfDay(): void {
 
     pendingTimeOfDayConfirmTimer = setTimeout(async () => {
       pendingTimeOfDayConfirmTimer = null;
+      // Гейт и ЗДЕСЬ, а не только в requestTimeOfDayCheck: таймер
+      // подтверждения, взведённый в комнате, переживает SPA-переход и
+      // подтверждал фазу по чужой странице (поймано тестом PERF-4).
+      if (!isGameRoomPath(location.pathname)) return;
       if (pendingTimeOfDay !== newTimeOfDay) return;
 
       const confirmedTimeOfDay = detectTimeOfDay();
@@ -1040,6 +1049,12 @@ async function autoSwitchScene(timeOfDay: TimeOfDay): Promise<void> {
   // путь автосцены был в нём невидим (разбор жалобы 02.08.2026).
   if (!autoModeEnabled) {
     log.info(SCOPE, "смена сцены пропущена: авто-режим выключен");
+    return;
+  }
+  // Второй пояс той же защиты (PERF-4): restore и любые будущие вызыватели
+  // не имеют права трогать сцену эфира с неигровой страницы.
+  if (!isGameRoomPath(location.pathname)) {
+    log.info(SCOPE, "смена сцены пропущена: не игровая страница");
     return;
   }
 
@@ -1190,12 +1205,18 @@ let unsubGameUi: (() => void) | null = null;
 
 function startGameUiMonitoring(): void {
   if (unsubGameUi) return;
-  unsubGameUi = onDomChange(() => {
+  unsubGameUi = onDomChange((muts) => {
+    // Батч-фильтр (перф-аудит 06.08.2026, PERF-2): видимость игрового UI
+    // считается по ЧИСЛУ плиток/камер/контролов — attr-only батчи (звуковые
+    // индикаторы, style) его не меняют, а гоняли полную сверку до 6.7 раз/с.
+    if (!muts.some((m) => m.type === "childList" && (m.addedNodes.length || m.removedNodes.length))) {
+      return;
+    }
     if (gameUiDebounceTimer) return;
     gameUiDebounceTimer = setTimeout(() => {
       gameUiDebounceTimer = null;
       syncPanelVisibilityWithGameState();
-    }, 150);
+    }, 500); // ≤2 полных сверок/с — бюджет из отчёта
   });
 }
 

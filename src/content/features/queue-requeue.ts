@@ -501,7 +501,7 @@ function roomTick(): void {
   }
 
   roomExitDone = true;
-  armPending();
+  armPending(true); // force: метка обязана лечь до навигации
   // Тост здесь не рисуем: страница сейчас сменится, плашка мелькнёт на
   // миллисекунды. О возврате скажет тост на странице поиска (armedFromRoom).
   log.info(SCOPE, "комната распущена после готовности — уходим на страницу поиска");
@@ -549,9 +549,22 @@ function classifyRoomErrorScreen():
  * TTL скользит от последнего подтверждения, а не от постановки (RQ-4).
  * Потолок эпизода держит issuedAt, который освежение не трогает.
  */
-function armPending(): void {
+/** Последняя запись метки (0 — не писали). Дроссель освежения ниже. */
+let lastArmWriteAt = 0;
+/**
+ * Освежать чаще незачем: TTL скользит 45 секундами, а синхронная пара
+ * get+parse+stringify+set в sessionStorage шла на КАЖДОМ тике живого условия
+ * — до 4 записей/с (перф-аудит 06.08.2026, PERF-6). Принудительная запись
+ * (force) — для точек, где метка обязана лечь СЕЙЧАС: латч намерения и
+ * перевзвод перед уходом.
+ */
+const ARM_REFRESH_MIN_MS = 5000;
+
+function armPending(force = false): void {
   try {
     const now = Date.now();
+    if (!force && now - lastArmWriteAt < ARM_REFRESH_MIN_MS) return;
+    lastArmWriteAt = now;
     const verdict = validateMark(sessionStorage.getItem(PENDING_KEY), now);
     // issuedAt наследуем ТОЛЬКО у живой метки. Остаток мёртвого эпизода
     // (страница поиска живёт между сборами лобби без перезагрузки) отравил
@@ -743,7 +756,7 @@ export function noteIntentClick(target: Element): void {
       acceptArmed = true;
       log.info(SCOPE, "принятие игры зафиксировано по клику — возврат после развала взведён");
     }
-    armPending();
+    armPending(true); // force: reload может прийти раньше любого тика
   }
 }
 
@@ -761,7 +774,7 @@ export function noteAutoAcceptDispatched(): void {
     acceptArmed = true;
     log.info(SCOPE, "принятие игры зафиксировано автокликом — возврат после развала взведён");
   }
-  armPending();
+  armPending(true); // force: как и клик игрока — синхронная гарантия
 }
 
 function reset(): void {
@@ -1060,6 +1073,7 @@ export const queueRequeueFeature: Feature = {
     // соседний тест (ревью 04.08.2026: вакуумность «ста тиков без строк»).
     lastTrustedInputAt = 0;
     lastPathname = "";
+    lastArmWriteAt = 0;
     cancelDecision();
     reset();
     settings = null;

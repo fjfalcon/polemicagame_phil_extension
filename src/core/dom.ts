@@ -134,7 +134,13 @@ class SharedDomObserver {
     if (wait > 0) {
       this.timerId = setTimeout(() => {
         this.timerId = null;
-        requestAnimationFrame(() => this.flush());
+        // Вкладка могла спрятаться, ПОКА дроссель-таймер ждал: rAF в фоне
+        // заморожен, а scheduled=true заблокировал бы все будущие планирования
+        // — подписчики скрытой вкладки (queue-guard!) умирали до возвращения
+        // на экран (перф-аудит 06.08.2026, PERF-10). visibility-обработчик
+        // эту гонку не видел: timerId был занят.
+        if (document.hidden) this.flush();
+        else requestAnimationFrame(() => this.flush());
       }, wait);
     } else {
       requestAnimationFrame(() => this.flush());
