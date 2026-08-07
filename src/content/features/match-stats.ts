@@ -102,6 +102,47 @@ function setStyleProp(el: HTMLElement, prop: "height" | "maxHeight", value: stri
   if (el.style[prop] !== value) el.style[prop] = value;
 }
 
+/**
+ * Vue-scope сайта, под которым живёт ВСЯ раскладка таблицы статистики.
+ *
+ * Стили сайта scoped: `.table .row[data-v-XXXX]{display:flex}` и
+ * `.table .row .cell[data-v-XXXX]{flex:1;min-width:115px}`. Наши строки без
+ * этого атрибута не получают ни flex у строки, ни ширины у ячеек: строка
+ * становится display:block, ячейки — блоками во всю ширину друг под другом.
+ * Ровно это сломалось 07.08.2026 (жалоба владельца со скриншотом): аудит
+ * хрупкости 06.08 убрал проставление scope-ID, посчитав его мёртвым. Он жив
+ * — проверено на живой странице: строка со scope повторяет геометрию сайта
+ * (67/116/…/115 px), без scope ячейки становятся по 1225 px в столбик.
+ *
+ * ID НЕ хардкодим (в этом и была хрупкость): читаем его с настоящих узлов
+ * сайта при каждой перерисовке. Сменится хеш — подхватим новый.
+ */
+function detectScopeAttr(table: HTMLElement): string | null {
+  // Читаем ТОЛЬКО с узлов того же рода, что создаём сами: со строки сайта и
+  // её ячейки. Контейнер спрашивать нельзя — на живой странице
+  // `.game-stats-table` несёт scope РОДИТЕЛЬСКОГО компонента
+  // (data-v-bb241ecc против data-v-1db9d42a у строк, сверено 07.08.2026), а
+  // под ним правил `.table .row .cell{flex:1}` нет: проставив чужой хеш, мы
+  // получили бы тот же развал вёрстки, но уже молча. Нет scope у строк —
+  // значит scoped-правил нет ни у кого, и раскладку берёт наш фолбэк-CSS.
+  const probes = [
+    table.querySelector<HTMLElement>(`${SITE.statsRow} ${SITE.statsCellTitle}`),
+    table.querySelector<HTMLElement>(SITE.statsRow),
+  ];
+  for (const el of probes) {
+    if (!el) continue;
+    for (const attr of Array.from(el.attributes)) {
+      if (attr.name.startsWith("data-v-")) return attr.name;
+    }
+  }
+  return null;
+}
+
+/** Проставить нашей строке/ячейке scope сайта (если он вообще есть). */
+function applyScope(el: HTMLElement, scopeAttr: string | null): void {
+  if (scopeAttr) el.setAttribute(scopeAttr, "");
+}
+
 /** Вид разбора: hints (подсказки) | legend (только сводка) | classic (старый вид). */
 function viewMode(): string {
   return settings?.match_stats_view || "hints";
@@ -347,6 +388,15 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
     return;
   }
 
+  // Один раз на перерисовку: сам DOM таблицы посреди неё не меняется.
+  const scopeAttr = detectScopeAttr(table);
+  if (!scopeAttr) {
+    // Не «тихо продолжаем»: без scope раскладку держит только наш фолбэк-CSS,
+    // и знать об этом надо ДО того, как придёт скриншот с развалившейся
+    // таблицей (жалоба 07.08.2026).
+    log.warn(SCOPE, "у таблицы нет Vue-scope сайта — раскладка строк идёт по нашему CSS");
+  }
+
   let lastInsertedRow: HTMLElement = roleRow;
   phases.forEach((phase, index) => {
     const phaseNumber = index + 1;
@@ -361,16 +411,19 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
     const dayRow = document.createElement("div");
     dayRow.className = "row";
     dayRow.setAttribute("data-pn-stats", "");
+    applyScope(dayRow, scopeAttr);
     dayRow.setAttribute("data-phase", `day-${phaseNumber}`);
 
     const dayTitleCell = document.createElement("div");
     dayTitleCell.className = "cell title role";
+    applyScope(dayTitleCell, scopeAttr);
     dayTitleCell.innerHTML = `<span class="phase-title">${phaseNumber} ☀️</span>`;
     dayRow.appendChild(dayTitleCell);
 
     players.forEach((player: any) => {
       const cell = document.createElement("div");
       cell.className = "cell player role";
+      applyScope(cell, scopeAttr);
       cell.setAttribute("data-player", String(player.position));
 
       // Бюллетень подъёма (записи без num, candidate 1 = «за») — НЕ голос за
@@ -446,6 +499,9 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
         );
       }
 
+      // min-width НЕ трогаем: у ячеек сайта он 115px, и inline-ноль позволял
+      // нашей ячейке сжиматься сильнее соседних — на узком экране колонки
+      // разъезжались с шапкой (найдено при разборе жалобы 07.08.2026).
       cell.style.cssText = `
         display: flex;
         flex-direction: row;
@@ -453,7 +509,6 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
         align-items: center;
         justify-content: center;
         gap: 4px;
-        min-width: 0;
       `;
       cell.innerHTML = html;
       dayRow.appendChild(cell);
@@ -463,7 +518,7 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
     lastInsertedRow = dayRow;
 
     if (phase.night.length > 0) {
-      const nightRow = createNightRow(phaseNumber, phase, players);
+      const nightRow = createNightRow(phaseNumber, phase, players, scopeAttr);
       lastInsertedRow.insertAdjacentElement("afterend", nightRow);
       lastInsertedRow = nightRow;
     }
@@ -629,20 +684,28 @@ function buildPhaseTimeline(
   );
 }
 
-function createNightRow(phaseNumber: number, phase: any, players: any[]): HTMLElement {
+function createNightRow(
+  phaseNumber: number,
+  phase: any,
+  players: any[],
+  scopeAttr: string | null,
+): HTMLElement {
   const nightRow = document.createElement("div");
   nightRow.className = "row";
   nightRow.setAttribute("data-pn-stats", "");
+  applyScope(nightRow, scopeAttr);
   nightRow.setAttribute("data-phase", `night-${phaseNumber}`);
 
   const nightTitleCell = document.createElement("div");
   nightTitleCell.className = "cell title";
+  applyScope(nightTitleCell, scopeAttr);
   nightTitleCell.innerHTML = `<span class="phase-title">${phaseNumber} 🌙</span>`;
   nightRow.appendChild(nightTitleCell);
 
   players.forEach((player) => {
     const cell = document.createElement("div");
     cell.className = "cell player";
+    applyScope(cell, scopeAttr);
     cell.setAttribute("data-player", String(player.position));
 
     const actions = phase.night.filter((a: any) => a.from === player.position);
@@ -1227,6 +1290,25 @@ export function applyAutoHeight(): void {
 
 function injectBaseStyles(): void {
   appendStyle(`
+    /*
+     * Страховка раскладки НАШИХ строк фаз. Первый пояс — scope сайта
+     * (detectScopeAttr), под которым лежит настоящий .table .row/.cell CSS;
+     * этот блок держит таблицу, если scoped-стилей у сайта не окажется
+     * вовсе. Без него потеря scope превращала строку в display:block, а
+     * ячейки — в блоки во всю ширину друг под другом (жалоба 07.08.2026).
+     * Цифры сверены с живым CSS сайта: flex:1, min-width 115px у ячейки
+     * игрока и 67px у заголовка фазы.
+     */
+    .table .row[data-pn-stats] { display: flex; width: 100%; }
+    .table .row[data-pn-stats] > .cell {
+      flex: 1; min-width: 115px; padding: 16px 10px;
+      position: relative; text-align: center;
+      border-right: 1px solid #252526; border-top: 1px solid #252526;
+    }
+    .table .row[data-pn-stats] > .cell.title {
+      max-width: 67px; min-width: 67px; padding-left: 5px; padding-right: 5px;
+    }
+    .table .row[data-pn-stats] > .cell:last-of-type { border-right: none; }
     .game-stats-header[data-pn-stats] {
       background: rgba(45, 48, 57, .03) !important;
     }

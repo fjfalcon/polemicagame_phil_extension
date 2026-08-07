@@ -285,6 +285,43 @@ export const roomProbes: Record<string, Probe> = {
   ),
 };
 
+// ─────────────────────────── bundle/main.css ───────────────────────────
+
+/**
+ * Правила раскладки таблицы статистики. Они SCOPED — привязаны к Vue-хешу
+ * компонента, и наши вставленные строки фаз обязаны нести тот же атрибут,
+ * иначе таблица разваливается (жалоба 07.08.2026: ячейки схлопнулись в
+ * ноль, строки растянулись). Проба не проверяет КОНКРЕТНЫЙ хеш (он меняется
+ * от ребилда к ребилду, и хардкод как раз и был причиной бага) — она
+ * проверяет, что раскладка по-прежнему живёт под scoped-селектором: пока
+ * это так, детект scope из DOM обязателен.
+ */
+export const siteCssProbes: Record<string, Probe> = {
+  statsRowScoped: re(
+    /\.table \.row\[data-v-[a-f0-9]+\]\{[^}]*display:flex/,
+    "раскладка строки таблицы статистики scoped (.table .row[data-v-*]{display:flex})",
+  ),
+  statsCellScoped: re(
+    // Граница `[;{]` обязательна: голое «flex:1» живёт и внутри префиксных
+    // -webkit-box-flex/-ms-flex, и проба без неё оставалась зелёной, когда
+    // настоящий flex уезжал (поймано мутацией 07.08.2026).
+    /\.table \.row \.cell\[data-v-[a-f0-9]+\]\{[^}]*[;{]flex:1[;}]/,
+    "ширина ячеек таблицы статистики scoped (.table .row .cell[data-v-*]{flex:1})",
+  ),
+  /** Числа, на которые опирается наш фолбэк-CSS, если scope не найден. */
+  statsCellWidths: (text) => {
+    const cell = /\.table \.row \.cell\[data-v-[a-f0-9]+\]\{([^}]*)\}/.exec(text);
+    const title = /\.table \.row \.cell\.title\[data-v-[a-f0-9]+\]\{([^}]*)\}/.exec(text);
+    const detail = "ширины ячеек статистики: player min-width 115px, title 67px";
+    if (!cell || !title) return { ok: false, detail: `${detail}: правила не найдены` };
+    const ok =
+      cell[1].includes("min-width:115px") &&
+      title[1].includes("min-width:67px") &&
+      title[1].includes("max-width:67px");
+    return { ok, detail };
+  },
+};
+
 /**
  * Длительность анимации перехода роллера (мс) — для сверки с нашим confirm.
  * Якорь по соседнему полю data-блока РОЛЛЕРА: в бандле два animationDuration

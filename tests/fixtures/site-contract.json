@@ -20,6 +20,10 @@
     "localeEn": {
       "url": "https://polemicagame.com/room/bundle/locales/EN.js",
       "sha256": "6c11dcdb847e840f46abf4727d91c5acca87b0f75d632312dca25dc01206d16c"
+    },
+    "mainCss": {
+      "url": "https://polemicagame.com/bundle/main.css",
+      "note": "sha не пригвождаем: стили сайта меняются чаще кода, следим за смыслом правил"
     }
   }
 }

@@ -8,6 +8,7 @@ import {
   roomProbes,
   ruLocaleProbes,
   runProbes,
+  siteCssProbes,
   siteRollerAnimationMs,
   missingIconHashes,
 } from "./semantic-probes";
@@ -28,13 +29,16 @@ describe("живые семантические контракты бандло�
   test("состояния, ветки и матрицы кнопок означают то, что мы им приписываем", async ({
     skip,
   }) => {
-    let gs: string, room: string, ru: string;
+    let gs: string, room: string, ru: string, css: string;
     try {
-      [gs, room, ru] = (
+      [gs, room, ru, css] = (
         await Promise.all([
           download(siteFixture.bundles.gameSearch.url),
           download(siteFixture.bundles.roomMain.url),
           download(siteFixture.bundles.localeRu.url),
+          // Стили — такой же внешний контракт, как бандл: раскладка нашей
+          // таблицы фаз держится на scoped-правилах сайта (жалоба 07.08.2026).
+          download(siteFixture.bundles.mainCss.url),
         ])
       ).map((d) => d.text);
     } catch (error) {
@@ -46,6 +50,7 @@ describe("живые семантические контракты бандло�
       ...runProbes(gameSearchProbes, gs).map((r) => ({ ...r, bundle: "game-search" })),
       ...runProbes(roomProbes, room).map((r) => ({ ...r, bundle: "room-main" })),
       ...runProbes(ruLocaleProbes, ru).map((r) => ({ ...r, bundle: "RU" })),
+      ...runProbes(siteCssProbes, css).map((r) => ({ ...r, bundle: "main.css" })),
     ].filter((r) => !r.ok);
     expect(
       failed,

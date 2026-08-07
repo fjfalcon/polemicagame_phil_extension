@@ -8,6 +8,7 @@ import {
   roomProbes,
   ruLocaleProbes,
   runProbes,
+  siteCssProbes,
   siteRollerAnimationMs,
 } from "../contract/semantic-probes";
 
@@ -26,12 +27,14 @@ const snip = (name: string) =>
 const GS = snip("game-search.txt");
 const ROOM = snip("room-main.txt");
 const RU = snip("ru-locale.txt");
+const CSS = snip("main-css.txt");
 
 describe("пробы зелёные на реальных фрагментах бандлов", () => {
   test.each([
     ["game-search", gameSearchProbes, GS],
     ["room-main", roomProbes, ROOM],
     ["RU-локаль", ruLocaleProbes, RU],
+    ["main.css", siteCssProbes, CSS],
   ] as const)("%s", (_name, probes, text) => {
     const failed = runProbes(probes, text).filter((r) => !r.ok);
     expect(failed, failed.map((f) => `${f.name}: ${f.detail}`).join("\n")).toEqual([]);
@@ -113,6 +116,17 @@ describe("каждая проба умирает от своего дрифта"
       (t) => t.replace('code:"sum",title:"Итог"', 'code:"sum",title:"Сумма"')],
     ["statsCellClasses: title-ячейка сменила класс", roomProbes, "statsCellClasses", ROOM,
       (t) => t.replace(/\["cell","title",(\w+)\.code\]/, '["cell","header",$1.code]')],
+    // main.css
+    ["statsRowScoped: раскладка строки перестала быть scoped", siteCssProbes, "statsRowScoped", CSS,
+      // Сайт «расскопил» правило: наши строки перестают его получать по
+      // атрибуту — и таблица держится только на нашем фолбэк-CSS.
+      (t) => t.replace(/\.table \.row\[data-v-[a-f0-9]+\]\{/, ".table .row{")],
+    ["statsCellScoped: ячейка потеряла flex", siteCssProbes, "statsCellScoped", CSS,
+      // Именно `;flex:1`, а не «flex:1»: подстрока живёт и в префиксных
+      // -webkit-box-flex/-ms-flex, и наивная замена мутировала бы их.
+      (t) => t.replace(";flex:1;", ";flex:none;")],
+    ["statsCellWidths: ширины колонок изменились", siteCssProbes, "statsCellWidths", CSS,
+      (t) => t.replace("min-width:115px", "min-width:140px")],
     ["deadPlayerBecomesViewer: умерший больше не зритель", roomProbes, "deadPlayerBecomesViewer", ROOM,
       // replaceAll: путь зрителя встречается в окне self_strike дважды
       // (немедленный редирект и ссылка continue_as_viewer).
