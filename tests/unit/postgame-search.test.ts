@@ -41,10 +41,10 @@ vi.mock("@core/messaging", () => ({
 import {
   BUTTON_ID,
   POSTGAME_PENDING_KEY,
+  jamReload,
   noteTrustedInput,
   postgameSearchFeature,
 } from "@content/features/postgame-search";
-import { serializeMark } from "@content/features/requeue-pending";
 import { log } from "@core/log";
 import { showToast } from "@core/toast";
 import { safeClick } from "@core/dom";
@@ -111,10 +111,22 @@ function foreignModal(): void {
   document.body.append(div);
 }
 
-/** Свежий мост в sessionStorage (как его пишет клик по кнопке). */
-function plantMark(ageMs = 0): void {
+/** Свежий мост в sessionStorage (как его пишет клик по кнопке).
+ *  По умолчанию source=finished — короткая выдержка перед «Играть». */
+function plantMark(ageMs = 0, extra: Record<string, unknown> = {}): void {
   const at = Date.now() - ageMs;
-  sessionStorage.setItem(POSTGAME_PENDING_KEY, serializeMark({ issuedAt: at, refreshedAt: at }));
+  sessionStorage.setItem(
+    POSTGAME_PENDING_KEY,
+    JSON.stringify({ issuedAt: at, refreshedAt: at, source: "finished", ...extra }),
+  );
+}
+
+/** Лоадер на месте кнопки «Играть». */
+function playLoader(): HTMLElement {
+  const div = document.createElement("div");
+  div.className = "p-play__profile-game p-play__profile-game--search p-play__profile-game-loader-gradient";
+  document.body.append(div);
+  return div;
 }
 
 function enableOnSearch(): void {
@@ -133,7 +145,15 @@ beforeEach(() => {
   vi.setSystemTime(new Date(1_800_000_000_000));
 });
 
+let realJamReload: () => void;
+
+beforeEach(() => {
+  realJamReload = jamReload.run;
+  jamReload.run = vi.fn();
+});
+
 afterEach(() => {
+  jamReload.run = realJamReload;
   postgameSearchFeature.disable();
   domSubscriber = null;
   vi.useRealTimers();
@@ -350,10 +370,12 @@ describe("поиск: машина «выйти из игры → Играть»
     expect(clicked().length).toBeGreaterThanOrEqual(1);
   });
 
-  test("«Играть» недоступна (не выбраны очереди) — решение за игроком", () => {
+  test("«Играть» недоступна (не выбраны очереди) — решение за игроком", async () => {
     plantMark();
     playButton(true);
     enableOnSearch();
+    // Выдержка статуса (finished: 2.5 с) идёт ДО терминального вердикта.
+    await vi.advanceTimersByTimeAsync(2700);
     expect(clicked()).toHaveLength(0);
     expect(warnHas("не выбраны очереди")).toBe(true);
   });
@@ -364,12 +386,254 @@ describe("поиск: машина «выйти из игры → Играть»
     plantMark();
     playButton(true);
     enableOnSearch();
+    await vi.advanceTimersByTimeAsync(2700);
     expect(warnHas("не выбраны очереди")).toBe(true);
     document.querySelector(".p-play__profile-button")?.removeAttribute("disabled");
     await vi.advanceTimersByTimeAsync(5000);
     domSubscriber?.();
     await vi.advanceTimersByTimeAsync(2000);
     expect(clicked()).toHaveLength(0);
+  });
+
+  test("выдержка статуса: с экрана победы «Играть» не трогаем первые ~2.5 с", async () => {
+    // Разбор лога 07.08 (18:29): мгновенный клик уходил при userInGame,
+    // сервер отвечал in_game и сайт зажимал кнопку вечным лоадером.
+    plantMark();
+    playButton();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(clicked()).toHaveLength(0);
+    expect(infoHas("ждём, пока сайт определит статус игрока")).toBe(true);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-button");
+  });
+
+  test("выдержка статуса: viewer-мост ждёт решающий блок и уходит в quit-флоу", async () => {
+    plantMark(0, { source: "viewer" });
+    playButton();
+    enableOnSearch();
+    // 5 секунд — «Играть» на месте, но мы её не трогаем (умерший почти
+    // наверняка ещё в игре, сайт просто ещё не знает).
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(clicked()).toHaveLength(0);
+    // Сайт узнал: решающий блок. Машина идёт по quit-пути, не по «Играть».
+    decideBlock();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-quit");
+  });
+
+  test("выдержка не нужна, если решающий блок уже видели: игрок разрулил его сам", async () => {
+    // Мутант «decideSeen не ставится»: viewer-мост зря ждал бы 8 секунд
+    // после того, как статус игрока УЖЕ был известен и разрешён человеком.
+    plantMark(0, { source: "viewer" });
+    decideBlock();
+    enableOnSearch(); // проба ушла, машина ждёт вердикта
+    document.body.innerHTML = ""; // игрок сам вышел из игры быстрее нас
+    playButton();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-button");
+  });
+
+  test("самолечение: вечный лоадер вместо «Играть» → один reload с перевзводом моста", async () => {
+    plantMark();
+    playLoader();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(vi.mocked(jamReload.run)).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(vi.mocked(jamReload.run)).toHaveBeenCalledTimes(1);
+    expect(warnHas("зажата лоадером")).toBe(true);
+    const raw = sessionStorage.getItem(POSTGAME_PENDING_KEY);
+    expect(raw, "мост перевзведён до перезагрузки").not.toBeNull();
+    const mark = JSON.parse(raw as string);
+    expect(mark.reloaded).toBe(true);
+    expect(mark.source).toBe("finished");
+  });
+
+  test("самолечение одноразовое: мост после перезагрузки второй reload не получает", async () => {
+    plantMark(0, { reloaded: true });
+    playLoader();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(vi.mocked(jamReload.run)).not.toHaveBeenCalled();
+    expect(warnHas("не вернулась и после перезагрузки")).toBe(true);
+  });
+
+  test("настройка: модалку подтверждения можно оставить игроку", async () => {
+    plantMark();
+    decideBlock();
+    history.replaceState(null, "", "/game-search");
+    postgameSearchFeature.enable({
+      settings: {
+        postgame_requeue_enabled: true,
+        postgame_skip_confirm_enabled: false,
+      } as Settings,
+    });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-quit");
+
+    // Модалка открыта — машина ЖДЁТ человека, не кликает.
+    confirmQuitModal();
+    await vi.advanceTimersByTimeAsync(5000);
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-quit");
+    expect(
+      vi.mocked(showToast).mock.calls.some((c) => String(c[0]).includes("Подтвердите выход")),
+    ).toBe(true);
+    // Обычный 30-секундный дедлайн НЕ убивает ожидание человека.
+    await vi.advanceTimersByTimeAsync(25_000);
+    domSubscriber?.();
+    expect(warnHas("эпизод не завершился")).toBe(false);
+
+    // Игрок подтвердил сам: модалки и блока нет, рисуется «Играть».
+    document.body.innerHTML = "";
+    playButton();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-button");
+  });
+
+  test("ожидание модалки в фоне не крутит горячий цикл (ревью, раунд 3)", async () => {
+    // Мутант «hidden планирует по БАЗОВОМУ дедлайну»: после 30 с задержка
+    // уходит в минус, кламцается в 50 мс — 20 тиков/с до конца ожидания.
+    plantMark();
+    decideBlock();
+    confirmQuitModal();
+    history.replaceState(null, "", "/game-search");
+    postgameSearchFeature.enable({
+      settings: {
+        postgame_requeue_enabled: true,
+        postgame_skip_confirm_enabled: false,
+      } as Settings,
+    });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(infoHas("ждём подтверждения")).toBe(true);
+
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    // Тики считаем по обращениям к DOM: латчи логов молчат со второго раза,
+    // а таймер всегда один — оба «счётчика» слепы к горячему циклу.
+    const qs = vi.spyOn(document, "querySelector");
+    try {
+      // Уже за базовым дедлайном: тут мутант и разгоняется.
+      await vi.advanceTimersByTimeAsync(31_000);
+      qs.mockClear();
+      domSubscriber?.(); // фоновая мутация сеет тик
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(
+        qs.mock.calls.length,
+        "в фоне машина не должна тикать десятки раз в секунду",
+      ).toBeLessThan(10);
+    } finally {
+      qs.mockRestore();
+      Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    }
+  });
+
+  test("игрок закрыл модалку сам — не переоткрываем её (ревью, раунд 3)", async () => {
+    // Мутант «сброс waitingForConfirm без проверки decide»: машина заново
+    // кликала «Покинуть игру» и переоткрывала отвергнутое окно.
+    plantMark();
+    decideBlock();
+    history.replaceState(null, "", "/game-search");
+    postgameSearchFeature.enable({
+      settings: {
+        postgame_requeue_enabled: true,
+        postgame_skip_confirm_enabled: false,
+      } as Settings,
+    });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(clicked().length).toBe(1); // наш «Покинуть игру»
+    confirmQuitModal();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(500);
+
+    // Игрок закрыл модалку крестиком: решающий блок остался — он передумал.
+    document.querySelector(".confirmQuit")?.remove();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(5_000);
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(clicked().length, "второго клика по «Покинуть игру» быть не должно").toBe(1);
+    expect(warnHas("отменён игроком")).toBe(true);
+  });
+
+  test("смена настройки на лету будит машину, стоящую у модалки", async () => {
+    plantMark();
+    decideBlock();
+    history.replaceState(null, "", "/game-search");
+    const manual = {
+      settings: {
+        postgame_requeue_enabled: true,
+        postgame_skip_confirm_enabled: false,
+      } as Settings,
+    };
+    postgameSearchFeature.enable(manual);
+    await vi.advanceTimersByTimeAsync(200);
+    confirmQuitModal();
+    domSubscriber?.();
+    // Даём истечь ВСЕМ хвостовым таймерам (после quit-клика стоит 1.3 с):
+    // иначе «пробуждение» пришло бы от них, и тест был бы вакуумным.
+    await vi.advanceTimersByTimeAsync(3_000);
+    const beforeFlip = clicked().length;
+
+    // Игрок передумал и включил автопропуск, страница при этом статична.
+    postgameSearchFeature.update?.({
+      settings: {
+        postgame_requeue_enabled: true,
+        postgame_skip_confirm_enabled: true,
+      } as Settings,
+    });
+    // Секунды достаточно: пробудить обязан сам update(), а не дедлайн (150 с).
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(clicked().length).toBe(beforeFlip + 1);
+    expect(clicked().at(-1)?.className).toBe("confirmQuit__content-btn");
+  });
+
+  test("счёт «лоадер висит подряд» обнуляется на каждой фазе, а не копится", async () => {
+    // Мутант «loaderSince не сбрасывается в decide/confirm»: транзиентные
+    // лоадеры разных фаз складываются и дают преждевременную перезагрузку
+    // посреди легитимного quit-флоу (ревью 07.08.2026, раунд 3).
+    plantMark();
+    playLoader();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(5_000); // лоадер коннекта: 5 с из 8
+    expect(vi.mocked(jamReload.run)).not.toHaveBeenCalled();
+
+    // Сайт узнал статус: решающий блок. Счёт лоадера обязан обнулиться.
+    document.body.innerHTML = "";
+    decideBlock();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-quit");
+
+    // Лоадер quit-POST: ещё 5 с. Суммарно 10 с — мутант перезагрузил бы.
+    document.body.innerHTML = "";
+    playLoader();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(vi.mocked(jamReload.run)).not.toHaveBeenCalled();
+  });
+
+  test("счёт лоадера обнуляется и после модалки подтверждения", async () => {
+    plantMark();
+    playLoader();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    document.body.innerHTML = "";
+    confirmQuitModal();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(clicked().at(-1)?.className).toBe("confirmQuit__content-btn");
+
+    document.body.innerHTML = "";
+    playLoader();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(vi.mocked(jamReload.run)).not.toHaveBeenCalled();
   });
 
   test("сторож: живой матч в другой вкладке — из игры не выходим (блокер A)", async () => {

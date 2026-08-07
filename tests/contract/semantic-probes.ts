@@ -145,6 +145,15 @@ export const gameSearchProbes: Record<string, Probe> = {
     /attrs:\{disabled:!\w+\.selectedCensorshipModes\.length\}/,
     "disabled «Играть» ⇔ !selectedCensorshipModes.length",
   ),
+  /**
+   * Лоадер кнопки поиска ⇔ isSearchBtnLoading. В ветке illegalState=in_game
+   * сайт searchBtnLoading НЕ сбрасывает — «вечная крутилка», на детекции
+   * которой стоит самолечение postgame-search (лог 07.08.2026, 18:29).
+   */
+  searchBtnLoaderBinding: re(
+    /isSearchBtnLoading\?\w+\("div",\{staticClass:"p-play__profile-game p-play__profile-game--search p-play__profile-game-loader-gradient"\}/,
+    "isSearchBtnLoading ⇔ лоадер p-play__profile-game-loader-gradient вместо «Играть»",
+  ),
   /** Пока userInGame — поиск запрещён; «Играть» в DOM не существует. */
   searchDisabledWhileInGame: re(
     /searchDisabled:function\(\)\{return (?:\w+|this)\.gameSearchDisabled\|\|(?:\w+|this)\.userInGame&&!(?:\w+|this)\.inGameUsersAllowed\}/,

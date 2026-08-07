@@ -64,6 +64,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // сама по событиям сайта, здесь ВСЯ цепочка действий — продолжение явного
   // клика игрока по кнопке с прямой подписью, согласие даётся каждым нажатием.
   postgame_requeue_enabled: true,
+  // Пропуск модалки включён по умолчанию: ради пропуска этих окон кнопка и
+  // делалась. Кому нужен чекпойнт сайта — выключает и подтверждает сам.
+  postgame_skip_confirm_enabled: true,
   queue_peek_standard: true,
   queue_peek_polite: true,
   queue_peek_prime: true,

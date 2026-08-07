@@ -71,6 +71,8 @@ describe("каждая проба умирает от своего дрифта"
       (t) => t.replace("Покинуть лобби", "Да, выйти")],
     ["playDisabledBinding: disabled отвязан от очередей", gameSearchProbes, "playDisabledBinding", GS,
       (t) => t.replace(/attrs:\{disabled:!(\w+)\.selectedCensorshipModes\.length\}/, "attrs:{disabled:!$1.queuesOk}")],
+    ["searchBtnLoaderBinding: лоадер сменил класс", gameSearchProbes, "searchBtnLoaderBinding", GS,
+      (t) => t.replaceAll("p-play__profile-game-loader-gradient", "p-play__profile-game-spinner")],
     ["searchDisabledWhileInGame: userInGame больше не запрещает поиск", gameSearchProbes, "searchDisabledWhileInGame", GS,
       (t) => t.replace(/searchDisabled:function\(\)\{return ((?:\w+|this))\.gameSearchDisabled\|\|(?:\w+|this)\.userInGame/, "searchDisabled:function(){return $1.gameSearchDisabled||$1.busy")],
     // room

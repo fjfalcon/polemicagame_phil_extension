@@ -69,6 +69,10 @@ export interface Settings {
   requeue_after_lobby_fail_enabled: boolean;
   /** Кнопка «В поиск» после конца игры/смерти: выйти из игры и снова в очередь. */
   postgame_requeue_enabled: boolean;
+  /** «В поиск»: подтверждать модалку «Покинуть лобби» автоматически.
+   *  false — машина останавливается на модалке и ждёт клика игрока,
+   *  после подтверждения продолжает сама (нажмёт «Играть»). */
+  postgame_skip_confirm_enabled: boolean;
   /** Какие очереди разрешено использовать для разведки. */
   queue_peek_standard: boolean;
   queue_peek_polite: boolean;

@@ -154,6 +154,13 @@ export const SITE = {
    */
   confirmQuitModal: ".confirmQuit",
   confirmQuitButton: ".confirmQuit .confirmQuit__content-btn",
+  /**
+   * Лоадер на месте кнопки «Играть» (`isSearchBtnLoading`). Важен для
+   * самолечения postgame-search: в ветке illegalState=in_game сайт НЕ
+   * сбрасывает searchBtnLoading, и после выхода из игры лоадер остаётся
+   * навсегда — кнопка «Играть» не рендерится до F5 (лог 07.08.2026, 18:29).
+   */
+  searchButtonLoader: ".p-play__profile-game-loader-gradient",
   // Кнопки / меню
   settingsButton: "div.button.preset-1.small.desktop-version",
   // OBS-панель: детекция активного игрового интерфейса и стадий

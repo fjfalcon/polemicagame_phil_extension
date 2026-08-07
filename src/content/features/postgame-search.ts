@@ -52,7 +52,7 @@ import { isGameRoomPath, isSearchPath } from "@shared/routes";
 import { log } from "@core/log";
 import { onMessage, sendRuntime } from "@core/messaging";
 import { showToast } from "@core/toast";
-import { refreshMark, serializeMark, validateMark } from "./requeue-pending";
+import { refreshMark, validateMark } from "./requeue-pending";
 import type { MarkFailure } from "./requeue-pending";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
@@ -74,6 +74,36 @@ export const BUTTON_ID = "pn-postgame-search";
  * warn с тостом лучше вечного ожидания.
  */
 const EPISODE_WINDOW_MS = 30_000;
+/**
+ * Добавка к дедлайну, пока машина ЖДЁТ подтверждения модалки человеком
+ * (настройка postgame_skip_confirm_enabled=false): думать над «Покинуть
+ * лобби» можно дольше, чем машине — кликать. Конечная: вечное ожидание —
+ * это молчаливая смерть, которой быть не должно.
+ */
+const CONFIRM_WAIT_EXTRA_MS = 120_000;
+/**
+ * Выдержки перед кликом «Играть» (разбор лога 07.08.2026, 18:29): сайт
+ * узнаёт «игрок ещё в игре» ЛЕНИВО — от сервера в ответ на попытку поиска
+ * или от списка лобби. В первую секунду после загрузки он рисует «Играть»
+ * даже умершему, и наш мгновенный клик уходил `toggleSearch`-ом при
+ * userInGame: сервер отвечал in_game, а `searchBtnLoading` сайт в этой
+ * ветке НЕ сбрасывает — после выхода из игры вместо кнопки оставалась
+ * вечная крутилка (лечится только F5). Поэтому:
+ *  - мост из viewer-вкладки (умерший — почти наверняка ещё в игре): ждём
+ *    решающий блок до DECIDE_WAIT_MS и только потом трогаем «Играть»;
+ *  - мост с экрана победы (сервер уже отпустил): короткая выдержка.
+ * Выдержка не нужна вовсе, когда решающий блок уже видели или наш quit-шаг
+ * уже ходил: статус игрока серверу известен.
+ */
+const PLAY_SETTLE_FINISHED_MS = 2500;
+const PLAY_SETTLE_VIEWER_MS = 8000;
+/**
+ * Самолечение зависшей крутилки (второй пояс того же разбора): лоадер на
+ * месте кнопки «Играть» без секундомера дольше этого срока — страница
+ * зажата (`searchBtnLoading` уже не сбросится никогда). Одна перезагрузка
+ * с перевзводом моста; повторное зажатие — честная сдача.
+ */
+const JAM_RELOAD_AFTER_MS = 8000;
 /** Пауза между автокликами: сайт должен успеть отреагировать. */
 const MIN_CLICK_INTERVAL_MS = 1200;
 /** Бюджет попыток НА КАЖДЫЙ шаг (quit / confirm / play). */
@@ -149,6 +179,22 @@ let lastTrustedInputAt = 0;
 /** Латчи «сказали один раз» — машина тикает четыре раза в секунду. */
 let backoffLogged = false;
 let hiddenLogged = false;
+let waitConfirmLogged = false;
+let settleLogged = false;
+/** Модалку подтверждения в этом эпизоде уже видели (чья бы она ни была). */
+let confirmSeen = false;
+/** Машина стоит перед модалкой и ждёт человека (расширенный дедлайн). */
+let waitingForConfirm = false;
+/** Откуда пришёл мост (см. PLAY_SETTLE_*): по умолчанию — осторожный viewer. */
+let markSource: "finished" | "viewer" = "viewer";
+/** Мост уже переживал самолечебную перезагрузку — второй не будет. */
+let markReloaded = false;
+/** issuedAt потреблённого моста: перевзвод обязан сохранить потолок эпизода. */
+let markIssuedAt = 0;
+/** Решающий блок видели в этом эпизоде — статус игрока серверу известен. */
+let decideSeen = false;
+/** С какого момента на месте «Играть» висит лоадер (0 — не висит). */
+let loaderSince = 0;
 /** pathname последнего тика: "" — ещё не тикали. */
 let lastPathname = "";
 
@@ -228,7 +274,30 @@ function resetEpisode(): void {
   lastClickAt = 0;
   backoffLogged = false;
   hiddenLogged = false;
+  waitConfirmLogged = false;
+  settleLogged = false;
+  confirmSeen = false;
+  waitingForConfirm = false;
+  markSource = "viewer";
+  markReloaded = false;
+  markIssuedAt = 0;
+  decideSeen = false;
+  loaderSince = 0;
   liveProbe = { status: "idle" };
+}
+
+/**
+ * Записать мост. Формат совместим с requeue-pending (validateMark читает
+ * issuedAt/refreshedAt и игнорирует лишние поля); source/reloaded — наша
+ * добавка. Недоверие симметрично: при чтении оба поля валидируются.
+ */
+function writePostgameMark(source: "finished" | "viewer", reloaded: boolean, issuedAt: number): void {
+  const now = Date.now();
+  const base = refreshMark({ issuedAt, refreshedAt: issuedAt }, now);
+  sessionStorage.setItem(
+    POSTGAME_PENDING_KEY,
+    JSON.stringify({ ...base, source, reloaded }),
+  );
 }
 
 // ── комната: кнопка ──
@@ -255,7 +324,9 @@ function onButtonClick(): void {
   // Мост — ДО навигации: страница сейчас умрёт. Отказ хранилища не блокирует
   // сам переход: игрок окажется на поиске и продолжит руками.
   try {
-    sessionStorage.setItem(POSTGAME_PENDING_KEY, serializeMark(refreshMark(null, Date.now())));
+    // Источник решает выдержку перед «Играть» на поиске: с экрана победы
+    // сервер игрока уже отпустил, из viewer-вкладки — почти наверняка нет.
+    writePostgameMark(matchFinishedVisible() ? "finished" : "viewer", false, Date.now());
   } catch {
     if (!clickStorageWarned) {
       clickStorageWarned = true;
@@ -313,7 +384,23 @@ function consumePending(): void {
   }
   armed = true;
   armedAt = Date.now();
-  log.info(SCOPE, "мост «В поиск» из комнаты — выходим из игры и встаём в поиск");
+  markIssuedAt = verdict.mark.issuedAt;
+  // Добавочные поля читаем из сырого JSON без доверия: неизвестное значение
+  // source трактуем как осторожный viewer (длинная выдержка безвреднее
+  // преждевременного клика), reloaded — только буквальный true.
+  try {
+    const extra = JSON.parse(raw as string) as Record<string, unknown>;
+    markSource = extra.source === "finished" ? "finished" : "viewer";
+    markReloaded = extra.reloaded === true;
+  } catch {
+    markSource = "viewer";
+    markReloaded = false;
+  }
+  log.info(
+    SCOPE,
+    "мост «В поиск» из комнаты — выходим из игры и встаём в поиск",
+    `(источник: ${markSource}${markReloaded ? ", после перезагрузки" : ""})`,
+  );
 }
 
 /** Видимый элемент по селектору (null — нет или скрыт). */
@@ -397,8 +484,9 @@ function searchTick(): void {
   }
 
   const now = Date.now();
-  if (now - armedAt > EPISODE_WINDOW_MS) {
-    giveUp(`эпизод не завершился за ${Math.round(EPISODE_WINDOW_MS / 1000)} с`);
+  const deadlineMs = EPISODE_WINDOW_MS + (waitingForConfirm ? CONFIRM_WAIT_EXTRA_MS : 0);
+  if (now - armedAt > deadlineMs) {
+    giveUp(`эпизод не завершился за ${Math.round(deadlineMs / 1000)} с`);
     return;
   }
 
@@ -416,7 +504,11 @@ function searchTick(): void {
       hiddenLogged = true;
       log.info(SCOPE, "возврат в поиск приостановлен: вкладка в фоне");
     }
-    scheduleDecision(armedAt + EPISODE_WINDOW_MS - now + 250);
+    // По ДЕЙСТВУЮЩЕМУ дедлайну, не по базовому: в режиме ожидания модалки
+    // (skip_confirm=false) базовый истекал через 30 с, задержка уходила в
+    // минус, кламцалась в 50 мс — и скрытая вкладка крутила 20 тиков в
+    // секунду до конца ожидания (ревью 07.08.2026, раунд 3).
+    scheduleDecision(armedAt + deadlineMs - now + 250);
     return;
   }
   if (now - lastTrustedInputAt < USER_BACKOFF_MS) {
@@ -431,6 +523,11 @@ function searchTick(): void {
   // Шаг 2: модалка подтверждения выхода — жмём «Покинуть лобби».
   const confirmBtn = visibleEl(SITE.confirmQuitButton);
   if (confirmBtn) {
+    confirmSeen = true;
+    // Лоадер, виденный до модалки, к play-стадии отношения не имеет: счёт
+    // «висит подряд» обязан идти заново, иначе транзиентные лоадеры разных
+    // фаз складываются и вызывают преждевременный reload (ревью, раунд 3).
+    loaderSince = 0;
     // Модалку мог открыть САМ игрок (наш quit-шаг не ходил, quitAttempts=0)
     // — тогда сторож живого матча ещё не бегал, а это последний путь квита
     // мимо пробы (контрольное ревью 07.08.2026). Гейт и здесь; заодно окно
@@ -443,8 +540,48 @@ function searchTick(): void {
         return;
       }
     }
+    // Настройка (просьба владельца 07.08.2026): модалку можно НЕ пропускать —
+    // машина ждёт подтверждения человеком и продолжает после него. Ожидание
+    // не терминально: клик игрока даст мутацию и следующий тик; дедлайн
+    // эпизода сторожит зависание и здесь.
+    if (settings?.postgame_skip_confirm_enabled === false) {
+      waitingForConfirm = true;
+      if (!waitConfirmLogged) {
+        waitConfirmLogged = true;
+        log.info(SCOPE, "модалка «Покинуть лобби» оставлена игроку (настройка) — ждём подтверждения");
+        showToast("Подтвердите выход из игры — дальше продолжу сам 🔁", {
+          key: `postgame-confirm-${Date.now()}`,
+        });
+      }
+      scheduleDecision(armedAt + EPISODE_WINDOW_MS + CONFIRM_WAIT_EXTRA_MS - now + 250);
+      return;
+    }
     clickStage(confirmBtn, TEXT.confirmQuitButton, confirmAttempts, () => confirmAttempts++, "Покинуть лобби");
     return;
+  }
+
+  // Модалка исчезла. Два исхода, и различает их решающий блок: успешный
+  // quit убирает и его тоже (сервер отпустил игрока), а закрытая крестиком
+  // модалка оставляет — значит человек ПЕРЕДУМАЛ выходить. Переоткрывать
+  // отвергнутое окно нельзя: в режиме ручного подтверждения это прямо
+  // противоречит смыслу настройки, а в автоматическом — правилу «не воевать
+  // с игроком» (ревью 07.08.2026, раунд 3).
+  if ((waitingForConfirm || confirmSeen) && visibleEl(SITE.searchDecideBlock)) {
+    // Чей это был крестик — видно по бюджету: наш клик по «Покинуть лобби»
+    // либо не ходил вовсе (закрыл человек), либо ходил и не довёл выход до
+    // конца. Две разные истории — две разные строки в файле поддержки.
+    giveUp(
+      confirmAttempts === 0
+        ? "выход из игры отменён игроком — не настаиваем"
+        : "подтверждение выхода не сработало — из игры не вышли",
+    );
+    return;
+  }
+  // Игрок подтвердил модалку сам (ожидание кончилось, модалки больше нет):
+  // окно на оставшиеся шаги — свежее, время раздумий в него не входит.
+  if (waitingForConfirm) {
+    waitingForConfirm = false;
+    armedAt = now;
   }
 
   // Шаг 1: сервер держит игрока в игре — жмём «Покинуть игру». Но СНАЧАЛА
@@ -452,6 +589,9 @@ function searchTick(): void {
   // 07.08.2026 — stream window стримера тоже ?role=viewer). Опрос только
   // здесь: quit — единственный опасный шаг, «Играть» сторожа не требует.
   if (visibleEl(SITE.searchDecideBlock)) {
+    decideSeen = true;
+    // Как и в confirm-ветке: лоадер прошлой фазы к play-стадии не относится.
+    loaderSince = 0;
     const gate = liveMatchGate(now);
     if (gate === "wait") return;
     if (gate === "live") {
@@ -473,10 +613,57 @@ function searchTick(): void {
   // Шаг 3: «Играть».
   const play = document.querySelector<HTMLButtonElement>(SITE.profileSearchButton);
   if (!play || !isVisible(play)) {
-    // Скелетон/лоадер quit-а: появление кнопки — мутация, она разбудит; таймер
-    // нужен дедлайну на случай замершей страницы.
+    // Кнопки нет. Если на её месте ЛОАДЕР — считаем время: транзиентный
+    // (quit POST, коннект сокета) живёт секунды, а зажатый (in_game без
+    // сброса searchBtnLoading) — вечно. Одна самолечебная перезагрузка с
+    // перевзводом моста; мост, переживший её, второй не получит.
+    const loader = visibleEl(SITE.searchButtonLoader);
+    if (loader && !document.querySelector(SITE.searchInProgress)) {
+      if (!loaderSince) loaderSince = now;
+      if (now - loaderSince > JAM_RELOAD_AFTER_MS) {
+        if (markReloaded) {
+          giveUp("кнопка «Играть» не вернулась и после перезагрузки");
+          return;
+        }
+        let rearmed = false;
+        try {
+          writePostgameMark(markSource, true, markIssuedAt || now);
+          rearmed = true;
+        } catch {
+          /* хранилище недоступно — перезагрузка без моста бессмысленна */
+        }
+        if (!rearmed) {
+          giveUp("страница зажата лоадером, а мост не сохранить — продолжите вручную (F5)");
+          return;
+        }
+        log.warn(SCOPE, "кнопка «Играть» зажата лоадером — перезагружаем страницу поиска (одноразово)");
+        resetEpisode();
+        jamReload.run();
+        return;
+      }
+      scheduleDecision(loaderSince + JAM_RELOAD_AFTER_MS - now + 250);
+      return;
+    }
+    loaderSince = 0;
+    // Скелетон: появление кнопки — мутация, она разбудит; таймер нужен
+    // дедлайну на случай замершей страницы.
     scheduleDecision(armedAt + EPISODE_WINDOW_MS - now + 250);
     return;
+  }
+  loaderSince = 0;
+  // Выдержка ПЕРЕД первым касанием «Играть»: сайт мог ещё не узнать, что
+  // игрок в игре (см. PLAY_SETTLE_*). Когда решающий блок уже видели или
+  // quit-шаг ходил — статус известен, выдержка не нужна.
+  if (!decideSeen && quitAttempts === 0 && confirmAttempts === 0 && playAttempts === 0) {
+    const settleMs = markSource === "finished" ? PLAY_SETTLE_FINISHED_MS : PLAY_SETTLE_VIEWER_MS;
+    if (now - armedAt < settleMs) {
+      if (!settleLogged) {
+        settleLogged = true;
+        log.info(SCOPE, "ждём, пока сайт определит статус игрока, прежде чем жать «Играть»");
+      }
+      scheduleDecision(armedAt + settleMs - now + 100);
+      return;
+    }
   }
   if (play.disabled || play.hasAttribute("disabled")) {
     // Не выбраны очереди — решение за игроком, не за нами.
@@ -489,6 +676,16 @@ function searchTick(): void {
   }
   clickStage(play, null, playAttempts, () => playAttempts++, "Играть");
 }
+
+/**
+ * Тестовый шов перезагрузки: jsdom не реализует location.reload (паттерн
+ * queue-requeue). Продовое поведение — обычный reload страницы поиска.
+ */
+export const jamReload = {
+  run(): void {
+    location.reload();
+  },
+};
 
 // ── маршрутизация и жизненный цикл ──
 
@@ -592,6 +789,10 @@ export const postgameSearchFeature: Feature = {
 
   update(ctx: FeatureContext) {
     settings = ctx.settings;
+    // Настройку могли поменять, пока машина СТОИТ у модалки: страница в этот
+    // момент статична, а собственное пробуждение стоит на дедлайне — там
+    // машину ждёт уже сдача, а не клик (ревью 07.08.2026, раунд 3).
+    if (armed) scheduleDecision(FOREGROUND_GRACE_MS);
   },
 
   disable() {
