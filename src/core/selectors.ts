@@ -12,6 +12,20 @@ export const SITE = {
     ".player.desktop-version:not(.judge-player), .player.desktop-version.hidden:not(.judge-player)",
   playerInfo: ".player__info",
   playerName: ".player__info .info__name",
+  /**
+   * Номер игрока в плашке (компонент PlayerNumber): `player-number player-N`,
+   * где N — id (0-based), текстом рисуется N+1. Служит «ручкой гармошки» в
+   * compact-nicks: по нему сворачиваем и разворачиваем ник.
+   */
+  playerNumber: ".player-number",
+  /**
+   * Контейнер плашки и наших иконок игрока: `.player__botleftmenu` — сайт
+   * позиционирует его absolute в левом нижнем углу плитки (left/bottom
+   * .625rem, сверено с room/bundle/style.css). Двигать плашку по углам надо
+   * именно им: сама `.player__info` лежит ВНУТРИ него, и её собственный
+   * absolute считался бы от контейнера, а не от плитки.
+   */
+  plateContainer: ".player__botleftmenu",
   playerVideoWrapper: ".player__video-wrapper",
   playerVideo: ".player__video, .player__video-wrapper",
   playerVideoEl: "video.player__video",

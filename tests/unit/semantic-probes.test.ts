@@ -8,6 +8,7 @@ import {
   roomProbes,
   ruLocaleProbes,
   runProbes,
+  roomCssProbes,
   siteCssProbes,
   siteRollerAnimationMs,
 } from "../contract/semantic-probes";
@@ -28,6 +29,7 @@ const GS = snip("game-search.txt");
 const ROOM = snip("room-main.txt");
 const RU = snip("ru-locale.txt");
 const CSS = snip("main-css.txt");
+const ROOM_CSS = snip("room-css.txt");
 
 describe("пробы зелёные на реальных фрагментах бандлов", () => {
   test.each([
@@ -35,6 +37,7 @@ describe("пробы зелёные на реальных фрагментах �
     ["room-main", roomProbes, ROOM],
     ["RU-локаль", ruLocaleProbes, RU],
     ["main.css", siteCssProbes, CSS],
+    ["room/style.css", roomCssProbes, ROOM_CSS],
   ] as const)("%s", (_name, probes, text) => {
     const failed = runProbes(probes, text).filter((r) => !r.ok);
     expect(failed, failed.map((f) => `${f.name}: ${f.detail}`).join("\n")).toEqual([]);
@@ -119,6 +122,14 @@ describe("каждая проба умирает от своего дрифта"
     ["statsCellClasses: title-ячейка сменила класс", roomProbes, "statsCellClasses", ROOM,
       (t) => t.replace(/\["cell","title",(\w+)\.code\]/, '["cell","header",$1.code]')],
     // main.css
+    ["tileIsPositioningRoot: плитка перестала быть точкой отсчёта", roomCssProbes, "tileIsPositioningRoot", ROOM_CSS,
+      // Без relative у .player наши углы считались бы от документа — плашка
+      // улетела бы в угол экрана.
+      (t) => t.replace("position:relative", "position:static")],
+    ["plateContainerAnchored: контейнер плашки сменил угол", roomCssProbes, "plateContainerAnchored", ROOM_CSS,
+      (t) => t.replace("left:.625rem", "right:.625rem")],
+    ["cornerMenusAbsolute: угловые контейнеры больше не absolute", roomCssProbes, "cornerMenusAbsolute", ROOM_CSS,
+      (t) => t.replace("position:absolute", "position:static")],
     ["statsRowScoped: раскладка строки перестала быть scoped", siteCssProbes, "statsRowScoped", CSS,
       // Сайт «расскопил» правило: наши строки перестают его получать по
       // атрибуту — и таблица держится только на нашем фолбэк-CSS.
@@ -133,6 +144,12 @@ describe("каждая проба умирает от своего дрифта"
       // replaceAll: путь зрителя встречается в окне self_strike дважды
       // (немедленный редирект и ссылка continue_as_viewer).
       (t) => t.replaceAll('"/game?role=viewer&game_id="', '"/spectate?game_id="')],
+    ["playerInfoPlate: у плашки пропал сайтовый клик превью", roomProbes, "playerInfoPlate", ROOM,
+      // Если сайт уберёт свой onClick, гасить всплытие станет незачем —
+      // и это надо заметить, а не гасить чужие клики «на всякий случай».
+      (t) => t.replace("showPlayerPreview&&", "noPreview&&").replace("o.showPlayerPreview.apply", "o.noPreview.apply")],
+    ["playerNumberBinding: номер отвязан от id игрока", roomProbes, "playerNumberBinding", ROOM,
+      (t) => t.replace('["player-number","player-".concat(i.id)]', '["player-number","seat-".concat(i.id)]')],
     ["eliminatedStateClasses: заголосованный больше не помечается классом", roomProbes, "eliminatedStateClasses", ROOM,
       (t) => t.replace('"state-voted"', '"state-lynched"')],
     ["statsFooterSearchLink: «Поиск игры» повёл на главную", roomProbes, "statsFooterSearchLink", ROOM,

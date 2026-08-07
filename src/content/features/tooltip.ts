@@ -90,23 +90,31 @@ const STYLES = `
     background: rgba(255, 255, 255, 0.08);
   }
 
-  .vote-yes { color: #4CAF50; font-weight: bold; }
-  .vote-no { color: #FF4B55; font-weight: bold; }
+  .enhanced-tooltip .vote-yes { color: #4CAF50; font-weight: bold; }
+  .enhanced-tooltip .vote-no { color: #FF4B55; font-weight: bold; }
 
-  .player-info {
+  .enhanced-tooltip .player-info {
     display: flex;
     align-items: center;
     gap: 6px;
     min-width: 100px;
   }
 
-  .player-number {
+  /*
+   * Все правила ниже заскоуплены в .enhanced-tooltip намеренно: имена вроде
+   * player-number / player-name / player-info совпадают с классами САЙТА.
+   * Неотскоупленный .player-number красил номера игроков на плитке, в
+   * роллере и в блоке состояний (цвет им сайт не задаёт, побеждали наши
+   * 50% белого). Со свёрнутой плашкой номер остаётся один — выцветшая
+   * цифра сразу бросается в глаза (ревью 08.08.2026).
+   */
+  .enhanced-tooltip .player-number {
     color: rgba(255, 255, 255, 0.5);
     font-size: 13px;
     min-width: 16px;
   }
 
-  .player-name {
+  .enhanced-tooltip .player-name {
     color: rgba(255, 255, 255, 0.9);
     font-size: 13px;
     cursor: pointer;
@@ -116,7 +124,7 @@ const STYLES = `
     text-overflow: ellipsis;
   }
 
-  .player-name:hover {
+  .enhanced-tooltip .player-name:hover {
     color: #4CAF50;
   }
 

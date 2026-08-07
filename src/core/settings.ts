@@ -67,6 +67,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // Пропуск модалки включён по умолчанию: ради пропуска этих окон кнопка и
   // делалась. Кому нужен чекпойнт сайта — выключает и подтверждает сам.
   postgame_skip_confirm_enabled: true,
+  // Выключено по умолчанию: вид игрового стола — дело вкуса, и менять его
+  // всем разом без спроса нельзя (тот же принцип, что у role_marker).
+  compact_nicknames_enabled: false,
+  // «default» — угол сайта (снизу слева): вид стола по умолчанию не меняем.
+  nick_plate_position: "default",
   queue_peek_standard: true,
   queue_peek_polite: true,
   queue_peek_prime: true,

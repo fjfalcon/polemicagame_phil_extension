@@ -20,6 +20,8 @@ import {
   DEFAULT_SETTINGS,
 } from "@core/settings";
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
+// Список углов — общий с content-скриптом (см. shared/nick-plate).
+import { PLATE_POSITIONS } from "@shared/nick-plate";
 import { escapeHtml } from "@core/escape";
 import {
   loadNotes,
@@ -965,6 +967,14 @@ document.addEventListener("DOMContentLoaded", () => {
     set("btn_last_games_enabled", items.btn_last_games_enabled);
     set("btn_hide_video_enabled", items.btn_hide_video_enabled);
     set("role_marker_enabled", items.role_marker_enabled);
+    set("compact_nicknames_enabled", items.compact_nicknames_enabled);
+    const npp = $<HTMLSelectElement>("nick_plate_position");
+    // Нормализация: мусор в storage иначе оставил бы селект пустым.
+    if (npp) {
+      npp.value = (PLATE_POSITIONS as readonly string[]).includes(items.nick_plate_position)
+        ? items.nick_plate_position
+        : "default";
+    }
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
     set("debug_logging_enabled", items.debug_logging_enabled);
@@ -1056,6 +1066,8 @@ document.addEventListener("DOMContentLoaded", () => {
       btn_last_games_enabled: cb("btn_last_games_enabled", true),
       btn_hide_video_enabled: cb("btn_hide_video_enabled", true),
       role_marker_enabled: cb("role_marker_enabled", false),
+      compact_nicknames_enabled: cb("compact_nicknames_enabled", false),
+      nick_plate_position: $<HTMLSelectElement>("nick_plate_position")?.value || "default",
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
       debug_logging_enabled: cb("debug_logging_enabled", true),
@@ -1166,6 +1178,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "btn_last_games_enabled",
     "btn_hide_video_enabled",
     "role_marker_enabled",
+    "compact_nicknames_enabled",
     "f5_refresh_fix_enabled",
     "update_check_enabled",
     "debug_logging_enabled",

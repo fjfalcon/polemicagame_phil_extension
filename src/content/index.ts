@@ -30,6 +30,7 @@ import { queueGuardFeature, syncQueueGuardRoute } from "./features/queue-guard";
 import { queuePeekFeature } from "./features/queue-peek";
 import { queueRequeueFeature } from "./features/queue-requeue";
 import { postgameSearchFeature } from "./features/postgame-search";
+import { nickPlateFeature } from "./features/nick-plate";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -49,6 +50,7 @@ const manager = new FeatureManager().register(
   queuePeekFeature,
   queueRequeueFeature,
   postgameSearchFeature,
+  nickPlateFeature,
   obsPanelFeature,
   twitchPanelFeature,
 );

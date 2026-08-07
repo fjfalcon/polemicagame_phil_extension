@@ -1,0 +1,5 @@
+.player[data-v-79273408]{display:-webkit-box;display:-ms-flexbox;display:flex;-webkit-box-pack:center;-ms-flex-pack:center;border-radius:var(--base-border-radius);justify-content:center;position:relative}
+/*—SNIPPET—*/
+.player__botleftmenu[data-v-79273408]{-webkit-box-align:start;-ms-flex-align:start;align-items:flex-start;grid-gap:.375rem;bottom:.625rem;gap:.375rem;left:.625rem;z-index:5}
+/*—SNIPPET—*/
+.player__botleftmenu[data-v-79273408],.player__toprightmenu[data-v-79273408]{display:-webkit-box;display:-ms-flexbox;display:flex;position:absolute;-webkit-box-orient:vertical;-webkit-box-direction:normal;-ms-flex-direction:column;flex-direction:column}

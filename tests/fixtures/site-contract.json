@@ -24,6 +24,10 @@
     "mainCss": {
       "url": "https://polemicagame.com/bundle/main.css",
       "note": "sha не пригвождаем: стили сайта меняются чаще кода, следим за смыслом правил"
+    },
+    "roomCss": {
+      "url": "https://polemicagame.com/room/bundle/style.css",
+      "note": "sha не пригвождаем: стили меняются чаще кода, следим за смыслом правил"
     }
   }
 }

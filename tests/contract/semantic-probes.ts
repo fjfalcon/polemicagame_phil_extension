@@ -283,6 +283,24 @@ export const roomProbes: Record<string, Probe> = {
     [],
     "state-voted/state-killed ⇔ isKilled(+votedBy), state-disqualified ⇔ isDisqualified",
   ),
+  /**
+   * Плашка игрока: номер (PlayerNumber) и ник живут в одном `.player__info`,
+   * а у самой плашки — сайтовый onClick (превью игрока). На этом стоит
+   * compact-nicks: сворачиваем ник, «ручкой» служит номер, а его клик мы
+   * обязаны гасить, иначе откроется чужое окно.
+   */
+  playerInfoPlate: inWindow(
+    'class:"player__info info"',
+    420,
+    ["showPlayerPreview", 'class:"info__name"'],
+    [],
+    "player__info: onClick=showPlayerPreview + внутри info__name",
+  ),
+  /** Номер игрока: класс player-N (id), подпись — id+1. */
+  playerNumberBinding: re(
+    /\["player-number","player-"\.concat\(\w+\.id\)\][^)]*\)[^)]*textContent:v\(\w+\.id\+1\)/,
+    "PlayerNumber: класс player-<id>, текст id+1 (id 0-based, подпись с единицы)",
+  ),
   /** Футер статистики: «Поиск игры» ведёт на /game-search (fromGame). */
   statsFooterSearchLink: re(
     /endGameLink:function\(\)\{return\{link:"\/game-search"/,
@@ -345,6 +363,33 @@ export const siteCssProbes: Record<string, Probe> = {
       title[1].includes("max-width:67px");
     return { ok, detail };
   },
+};
+
+// ────────────────────── room/bundle/style.css (комната) ──────────────────────
+
+/**
+ * Геометрия плитки игрока, на которой стоит перестановка плашки по углам
+ * (nick-plate). Двигаем мы КОНТЕЙНЕР `.player__botleftmenu`, и работает это
+ * только пока: плитка — точка отсчёта (position: relative), а контейнер
+ * прижат к её левому нижнему углу абсолютным позиционированием.
+ */
+export const roomCssProbes: Record<string, Probe> = {
+  tileIsPositioningRoot: re(
+    /\.player\[data-v-[a-f0-9]+\]\{[^}]*position:relative/,
+    "плитка .player — position:relative (точка отсчёта для углов плашки)",
+  ),
+  plateContainerAnchored: (text) => {
+    const rule = /\.player__botleftmenu\[data-v-[a-f0-9]+\]\{([^}]*)\}/.exec(text);
+    const detail = "контейнер плашки прижат к левому нижнему углу (left/bottom .625rem)";
+    if (!rule) return { ok: false, detail: `${detail}: правило не найдено` };
+    const ok = rule[1].includes("bottom:.625rem") && rule[1].includes("left:.625rem");
+    return { ok, detail };
+  },
+  /** Позиционирование контейнеров углов — absolute (общее правило сайта). */
+  cornerMenusAbsolute: re(
+    /\.player__(?:botleftmenu|toprightmenu)\[data-v-[a-f0-9]+\][^{]*\{[^}]*position:absolute/,
+    "угловые контейнеры плитки позиционируются absolute",
+  ),
 };
 
 /**
