@@ -26,6 +26,14 @@ export const SITE = {
    * absolute считался бы от контейнера, а не от плитки.
    */
   plateContainer: ".player__botleftmenu",
+  /**
+   * Верхние углы плитки, занятые кнопками САЙТА: слева — готовность и роль,
+   * справа — фолы и меню «…». Нужны, чтобы понять, надо ли отодвигать нашу
+   * плашку вниз: в лобби до готовности левый угол пуст, и отступ выглядит
+   * как «плашка зависла посередине» (жалоба 08.08.2026).
+   */
+  topLeftMenu: ".player__topleftmenu",
+  topRightMenu: ".player__toprightmenu",
   playerVideoWrapper: ".player__video-wrapper",
   playerVideo: ".player__video, .player__video-wrapper",
   playerVideoEl: "video.player__video",

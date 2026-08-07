@@ -3458,18 +3458,31 @@ class PlayerNotesManager {
     // нужно (скрыть видео, поворот, мьют), гейтятся по своим элементам ниже.
     const hasMedia = !!container.querySelector(SITE.playerVideoWrapper);
 
+    // Ряд кнопок живёт в КОНТЕЙНЕРЕ угла (`.player__botleftmenu`), а не внутри
+    // плашки: там же сайт держит плашку рейтинга (MMR) в лобби, и наш
+    // абсолютный ряд ложился прямо на неё — «кнопки наезжают на рейтинг»
+    // (жалоба владельца 08.08.2026). В потоке колонки контейнера всё
+    // выстраивается само: рейтинг, кнопки, плашка ника. Порядок — перед
+    // плашкой, чтобы привычный вид «кнопки над ником» не менялся; угол
+    // плашки при желании переставит их вниз (nick-plate).
+    // Fallback на плашку остаётся: если сайт когда-нибудь уберёт контейнер,
+    // кнопки просто вернутся к старому absolute-поведению, а не исчезнут.
+    const iconsHost = container.querySelector<HTMLElement>(SITE.plateContainer) || infoContainer;
     const sig = this.buttonsSignature(username, hasMedia);
-    let iconsGroup = infoContainer.querySelector<HTMLElement>(`.${OWN.playerIcons}`);
+    let iconsGroup = iconsHost.querySelector<HTMLElement>(`.${OWN.playerIcons}`);
 
     if (!iconsGroup || iconsGroup.dataset.pnSig !== sig) {
       // Чистим кнопки этого ника ТОЛЬКО в своей плитке и пересобираем её.
       this.removeOldButtons(username, container as HTMLElement);
-      infoContainer.querySelectorAll(`.${OWN.playerIcons}`).forEach((g) => g.remove());
+      // Ищем по всей плитке: после смены хоста старая группа могла остаться
+      // внутри плашки (обновление расширения на живой странице).
+      container.querySelectorAll(`.${OWN.playerIcons}`).forEach((g) => g.remove());
 
       iconsGroup = document.createElement("div");
       iconsGroup.className = OWN.playerIcons;
       iconsGroup.dataset.pnSig = sig;
-      infoContainer.appendChild(iconsGroup);
+      if (iconsHost === infoContainer) iconsHost.appendChild(iconsGroup);
+      else iconsHost.insertBefore(iconsGroup, infoContainer);
 
       const s = this.settings;
       if (s.btn_stats_enabled !== false) {

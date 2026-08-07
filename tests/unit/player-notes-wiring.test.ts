@@ -107,6 +107,55 @@ describe("проводка PERF-1", () => {
     spy.mockRestore();
   });
 
+  test("ряд кнопок встаёт в КОНТЕЙНЕР угла перед плашкой, а не внутрь плашки", () => {
+    // Жалоба владельца 08.08.2026: в лобби кнопки ложились на плашку
+    // рейтинга сайта — она живёт в той же колонке, а наш ряд висел над
+    // плашкой ника абсолютом. В потоке колонки пересечений нет.
+    document.body.innerHTML = `
+      <div class="players">
+        <div class="player" id="p1">
+          <div class="player__botleftmenu">
+            <div class="mmr-label">6821</div>
+            <div class="player__info info">
+              <div class="player-number player-0">1</div>
+              <span class="info__name">fj</span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    const tile = document.querySelector("#p1") as HTMLElement;
+    fire([rec({ target: document.body, added: [tile] })]);
+
+    const host = document.querySelector(".player__botleftmenu") as HTMLElement;
+    const icons = host.querySelector(":scope > .player-icons");
+    expect(icons, "ряд кнопок обязан лежать в колонке угла").not.toBeNull();
+    expect(
+      document.querySelector(".player__info > .player-icons"),
+      "внутри плашки ряда быть не должно — он ложился на рейтинг",
+    ).toBeNull();
+    // Порядок: кнопки ПЕРЕД плашкой ника (привычный вид «кнопки над ником»).
+    const kids = Array.from(host.children);
+    expect(kids.indexOf(icons as Element)).toBeLessThan(
+      kids.indexOf(host.querySelector(".player__info") as Element),
+    );
+  });
+
+  test("нет контейнера угла — ряд кнопок всё равно появляется (в плашке)", () => {
+    // Фолбэк: сайт может отдать плитку без колонки (другой экран, редизайн).
+    document.body.innerHTML = `
+      <div class="players">
+        <div class="player" id="p1">
+          <div class="player__info info">
+            <div class="player-number player-0">1</div>
+            <span class="info__name">fj</span>
+          </div>
+        </div>
+      </div>`;
+    const tile = document.querySelector("#p1") as HTMLElement;
+    fire([rec({ target: document.body, added: [tile] })]);
+    expect(document.querySelector(".player__info > .player-icons")).not.toBeNull();
+  });
+
   test("посторонние мутации не трогают DOM вовсе", () => {
     const foreign = document.createElement("section");
     document.body.appendChild(foreign);

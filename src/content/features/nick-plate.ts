@@ -63,14 +63,6 @@ const STYLE_ID = "pn-nick-plate-styles";
 const TOP_OFFSET = "3.25rem";
 /** Отступ сайта от края плитки — повторяем, чтобы углы выглядели родными. */
 const EDGE = "0.625rem";
-/**
- * На сколько ряд наших иконок отстоит от плашки. Значение — из notes.css
- * (`.player-icons { top: -28px }`): там ряд висит НАД плашкой, потому что
- * снизу у плитки край. При верхнем угле это выглядит наоборот — иконки
- * прилипают к самой кромке, а номер оказывается под ними, поэтому там мы
- * ряд переворачиваем вниз (просьба владельца 08.08.2026).
- */
-const ICONS_OFFSET = "28px";
 
 /** Позиции (id игрока из класса `player-N`), развёрнутые вручную. */
 const opened = new Set<string>();
@@ -125,24 +117,31 @@ export function positionCss(position: PlatePosition): string {
   // Правые углы выравнивают содержимое по правому краю — иначе иконки и
   // плашка «висят» слева от угла и выглядят сдвинутыми.
   const align = position === "top-left" ? "" : " align-items: flex-end;";
-  // Ряд иконок абсолютен относительно плашки (notes.css): у верхних углов
-  // разворачиваем его ВНИЗ, у правых — прижимаем к правому краю плашки.
-  const iconsTop = position.startsWith("top-")
-    ? `top: auto !important; bottom: -${ICONS_OFFSET} !important;`
-    : "";
-  const iconsSide = position.endsWith("-right")
-    ? " left: auto !important; right: 0 !important;"
-    : "";
-  const icons = iconsTop || iconsSide
+  // «Плашка сверху — кнопки снизу» (просьба владельца): ряд кнопок лежит в
+  // потоке колонки ПЕРЕД плашкой, и у верхних углов его достаточно
+  // переставить flex-порядком. Абсолютных сдвигов больше нет — ряд ничего
+  // не перекрывает по построению.
+  const icons = position.startsWith("top-")
     ? `
-    .${POS_CLASS_PREFIX}${position} ${SITE.playerInfo} > .${OWN.playerIcons} {
-      ${iconsTop}${iconsSide}
+    .${POS_CLASS_PREFIX}${position} ${SITE.plateContainer} > .${OWN.playerIcons} {
+      order: 1;
+    }`
+    : "";
+  // Верхний угол: обычно там стоят кнопки сайта (готовность и роль слева,
+  // фолы и «…» справа) — держим отступ. Но когда угол ПУСТ (лобби до
+  // готовности), тот же отступ выглядит как «плашка зависла посередине»
+  // (жалоба владельца 08.08.2026), поэтому прижимаемся к краю.
+  const siteCorner = position === "top-left" ? SITE.topLeftMenu : SITE.topRightMenu;
+  const tight = position.startsWith("top-")
+    ? `
+    .${POS_CLASS_PREFIX}${position} ${SITE.player}:not(:has(${siteCorner} > *)) ${SITE.plateContainer} {
+      top: ${EDGE};
     }`
     : "";
   return `
     .${POS_CLASS_PREFIX}${position} ${SITE.plateContainer} {
       ${corner[position]}${align}
-    }${icons}`;
+    }${icons}${tight}`;
 }
 
 /**

@@ -7,7 +7,12 @@
  * состояние без CSS, клик, уходящий сайту (открывает превью игрока),
  * неидемпотентная запись в DOM, пережившие выключение стили и атрибуты.
  */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 let domSubscriberRaw: ((records: MutationRecord[]) => void) | null = null;
 vi.mock("@core/dom", () => ({
@@ -75,6 +80,20 @@ beforeEach(() => {
 afterEach(() => {
   nickPlateFeature.disable();
   domSubscriberRaw = null;
+});
+
+describe("ряд кнопок в колонке угла (notes.css)", () => {
+  test("в колонке ряд лежит В ПОТОКЕ, а вне её — по-прежнему абсолютом", () => {
+    // Абсолютный ряд в колонке лёг бы поверх плашки рейтинга сайта — ровно
+    // жалоба владельца 08.08.2026. Правило-исключение сторожим здесь, потому
+    // что notes.css грузится браузером и юнитами иначе не покрыт.
+    const css = fs.readFileSync(path.join(ROOT, "src/static/notes.css"), "utf8");
+    const inFlow = /\.player__botleftmenu > \.player-icons\s*\{([^}]*)\}/.exec(css)?.[1];
+    expect(inFlow, "правила «в потоке» нет").toBeTruthy();
+    expect(inFlow).toMatch(/position:\s*static\s*!important/);
+    // Фолбэк для плиток без колонки обязан остаться.
+    expect(css).toMatch(/\n\.player-icons\s*\{[^}]*position:\s*absolute/);
+  });
 });
 
 describe("чистые функции разбора плашки", () => {
@@ -249,53 +268,53 @@ describe("угол плашки", () => {
   });
 
   test.each(["top-left", "top-right"])(
-    "угол %s: ряд иконок разворачивается ПОД плашку, а не липнет к кромке",
+    "угол %s: ряд кнопок переставляется ПОД плашку flex-порядком",
     (pos) => {
       // Просьба владельца 08.08.2026: «если плашка сверху — кнопки снизу».
-      // По умолчанию ряд висит на 28px ВЫШЕ плашки (notes.css) — у верхнего
-      // угла он оказывался у самого края, а номер под ним.
+      // Ряд лежит в потоке колонки ПЕРЕД плашкой, поэтому достаточно order.
       table();
       nickPlateFeature.enable(posCtx(pos));
       const rule = new RegExp(
-        `\\.pn-nick-pos-${pos} \\.player__info > \\.player-icons\\s*\\{([^}]*)\\}`,
+        `\\.pn-nick-pos-${pos} \\.player__botleftmenu > \\.player-icons\\s*\\{([^}]*)\\}`,
       ).exec(css())?.[1];
-      expect(rule, "правила для ряда иконок нет").toBeTruthy();
-      expect(rule).toMatch(/top:\s*auto\s*!important/);
-      expect(rule).toMatch(/bottom:\s*-28px\s*!important/);
+      expect(rule, "правила порядка для ряда кнопок нет").toBeTruthy();
+      expect(rule).toMatch(/order:\s*1/);
     },
   );
 
-  test.each(["top-right", "bottom-right"])(
-    "угол %s: ряд иконок прижат к правому краю плашки",
+  test.each(["top-left", "top-right"])(
+    "угол %s: пустой угол сайта — плашка прижимается к краю, а не висит посередине",
     (pos) => {
+      // Жалоба владельца 08.08.2026: в лобби до готовности верхний левый
+      // угол пуст, и отступ «под кнопки сайта» выглядел как зависание.
       table();
       nickPlateFeature.enable(posCtx(pos));
+      const menu = pos === "top-left" ? "player__topleftmenu" : "player__toprightmenu";
       const rule = new RegExp(
-        `\\.pn-nick-pos-${pos} \\.player__info > \\.player-icons\\s*\\{([^}]*)\\}`,
+        `\\.pn-nick-pos-${pos} \\.player:not\\(:has\\(\\.${menu} > \\*\\)\\) \\.player__botleftmenu\\s*\\{([^}]*)\\}`,
       ).exec(css())?.[1];
-      expect(rule, "правила для ряда иконок нет").toBeTruthy();
-      expect(rule).toMatch(/right:\s*0\s*!important/);
-      expect(rule).toMatch(/left:\s*auto\s*!important/);
+      expect(rule, "правила «пустой угол» нет").toBeTruthy();
+      expect(rule).toMatch(/top:\s*0\.625rem/);
     },
   );
 
-  test("у НИЖНЕГО угла ряд иконок остаётся НАД плашкой: снизу край плитки", () => {
-    // Мутант «переворачивать иконки всегда»: у нижнего угла ряд уехал бы
-    // за границу плитки и оказался обрезан.
+  test("нижний угол ряд кнопок не переставляет — там он и так над плашкой", () => {
+    // Стиль инжектится один на все углы, активный выбирает класс на <html>,
+    // поэтому проверяем ОТСУТСТВИЕ правила именно для нижнего угла — иначе
+    // ряд уехал бы под плашку, к самому краю плитки.
     table();
     nickPlateFeature.enable(posCtx("bottom-right"));
-    const rule = /\.pn-nick-pos-bottom-right \.player__info > \.player-icons\s*\{([^}]*)\}/.exec(
-      css(),
-    )?.[1];
-    expect(rule, "правило для правого края должно быть").toBeTruthy();
-    expect(rule, "вниз ряд не разворачиваем").not.toMatch(/bottom:\s*-/);
-    expect(rule).not.toMatch(/top:\s*auto/);
+    expect(css()).not.toMatch(
+      /\.pn-nick-pos-bottom-right \.player__botleftmenu > \.player-icons/,
+    );
+    // И «пустой угол» тоже не про низ: там кнопок сайта нет.
+    expect(css()).not.toMatch(/\.pn-nick-pos-bottom-right \.player:not\(:has/);
   });
 
-  test("угол «снизу слева» ряд иконок не трогает — там вид сайта", () => {
+  test("угол «снизу слева» вообще ничего не добавляет — там вид сайта", () => {
     table();
     nickPlateFeature.enable(posCtx("default"));
-    expect(css()).not.toContain(".player-icons");
+    expect(styleEl()).toBeNull();
   });
 
   test("мусор в настройке — угол сайта, а не пустой экран", () => {

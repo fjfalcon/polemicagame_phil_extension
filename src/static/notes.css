@@ -20,7 +20,17 @@
     z-index: 2 !important;
 }
 
-/* Группа иконок: фиксированная строка над .player__info */
+/* Ряд кнопок В ПОТОКЕ колонки угла — основной случай.
+   Раньше ряд висел абсолютом над плашкой ника и в лобби ложился прямо на
+   плашку рейтинга сайта, которая живёт в той же колонке (жалоба владельца
+   08.08.2026). В потоке ничего не пересекается: рейтинг, кнопки, ник. */
+.player__botleftmenu > .player-icons {
+    position: static !important;
+    top: auto !important;
+    left: auto !important;
+}
+
+/* Fallback: если контейнера угла нет, ряд по-прежнему висит над плашкой. */
 .player-icons {
     position: absolute !important;
     top: -28px !important;
