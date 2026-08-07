@@ -130,6 +130,30 @@ export const SITE = {
   profileAccept: ".p-play__profile-accept",
   profileSearchButton: ".p-play__profile-button",
   profileSearchClose: ".p-play__profile-game-search-close",
+  // ── «В поиск» после конца игры / смерти игрока (postgame-search) ──
+  /**
+   * Блок «Продолжить игру / Покинуть игру» на странице поиска: сервер ещё
+   * считает игрока в игре (`userInGame`), кнопки «Играть» в этот момент в
+   * DOM НЕТ вообще (ветки шаблона взаимоисключающие). Убитого/заголосованного
+   * игрока сайт сам уводит в режим зрителя (`on_self_strike` →
+   * location="/game?role=viewer&game_id=…"), но из игры НЕ выписывает —
+   * поэтому перед новым поиском обязателен выход через этот блок.
+   */
+  searchDecideBlock: ".p-play__profile-game--decide",
+  /**
+   * «Покинуть игру» — только ВНУТРИ решающего блока (гейт по контейнеру,
+   * §4 п.2). Клик по ней НЕ выходит из игры: `quitGame(false)` лишь открывает
+   * модалку подтверждения (сверено с бандлом game-search 07.08.2026).
+   */
+  searchQuitButton: ".p-play__profile-game--decide .p-play__profile-quit",
+  /**
+   * Модалка подтверждения выхода (ConfirmQuitGameModal). Её главная кнопка
+   * зовёт `quitGame(true)` → POST /api/games/quit → userInGame сбрасывается.
+   * Ban-проп модалки на странице поиска НЕ передаётся (всегда нейтральный
+   * текст без угрозы бана) — сверено с единственным местом использования.
+   */
+  confirmQuitModal: ".confirmQuit",
+  confirmQuitButton: ".confirmQuit .confirmQuit__content-btn",
   // Кнопки / меню
   settingsButton: "div.button.preset-1.small.desktop-version",
   // OBS-панель: детекция активного игрового интерфейса и стадий
@@ -266,6 +290,14 @@ export const TEXT = {
    * говорит класс `active` (SITE.readyButtonActiveClass).
    */
   readyButton: ["готов", "ready"],
+  /**
+   * Шаги выхода из игры на странице поиска (postgame-search). Строки зашиты
+   * в шаблон бандла game-search ПО-РУССКИ (страница поиска не локализуется,
+   * сверено 07.08.2026) — английских вариантов не существует, добавлять их
+   * значило бы матчить то, чего нет.
+   */
+  quitGameButton: ["покинуть игру"],
+  confirmQuitButton: ["покинуть лобби"],
 } as const;
 
 /** CSS-классы/идентификаторы, создаваемые САМИМ расширением (наши, не сайта). */

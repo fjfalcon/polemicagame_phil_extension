@@ -405,6 +405,13 @@ onMessage((msg: ExtMessage, sender) => {
       ok ? { ok: true } : { ok: false, reason: "нет id вкладки" },
     );
   }
+  // Сторож postgame-search: страница поиска спрашивает, держит ли КАКАЯ-ТО
+  // другая вкладка живой матч игрока. Спрашиваем сами вкладки (инвариант
+  // §4 п.10: достоверность состояния вкладки знает только она), а не
+  // модульное состояние — SW мог только что проснуться.
+  if ("type" in msg && msg.type === "postgame_live_query") {
+    return probeLiveMatchTabs(sender.tab?.id);
+  }
   if ("action" in msg && msg.action === "queueGuardCancel") {
     const tabId = sender.tab?.id;
     if (tabId === undefined) return Promise.resolve({ ok: false });
@@ -418,6 +425,26 @@ onMessage((msg: ExtMessage, sender) => {
   }
   return undefined;
 });
+
+/**
+ * Опрос игровых вкладок: держит ли какая-то из них ЖИВОЙ матч (не зритель,
+ * не экран победы). Вкладка отправителя исключается: она на странице поиска.
+ * Ошибки доставки (выгруженная/осиротевшая вкладка) sendToTab гасит в
+ * undefined — это честное «не знаю», и оно НЕ считается живым матчем:
+ * сторож дополнительный, отказ канала не должен блокировать явное действие
+ * игрока (fail-open согласован ревью 07.08.2026).
+ */
+async function probeLiveMatchTabs(excludeTabId: number | undefined): Promise<{ live: boolean }> {
+  // Паттерн шире /game (ловит и /game-search): лишние вкладки честно ответят
+  // live:false — фильтр по маршруту делает сам контент-скрипт.
+  const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/game*" });
+  const answers = await Promise.all(
+    tabs
+      .filter((t) => t.id != null && t.id !== excludeTabId)
+      .map((t) => sendToTab<{ live?: boolean }>(t.id as number, { type: "postgame_live_probe" })),
+  );
+  return { live: answers.some((a) => a?.live === true) };
+}
 
 /**
  * id вкладки кодируется В ИМЕНИ будильника и уведомления, а не в модульной

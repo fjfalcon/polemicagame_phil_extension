@@ -1,0 +1,488 @@
+// @vitest-environment jsdom
+// @vitest-environment-options { "url": "https://polemicagame.com/game" }
+/**
+ * Кнопка «В поиск» после конца игры и машина «выйти из игры → Играть».
+ *
+ * Мутационный критерий (§процесс): каждый тест валит конкретную поломку —
+ * снятый гейт условия показа, тавтологию текста кнопки, бесконечный бюджет,
+ * вечное молчание в фоне, пережившую страницу метку.
+ */
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+let domSubscriber: (() => void) | null = null;
+
+vi.mock("@core/dom", () => ({
+  onDomChange: vi.fn((cb: () => void) => {
+    domSubscriber = cb;
+    return () => {
+      domSubscriber = null;
+    };
+  }),
+  safeClick: vi.fn(),
+  isVisible: vi.fn(() => true),
+}));
+vi.mock("@core/log", () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock("@core/toast", () => ({ showToast: vi.fn(), clearToasts: vi.fn() }));
+
+/** Захват ответчика пробы + управляемый сторож живого матча. */
+let messageHandler: ((msg: unknown) => unknown) | null = null;
+vi.mock("@core/messaging", () => ({
+  onMessage: vi.fn((h: (msg: unknown) => unknown) => {
+    messageHandler = h;
+    return () => {
+      messageHandler = null;
+    };
+  }),
+  sendRuntime: vi.fn(async () => ({ live: false })),
+}));
+
+import {
+  BUTTON_ID,
+  POSTGAME_PENDING_KEY,
+  noteTrustedInput,
+  postgameSearchFeature,
+} from "@content/features/postgame-search";
+import { serializeMark } from "@content/features/requeue-pending";
+import { log } from "@core/log";
+import { showToast } from "@core/toast";
+import { safeClick } from "@core/dom";
+import { sendRuntime } from "@core/messaging";
+import type { Settings } from "@shared/types";
+
+const ctx = { settings: { postgame_requeue_enabled: true } as Settings };
+
+const infoHas = (needle: string) =>
+  vi.mocked(log.info).mock.calls.some((args) => args.some((a) => String(a).includes(needle)));
+const warnHas = (needle: string) =>
+  vi.mocked(log.warn).mock.calls.some((args) => args.some((a) => String(a).includes(needle)));
+
+/** Экран завершённой игры (роллер): размеры — как в selectors.test.ts. */
+function endedScreen(classes = "ended ended-mafia"): HTMLElement {
+  const roller = document.createElement("div");
+  roller.className = "roller";
+  const el = document.createElement("div");
+  el.className = classes;
+  Object.defineProperties(el, {
+    offsetWidth: { configurable: true, value: 300 },
+    offsetHeight: { configurable: true, value: 200 },
+  });
+  roller.append(el);
+  document.body.append(roller);
+  return el;
+}
+
+/** Решающий блок страницы поиска («Продолжить игру» / «Покинуть игру»). */
+function decideBlock(quitLabel = "Покинуть игру"): void {
+  const div = document.createElement("div");
+  div.className = "p-play__profile-game--decide";
+  div.innerHTML = `
+    <button type="button" class="p-play__profile-agree">Продолжить игру</button>
+    <button type="button" class="p-play__profile-quit">${quitLabel}</button>`;
+  document.body.append(div);
+}
+
+/** Модалка подтверждения выхода. */
+function confirmQuitModal(label = "Покинуть лобби"): void {
+  const div = document.createElement("div");
+  div.className = "confirmQuit";
+  div.innerHTML = `<button class="confirmQuit__content-btn">${label}</button>`;
+  document.body.append(div);
+}
+
+/** Кнопка «Играть». */
+function playButton(disabled = false): void {
+  const btn = document.createElement("button");
+  btn.className = "p-play__profile-button";
+  btn.textContent = "Играть";
+  if (disabled) btn.setAttribute("disabled", "");
+  document.body.append(btn);
+}
+
+/** Видимая ЧУЖАЯ модалка (родовая обёртка с размерами). */
+function foreignModal(): void {
+  const div = document.createElement("div");
+  div.className = "modal";
+  Object.defineProperties(div, {
+    offsetWidth: { configurable: true, value: 300 },
+    offsetHeight: { configurable: true, value: 200 },
+  });
+  document.body.append(div);
+}
+
+/** Свежий мост в sessionStorage (как его пишет клик по кнопке). */
+function plantMark(ageMs = 0): void {
+  const at = Date.now() - ageMs;
+  sessionStorage.setItem(POSTGAME_PENDING_KEY, serializeMark({ issuedAt: at, refreshedAt: at }));
+}
+
+function enableOnSearch(): void {
+  history.replaceState(null, "", "/game-search");
+  postgameSearchFeature.enable(ctx);
+}
+
+const clicked = (): Element[] => vi.mocked(safeClick).mock.calls.map((c) => c[0] as Element);
+
+beforeEach(() => {
+  sessionStorage.clear();
+  document.body.innerHTML = "";
+  history.replaceState(null, "", "/game");
+  vi.useFakeTimers();
+  // Не с нуля: бэкофф сравнивает Date.now() с нулевой отметкой.
+  vi.setSystemTime(new Date(1_800_000_000_000));
+});
+
+afterEach(() => {
+  postgameSearchFeature.disable();
+  domSubscriber = null;
+  vi.useRealTimers();
+});
+
+describe("комната: условия показа кнопки", () => {
+  test("победа мафии → кнопка есть, рендер идемпотентен", () => {
+    endedScreen("ended ended-mafia");
+    postgameSearchFeature.enable(ctx);
+    expect(document.getElementById(BUTTON_ID)).not.toBeNull();
+    domSubscriber?.();
+    domSubscriber?.();
+    // Мутант «безусловный append на каждый тик» — инвариант §4 п.1.
+    expect(document.querySelectorAll(`#${BUTTON_ID}`)).toHaveLength(1);
+  });
+
+  test("пауза и промах мафии кнопку НЕ показывают", () => {
+    endedScreen("ended ended-pause");
+    postgameSearchFeature.enable(ctx);
+    expect(document.getElementById(BUTTON_ID)).toBeNull();
+    document.body.innerHTML = "";
+    endedScreen("ended ended-mafia-missed");
+    domSubscriber?.();
+    expect(document.getElementById(BUTTON_ID)).toBeNull();
+  });
+
+  test("живой матч без ended-экрана кнопку не показывает, конец игры — показывает, уход экрана — убирает", () => {
+    postgameSearchFeature.enable(ctx);
+    expect(document.getElementById(BUTTON_ID)).toBeNull();
+    const el = endedScreen("ended ended-civilian");
+    domSubscriber?.();
+    expect(document.getElementById(BUTTON_ID)).not.toBeNull();
+    el.remove();
+    domSubscriber?.();
+    expect(document.getElementById(BUTTON_ID)).toBeNull();
+  });
+
+  test("режим зрителя (role=viewer) → кнопка есть и без ended-экрана", () => {
+    history.replaceState(null, "", "/game?role=viewer&game_id=123");
+    postgameSearchFeature.enable(ctx);
+    expect(document.getElementById(BUTTON_ID)).not.toBeNull();
+  });
+
+  test("клик по кнопке кладёт мост в sessionStorage и логирует уход", () => {
+    endedScreen();
+    postgameSearchFeature.enable(ctx);
+    document.getElementById(BUTTON_ID)?.dispatchEvent(new MouseEvent("click"));
+    const raw = sessionStorage.getItem(POSTGAME_PENDING_KEY);
+    expect(raw).not.toBeNull();
+    expect(JSON.parse(raw as string).issuedAt).toBe(Date.now());
+    expect(infoHas("кнопка «В поиск» нажата")).toBe(true);
+  });
+
+  test("stream window стримера: кнопки нет даже на экране победы (блокер A)", () => {
+    // Сайт сам открывает живому игроку окно захвата с ?role=viewer:
+    // window.open(..., "streamWindow"). Кнопка там — мусор в эфире и
+    // мисклик-выход из идущего матча.
+    const original = window.name;
+    try {
+      window.name = "streamWindow";
+      history.replaceState(null, "", "/game?role=viewer&game_id=123");
+      endedScreen();
+      postgameSearchFeature.enable(ctx);
+      domSubscriber?.();
+      expect(document.getElementById(BUTTON_ID)).toBeNull();
+    } finally {
+      window.name = original;
+    }
+  });
+
+  test("выключенная настройка — кнопки нет", () => {
+    endedScreen();
+    postgameSearchFeature.enable({
+      settings: { postgame_requeue_enabled: false } as Settings,
+    });
+    domSubscriber?.();
+    expect(document.getElementById(BUTTON_ID)).toBeNull();
+  });
+});
+
+describe("поиск: машина «выйти из игры → Играть»", () => {
+  test("мост + решающий блок → сторож → «Покинуть игру» → модалка → «Покинуть лобби» → «Играть»", async () => {
+    plantMark();
+    decideBlock();
+    // Скрытая родовая обёртка модалки сидит в DOM всегда (v-show сайта):
+    // сторож чужих модалок обязан смотреть на РАЗМЕРЫ, не на присутствие.
+    const hiddenShell = document.createElement("div");
+    hiddenShell.className = "basemodal";
+    document.body.append(hiddenShell);
+    enableOnSearch();
+    expect(infoHas("мост «В поиск» из комнаты")).toBe(true);
+    expect(sessionStorage.getItem(POSTGAME_PENDING_KEY), "метка одноразовая").toBeNull();
+    // Квит уходит только ПОСЛЕ ответа сторожа живого матча (он асинхронный).
+    expect(clicked()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(vi.mocked(sendRuntime)).toHaveBeenCalledWith({ type: "postgame_live_query" });
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-quit");
+
+    // Сайт открыл модалку подтверждения.
+    confirmQuitModal();
+    await vi.advanceTimersByTimeAsync(1400);
+    domSubscriber?.();
+    expect(clicked().at(-1)?.className).toBe("confirmQuit__content-btn");
+
+    // POST прошёл: блок и модалка исчезли, рисуются очереди с «Играть».
+    document.body.innerHTML = "";
+    playButton();
+    await vi.advanceTimersByTimeAsync(1400);
+    domSubscriber?.();
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-button");
+    expect(vi.mocked(showToast).mock.calls.some((c) => String(c[0]).includes("Снова встаю"))).toBe(
+      true,
+    );
+
+    // Секундомер очереди — успех, эпизод закрыт.
+    document.body.innerHTML = `
+      <div class="p-play__profile-game--search"><div class="p-play__profile-game-search-time">0:03</div></div>`;
+    domSubscriber?.();
+    expect(infoHas("поиск запущен: секундомер очереди подтверждён")).toBe(true);
+  });
+
+  test("без моста машина не делает НИЧЕГО", () => {
+    decideBlock();
+    enableOnSearch();
+    vi.advanceTimersByTime(5000);
+    domSubscriber?.();
+    expect(clicked()).toHaveLength(0);
+  });
+
+  test("протухший мост (старше TTL) пропускается с причиной", () => {
+    plantMark(60_000);
+    decideBlock();
+    enableOnSearch();
+    expect(infoHas("метка устарела")).toBe(true);
+    expect(clicked()).toHaveLength(0);
+  });
+
+  test("подпись «Покинуть игру» изменилась — ни одного клика, честный warn", async () => {
+    // Мутант-тавтология: снять проверку текста — клик уйдёт по чужой кнопке.
+    plantMark();
+    decideBlock("Выйти навсегда");
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(clicked()).toHaveLength(0);
+    expect(warnHas("подпись кнопки шага «Покинуть игру» не совпала")).toBe(true);
+    expect(vi.mocked(showToast).mock.calls.some((c) => String(c[0]).includes("вручную"))).toBe(
+      true,
+    );
+  });
+
+  test("бюджет шага: три попытки и терминальный warn, не бесконечность", async () => {
+    plantMark();
+    decideBlock();
+    enableOnSearch();
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(1400);
+      domSubscriber?.();
+    }
+    expect(clicked().length).toBe(3);
+    expect(warnHas("«Покинуть игру» не сработал за 3 попытки")).toBe(true);
+  });
+
+  test("чужая модалка (капча/«Ошибка!») останавливает машину насовсем", () => {
+    plantMark();
+    decideBlock();
+    foreignModal();
+    enableOnSearch();
+    expect(clicked()).toHaveLength(0);
+    expect(warnHas("открыта модалка сайта")).toBe(true);
+  });
+
+  test("модалка подтверждения выхода ЧУЖОЙ не считается", async () => {
+    // Мутант «любая модалка = стоп»: наш же confirmQuit убил бы машину.
+    plantMark();
+    confirmQuitModal();
+    foreignModal(); // родовая обёртка вокруг живого confirmQuit
+    enableOnSearch();
+    // Модалка открыта НЕ нашим quit-шагом → сторож бегает и здесь.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(clicked().at(-1)?.className).toBe("confirmQuit__content-btn");
+  });
+
+  test("сторож и в confirm-ветке: модалку открыл сам игрок, матч жив — не подтверждаем", async () => {
+    // Последний путь квита мимо пробы (контрольное ревью 07.08): игрок сам
+    // кликнул «Покинуть игру» до нашего шага, модалка открыта, quitAttempts=0.
+    vi.mocked(sendRuntime).mockResolvedValueOnce({ live: true });
+    plantMark();
+    confirmQuitModal();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(clicked()).toHaveLength(0);
+    expect(warnHas("в другой вкладке идёт ваш матч")).toBe(true);
+  });
+
+  test("бэкофф после действий игрока: уступаем и продолжаем сами", async () => {
+    plantMark();
+    decideBlock();
+    history.replaceState(null, "", "/game-search");
+    postgameSearchFeature.enable(ctx);
+    // Первый клик уходит после ответа сторожа; дальше игрок трогает клавиатуру.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(clicked().length).toBe(1);
+    vi.mocked(safeClick).mockClear();
+    vi.mocked(log.info).mockClear();
+
+    noteTrustedInput();
+    await vi.advanceTimersByTimeAsync(1400);
+    domSubscriber?.();
+    expect(clicked()).toHaveLength(0);
+    expect(infoHas("игрок только что действовал сам")).toBe(true);
+    // Бэкофф истёк — машина обязана проснуться БЕЗ единой мутации DOM
+    // (повторы в пределах бюджета допустимы — важно само пробуждение).
+    await vi.advanceTimersByTimeAsync(2_400);
+    expect(clicked().length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("«Играть» недоступна (не выбраны очереди) — решение за игроком", () => {
+    plantMark();
+    playButton(true);
+    enableOnSearch();
+    expect(clicked()).toHaveLength(0);
+    expect(warnHas("не выбраны очереди")).toBe(true);
+  });
+
+  test("терминальность giveUp: ожившая кнопка НЕ оживляет машину (ревью 07.08, H)", async () => {
+    // Мутант «resetEpisode() удалён из giveUp» переживал старый набор:
+    // «решение за игроком» обязано ОСТАВАТЬСЯ решением за игроком.
+    plantMark();
+    playButton(true);
+    enableOnSearch();
+    expect(warnHas("не выбраны очереди")).toBe(true);
+    document.querySelector(".p-play__profile-button")?.removeAttribute("disabled");
+    await vi.advanceTimersByTimeAsync(5000);
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(clicked()).toHaveLength(0);
+  });
+
+  test("сторож: живой матч в другой вкладке — из игры не выходим (блокер A)", async () => {
+    vi.mocked(sendRuntime).mockResolvedValueOnce({ live: true });
+    plantMark();
+    decideBlock();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(clicked()).toHaveLength(0);
+    expect(warnHas("в другой вкладке идёт ваш матч")).toBe(true);
+    // Терминально: решающий блок больше не трогаем до нового моста.
+    await vi.advanceTimersByTimeAsync(5000);
+    domSubscriber?.();
+    expect(clicked()).toHaveLength(0);
+  });
+
+  test("сторож: канал мёртв (undefined) — fail-open, явный клик игрока важнее", async () => {
+    vi.mocked(sendRuntime).mockResolvedValueOnce(undefined);
+    plantMark();
+    decideBlock();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-quit");
+  });
+
+  test("сторож: ответ завис — таймаут канала, машина не умирает молча", async () => {
+    vi.mocked(sendRuntime).mockImplementationOnce(() => new Promise(() => {}));
+    plantMark();
+    decideBlock();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(clicked()).toHaveLength(0);
+    // 3с таймаут + собственное пробуждение: fail-open и клик.
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-quit");
+  });
+
+  test("замершая страница: дедлайн истекает сам, без мутаций, с тостом", () => {
+    plantMark();
+    enableOnSearch(); // на странице вообще нет ни блока, ни кнопки
+    vi.advanceTimersByTime(31_000);
+    expect(warnHas("эпизод не завершился за 30 с")).toBe(true);
+    expect(vi.mocked(showToast).mock.calls.some((c) => String(c[0]).includes("вручную"))).toBe(
+      true,
+    );
+  });
+
+  test("фоновая вкладка не кликает, но дедлайн истекает и в фоне", () => {
+    plantMark();
+    decideBlock();
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    try {
+      enableOnSearch();
+      vi.advanceTimersByTime(5000);
+      domSubscriber?.();
+      expect(clicked()).toHaveLength(0);
+      expect(infoHas("вкладка в фоне")).toBe(true);
+      vi.advanceTimersByTime(31_000);
+      expect(warnHas("эпизод не завершился")).toBe(true);
+    } finally {
+      Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    }
+  });
+
+  test("ответчик пробы: живой матч ⇔ позитивные доказательства идущей игры", async () => {
+    postgameSearchFeature.enable(ctx);
+    const probe = async () =>
+      (await messageHandler?.({ type: "postgame_live_probe" })) as { live: boolean };
+
+    // Идущая стадия с текстом — живой.
+    document.body.innerHTML = `<div class="stage"><div class="stage__name">Ночь</div></div>`;
+    expect((await probe()).live).toBe(true);
+    // Набор игроков — живой (увод сломал бы лобби остальным).
+    document.body.innerHTML = `<div class="new-stage"><div class="new-stage__name">Идет набор</div></div>`;
+    expect((await probe()).live).toBe(true);
+    // Экран победы — НЕ живой: quit только что доигравшего безопасен.
+    document.body.innerHTML = "";
+    endedScreen("ended ended-mafia");
+    expect((await probe()).live).toBe(false);
+    // Мёртвая комната (экран ошибки, кейс vendettka) — НЕ живой: залежавшаяся
+    // вкладка не имеет права блокировать легитимный выход умершего.
+    document.body.innerHTML = `<div class="error"><div class="error__main-buttons"></div></div>`;
+    expect((await probe()).live).toBe(false);
+    // Зритель — НЕ живой (в т.ч. stream window).
+    document.body.innerHTML = `<div class="stage"><div class="stage__name">День</div></div>`;
+    history.replaceState(null, "", "/game?role=viewer&game_id=1");
+    expect((await probe()).live).toBe(false);
+    // Не игровая страница — НЕ живой.
+    history.replaceState(null, "", "/game-search");
+    document.body.innerHTML = `<div class="stage"><div class="stage__name">День</div></div>`;
+    expect((await probe()).live).toBe(false);
+  });
+
+  test("SPA-вход на поиск потребляет мост, смена страницы сбрасывает эпизод", () => {
+    postgameSearchFeature.enable(ctx); // мы в комнате
+    plantMark();
+    history.replaceState(null, "", "/game-search");
+    decideBlock();
+    domSubscriber?.();
+    expect(infoHas("мост «В поиск» из комнаты")).toBe(true);
+    expect(sessionStorage.getItem(POSTGAME_PENDING_KEY)).toBeNull();
+
+    history.replaceState(null, "", "/");
+    document.body.innerHTML = "";
+    domSubscriber?.();
+    expect(infoHas("эпизод «В поиск» сброшен: смена страницы")).toBe(true);
+    // Возврат на поиск БЕЗ нового моста: машина обязана быть мёртвой.
+    // Мутант «armed переживает смену маршрута» кликал бы по решающему блоку.
+    history.replaceState(null, "", "/game-search");
+    vi.mocked(safeClick).mockClear();
+    decideBlock();
+    vi.advanceTimersByTime(2000);
+    domSubscriber?.();
+    expect(clicked()).toHaveLength(0);
+  });
+});

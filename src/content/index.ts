@@ -29,6 +29,7 @@ import { connectionDiagFeature, syncConnectionDiagRoute } from "./features/conne
 import { queueGuardFeature, syncQueueGuardRoute } from "./features/queue-guard";
 import { queuePeekFeature } from "./features/queue-peek";
 import { queueRequeueFeature } from "./features/queue-requeue";
+import { postgameSearchFeature } from "./features/postgame-search";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -47,6 +48,7 @@ const manager = new FeatureManager().register(
   queueGuardFeature,
   queuePeekFeature,
   queueRequeueFeature,
+  postgameSearchFeature,
   obsPanelFeature,
   twitchPanelFeature,
 );

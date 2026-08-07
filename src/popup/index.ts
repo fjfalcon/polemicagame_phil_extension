@@ -40,6 +40,7 @@ const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
 const OPERATIONAL_KEYS = [
   "auto_accept_enabled",
   "requeue_after_lobby_fail_enabled",
+  "postgame_requeue_enabled",
   "queue_peek_enabled",
   "queue_peek_auto",
   "obs_enabled",
@@ -52,6 +53,7 @@ const OPERATIONAL_KEYS = [
 const OPERATIONAL_LABELS: Record<string, string> = {
   auto_accept_enabled: "автопринятие игры",
   requeue_after_lobby_fail_enabled: "автовозврат в поиск после развала лобби",
+  postgame_requeue_enabled: "кнопка «В поиск» после игры (выход из игры и клик «Играть»)",
   queue_peek_enabled: "заход в очередь для просмотра, кто в поиске",
   queue_peek_auto: "автоматический заход в очередь",
   obs_enabled: "подключение к OBS",
@@ -924,6 +926,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("skip_start_screen_enabled", items.skip_start_screen_enabled);
     set("queue_background_warning_enabled", items.queue_background_warning_enabled);
     set("requeue_after_lobby_fail_enabled", items.requeue_after_lobby_fail_enabled);
+    set("postgame_requeue_enabled", items.postgame_requeue_enabled);
     set("queue_peek_enabled", items.queue_peek_enabled);
     set("queue_peek_auto", items.queue_peek_auto);
     set("queue_peek_standard", items.queue_peek_standard);
@@ -1059,6 +1062,7 @@ document.addEventListener("DOMContentLoaded", () => {
       skip_start_screen_enabled: cb("skip_start_screen_enabled", true),
       queue_background_warning_enabled: cb("queue_background_warning_enabled", true),
       requeue_after_lobby_fail_enabled: cb("requeue_after_lobby_fail_enabled", false),
+      postgame_requeue_enabled: cb("postgame_requeue_enabled", true),
       queue_peek_enabled: cb("queue_peek_enabled", false),
       queue_peek_auto: cb("queue_peek_auto", false),
       queue_peek_standard: cb("queue_peek_standard", true),
@@ -1135,6 +1139,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "skip_start_screen_enabled",
     "queue_background_warning_enabled",
     "requeue_after_lobby_fail_enabled",
+    "postgame_requeue_enabled",
     "queue_peek_enabled",
     "queue_peek_auto",
     "queue_peek_standard",

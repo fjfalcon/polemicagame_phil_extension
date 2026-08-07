@@ -60,6 +60,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // действие за игрока (ставит в очередь) — включать её должен он сам,
   // осознанно. Тот же принцип, что у queue_peek_enabled.
   requeue_after_lobby_fail_enabled: false,
+  // Включено по умолчанию — в отличие от requeue: там автоматика стартует
+  // сама по событиям сайта, здесь ВСЯ цепочка действий — продолжение явного
+  // клика игрока по кнопке с прямой подписью, согласие даётся каждым нажатием.
+  postgame_requeue_enabled: true,
   queue_peek_standard: true,
   queue_peek_polite: true,
   queue_peek_prime: true,

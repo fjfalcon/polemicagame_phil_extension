@@ -422,6 +422,11 @@ describe("§4.7 lifecycle heuristic", () => {
       timers: 1,
       reason: "modal/button handlers are removed with owned nodes; toast removal is a harmless one-shot",
     },
+    "src/content/features/postgame-search.ts": {
+      listeners: 1,
+      timers: 0,
+      reason: "click handler is owned by the removable «В поиск» button node",
+    },
     "src/content/features/queue-peek.ts": {
       listeners: 4,
       timers: 2,

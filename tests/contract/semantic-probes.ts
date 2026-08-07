@@ -99,6 +99,57 @@ export const gameSearchProbes: Record<string, Probe> = {
     [],
     "on_game_found строит POST-форму на /game",
   ),
+  // ── «В поиск» после игры (postgame-search) ──
+  /** Пока сервер держит игрока в игре, вместо «Играть» рисуется решающий блок. */
+  decideBlockButtons: inWindow(
+    "p-play__profile-game--decide",
+    600,
+    ["Продолжить игру", "Покинуть игру", "quitGame(!1)"],
+    [],
+    "решающий блок: «Продолжить игру» + «Покинуть игру» → quitGame(false)",
+  ),
+  /**
+   * «Покинуть игру» сама из игры НЕ выводит: quitGame(false) открывает
+   * модалку, и только quitGame(true) шлёт POST /api/games/quit и сбрасывает
+   * userInGame. На этой двухшаговости стоит машина postgame-search.
+   */
+  quitOpensConfirmThenApi: inWindow(
+    "quitGame:function",
+    1200,
+    ["showQuitAskModal=!0", "/api/games/quit", "storeChangeUserInGame(null)"],
+    [],
+    "quitGame: false → модалка; true → POST /api/games/quit → userInGame сброшен",
+  ),
+  /**
+   * Единственное использование модалки подтверждения: quit → quitGame(true),
+   * ban-проп НЕ передаётся (иначе текст модалки грозил бы баном, и автоклик
+   * по ней потерял бы моральное право на существование).
+   */
+  confirmQuitWiring: inWindow(
+    'ConfirmQuitGameModal",{on:',
+    240,
+    ["quitGame(!0)"],
+    ["ban"],
+    "usage ConfirmQuitGameModal: quit → quitGame(true), без ban-пропа",
+  ),
+  /** Кнопка модалки: класс, клик и подпись «Покинуть лобби». */
+  confirmQuitButtonLabel: inWindow(
+    'confirmQuit__content-btn",on:{click:',
+    160,
+    ["Покинуть лобби"],
+    [],
+    "кнопка модалки подтверждения: confirmQuit__content-btn + «Покинуть лобби»",
+  ),
+  /** disabled у «Играть» ⇔ не выбраны очереди (queue-requeue и postgame читают). */
+  playDisabledBinding: re(
+    /attrs:\{disabled:!\w+\.selectedCensorshipModes\.length\}/,
+    "disabled «Играть» ⇔ !selectedCensorshipModes.length",
+  ),
+  /** Пока userInGame — поиск запрещён; «Играть» в DOM не существует. */
+  searchDisabledWhileInGame: re(
+    /searchDisabled:function\(\)\{return (?:\w+|this)\.gameSearchDisabled\|\|(?:\w+|this)\.userInGame&&!(?:\w+|this)\.inGameUsersAllowed\}/,
+    "searchDisabled ⇔ gameSearchDisabled || userInGame && !inGameUsersAllowed",
+  ),
 };
 
 // ─────────────────────────── room/main.js ───────────────────────────
@@ -185,6 +236,44 @@ export const roomProbes: Record<string, Probe> = {
     ok: /\["cell","title",\w+\.code\]/.test(text) && /\["cell","player",\w+\.code\]/.test(text),
     detail: "классы ячеек таблицы статистики (.cell.title.<code>)",
   }),
+  // ── «В поиск» после игры (postgame-search) ──
+  /**
+   * Убитый/заголосованный при начавшейся игре сам становится зрителем —
+   * ровно поэтому кнопка «В поиск» показывается в режиме зрителя: это
+   * штатное состояние умершего игрока, а из игры сервер его НЕ выписал.
+   */
+  deadPlayerBecomesViewer: inWindow(
+    'on("on_self_strike"',
+    1500,
+    ['"/game?role=viewer&game_id="'],
+    [],
+    "on_self_strike (не kick, игра идёт) → редирект в /game?role=viewer",
+  ),
+  /** Футер статистики: «Поиск игры» ведёт на /game-search (fromGame). */
+  statsFooterSearchLink: re(
+    /endGameLink:function\(\)\{return\{link:"\/game-search"/,
+    "endGameLink → /game-search (кнопка «Поиск игры» в футере статистики)",
+  ),
+  /** on_stop_game(gameOver): сайт сам уводит комнату на /game-search. */
+  gameOverAutoRedirect: inWindow(
+    'on("on_stop_game"',
+    900,
+    ['"gameOver"', 'location="/game-search"'],
+    [],
+    "on_stop_game c reason.code=gameOver → авторедирект на поиск",
+  ),
+  /**
+   * Окно захвата стримера: сайт открывает ЖИВОМУ игроку viewer-вкладку с
+   * window.name === "streamWindow" — на этом литерале стоит гейт кнопки
+   * «В поиск» (иначе мисклик в окне захвата выписал бы стримера из матча).
+   */
+  streamWindowName: inWindow(
+    "updateStreamerWindow:function",
+    600,
+    ['"?role=viewer&game_id="', 'window.open(', '"streamWindow"'],
+    [],
+    "updateStreamerWindow: window.open(url?role=viewer…, \"streamWindow\")",
+  ),
 };
 
 /**

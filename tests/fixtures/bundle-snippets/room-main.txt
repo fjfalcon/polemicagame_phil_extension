@@ -27,3 +27,7 @@ t)?(to(),ao("div",mA,[yo("div",{class:d(["cell","title",e.code]),textContent:v(e
 ods:{getCellClasses:function(e,t){var i=["cell","player",e.code];switch(e.code){case
 /*—SNIPPET—*/
 Roller:!1,animationDuration:250,currentSubstage:"",nextSubstage:"",temp
+/*—SNIPPET—*/
+!0,sp:!0,sum:!0},xPosition:"",yPosition:""}},computed:{endGameLink:function(){return{link:"/game-search",text:this.$root.Loc.game_stats_game_search}},players:function(){return this.gameStats.players},tableTitles:function(){for(var e=1,t=[{id:e++,code:"position",title:"№"},{id:e++,code:"username",tit
+/*—SNIPPET—*/
+updateStreamerWindow:function(){var e=this;if(this.toggleSettings(),this.streamWindow&&!this.streamWindow.closed)this.togleStreamerMode(!1),this.streamWindow.close(),this.streamWindow=null;else{var t=location.href+"?role=viewer&game_id="+this.$store.state.gameId,i="width=".concat(screen.width,",height=").concat(screen.height,",top=0,left=0");this.streamWindow=window.open(t,"streamWindow",i),window.focus&&this.streamWindow.focus(),this.streamWindow.onload=function(){e.addUnloadEvent()},window.onunload=function(){e.streamWindow.close()}}},addUnloadEvent:function(){var e=this;this.togleStreamerMo

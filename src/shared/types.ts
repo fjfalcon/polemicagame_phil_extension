@@ -67,6 +67,8 @@ export interface Settings {
   queue_peek_auto: boolean;
   /** Развалилось принятое лобби — автоматически снова встать в поиск. */
   requeue_after_lobby_fail_enabled: boolean;
+  /** Кнопка «В поиск» после конца игры/смерти: выйти из игры и снова в очередь. */
+  postgame_requeue_enabled: boolean;
   /** Какие очереди разрешено использовать для разведки. */
   queue_peek_standard: boolean;
   queue_peek_polite: boolean;
@@ -250,6 +252,19 @@ export interface QueueGuardPingReply {
   searching: boolean;
 }
 
+/** content(поиск) → background: идёт ли в другой вкладке ЖИВОЙ матч игрока?
+ *  Сторож postgame-search: перед автокликом «Покинуть игру» машина обязана
+ *  убедиться, что не выписывает игрока из идущей игры (viewer-вкладку с
+ *  ?role=viewer сайт открывает и живому стримеру — stream window). */
+export interface PostgameLiveQueryMsg {
+  type: "postgame_live_query";
+}
+
+/** background → content(все вкладки игры): «твоя вкладка держит живой матч?» */
+export interface PostgameLiveProbeMsg {
+  type: "postgame_live_probe";
+}
+
 export type ExtMessage =
   | ObsCommandMsg
   | ObsEventMsg
@@ -265,4 +280,6 @@ export type ExtMessage =
   | StartSearchMsg
   | StopSearchMsg
   | QueueGuardMsg
-  | QueueGuardPingMsg;
+  | QueueGuardPingMsg
+  | PostgameLiveQueryMsg
+  | PostgameLiveProbeMsg;
