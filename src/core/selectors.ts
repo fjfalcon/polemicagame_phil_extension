@@ -167,6 +167,24 @@ export const SITE = {
   confirmQuitModal: ".confirmQuit",
   confirmQuitButton: ".confirmQuit .confirmQuit__content-btn",
   /**
+   * ВТОРОЙ путь выхода — модалка «Вы уже играете» (`modal-game-in-progress`,
+   * bundle/main.js). Сайт показывает её, когда игрок нажал «Играть», сервер
+   * ответил illegalState=in_game, а режим разрешает искать из игры
+   * (`inGameUsersAllowed`): «Вернуться в игру» / «Завершить последнюю игру»
+   * (второе шлёт socket quit_game). Без её обработки машина видела чужую
+   * модалку и сдавалась (жалоба владельца 07.08.2026).
+   */
+  inProgressModal: ".modal-game-in-progress",
+  /** Кнопки внутри неё; какая именно — решает точный текст (§4 п.2). */
+  inProgressButtons: ".modal-game-in-progress .modal-game-in-progress__body button",
+  /**
+   * Предупреждение о блокировке в этой же модалке (`isWarning`): «Если вы
+   * досрочно покинете игру … вы получите автоматическую блокировку». На
+   * странице поиска сайт его не передаёт, но появись оно — автоклик за
+   * игрока недопустим: ценой ошибки будет бан.
+   */
+  inProgressWarning: ".modal-game-in-progress .modal-game-in-progress__header p",
+  /**
    * Лоадер на месте кнопки «Играть» (`isSearchBtnLoading`). Важен для
    * самолечения postgame-search: в ветке illegalState=in_game сайт НЕ
    * сбрасывает searchBtnLoading, и после выхода из игры лоадер остаётся
@@ -317,6 +335,10 @@ export const TEXT = {
    */
   quitGameButton: ["покинуть игру"],
   confirmQuitButton: ["покинуть лобби"],
+  /** Кнопка выхода в модалке «Вы уже играете» (второй путь). */
+  finishLastGameButton: ["завершить последнюю игру"],
+  /** Слово-маркер предупреждения о бане в той же модалке (см. inProgressWarning). */
+  banWarningMarker: ["блокировк"],
 } as const;
 
 /** CSS-классы/идентификаторы, создаваемые САМИМ расширением (наши, не сайта). */

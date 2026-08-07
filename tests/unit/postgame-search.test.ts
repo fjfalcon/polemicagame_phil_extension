@@ -112,6 +112,34 @@ function confirmQuitModal(label = "Покинуть лобби"): void {
   document.body.append(div);
 }
 
+/**
+ * Модалка сайта «Вы уже играете» (второй путь выхода). `warning` — вариант
+ * с угрозой блокировки (isWarning), который автокликать нельзя.
+ */
+function inProgressModal(warning = false, finishLabel = "Завершить последнюю игру"): void {
+  const div = document.createElement("div");
+  div.className = "modal modal-game-in-progress";
+  Object.defineProperties(div, {
+    offsetWidth: { configurable: true, value: 740 },
+    offsetHeight: { configurable: true, value: 300 },
+  });
+  div.innerHTML = `
+    <div class="modal-game-in-progress__wrapper">
+      <div class="modal-game-in-progress__header"><span>Вы уже играете</span>
+        <p>${
+          warning
+            ? "Если вы досрочно покинете игру из любого режима, за исключением лобби - вы получите автоматическую блокировку"
+            : "Возможно вы уже играете в другой вкладке, либо на другом устройстве."
+        }</p>
+      </div>
+      <div class="modal-game-in-progress__body">
+        <button class="button button-orange">Вернуться в игру</button>
+        <button class="button button-grey">${finishLabel}</button>
+      </div>
+    </div>`;
+  document.body.append(div);
+}
+
 /** Кнопка «Играть». */
 function playButton(disabled = false): void {
   const btn = document.createElement("button");
@@ -343,6 +371,106 @@ describe("поиск: машина «выйти из игры → Играть»
       <div class="p-play__profile-game--search"><div class="p-play__profile-game-search-time">0:03</div></div>`;
     domSubscriber?.();
     expect(infoHas("поиск запущен: секундомер очереди подтверждён")).toBe(true);
+  });
+
+  test("модалка подтверждается быстро: следующий шаг не ждёт секунду повтора", async () => {
+    // Лог 07.08, 20:57: машина кликнула «Покинуть игру» и замолчала на
+    // секунду с лишним — игрок успел дожать модалку и «Играть» сам, решив,
+    // что расширение не работает. Новый шаг обязан идти сразу за прошлым.
+    plantMark();
+    decideBlock();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(clicked().at(-1)?.className).toBe("p-play__profile-quit");
+
+    document.body.innerHTML = "";
+    confirmQuitModal();
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(clicked().at(-1)?.className, "модалку жмём в пределах ~0.3 с").toBe(
+      "confirmQuit__content-btn",
+    );
+  });
+
+  test("повтор ТОГО ЖЕ шага по-прежнему ждёт секунду с лишним", async () => {
+    // Обратная сторона: не долбить одну кнопку в упор.
+    plantMark();
+    decideBlock();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(clicked().length).toBe(1);
+    domSubscriber?.();
+    await vi.advanceTimersByTimeAsync(600);
+    expect(clicked().length, "второй клик по той же кнопке — не раньше 1.2 с").toBe(1);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(clicked().length).toBe(2);
+  });
+
+  test("о начале выхода из игры говорим плашкой — молчащая машина выглядит сломанной", async () => {
+    plantMark();
+    decideBlock();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(
+      vi.mocked(showToast).mock.calls.some((c) => String(c[0]).includes("Выхожу из игры")),
+    ).toBe(true);
+  });
+
+  test("второй путь: модалка «Вы уже играете» → жмём «Завершить последнюю игру»", async () => {
+    // Сайт открывает её в ответ на «Играть», когда сервер сказал in_game и
+    // режим разрешает искать из игры. Раньше машина считала её чужой и
+    // сдавалась — ровно вопрос владельца 07.08.2026 про этот диалог.
+    plantMark();
+    inProgressModal();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(300);
+    const clickedEl = clicked().at(-1) as HTMLElement | undefined;
+    expect(clickedEl?.textContent).toBe("Завершить последнюю игру");
+    expect(warnHas("открыта модалка сайта"), "это не чужая модалка").toBe(false);
+  });
+
+  test("«Вернуться в игру» не жмём никогда: это противоположность просьбе игрока", async () => {
+    plantMark();
+    inProgressModal(false, "Закончить игру"); // подпись выхода уехала
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(clicked()).toHaveLength(0);
+    expect(warnHas("не нашлась кнопка завершения игры")).toBe(true);
+  });
+
+  test("угроза блокировки в модалке — автоклик запрещён, решает игрок", async () => {
+    // Цена ошибки здесь — бан аккаунта, поэтому предохранитель fails-closed.
+    plantMark();
+    inProgressModal(true);
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(clicked()).toHaveLength(0);
+    expect(warnHas("предупреждает о блокировке")).toBe(true);
+  });
+
+  test("сторож живого матча работает и на этой модалке", async () => {
+    vi.mocked(sendRuntime).mockResolvedValueOnce({ live: true });
+    plantMark();
+    inProgressModal();
+    enableOnSearch();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(clicked()).toHaveLength(0);
+    expect(warnHas("в другой вкладке идёт ваш матч")).toBe(true);
+  });
+
+  test("настройка «оставить модалку игроку» действует и на «Вы уже играете»", async () => {
+    plantMark();
+    inProgressModal();
+    history.replaceState(null, "", "/game-search");
+    postgameSearchFeature.enable({
+      settings: {
+        postgame_requeue_enabled: true,
+        postgame_skip_confirm_enabled: false,
+      } as Settings,
+    });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(clicked()).toHaveLength(0);
+    expect(infoHas("оставлена игроку (настройка)")).toBe(true);
   });
 
   test("без моста машина не делает НИЧЕГО", () => {

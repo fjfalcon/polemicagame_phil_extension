@@ -51,7 +51,7 @@
  * decision-таймером; дедлайн эпизода — терминальный warn, а не молчание.
  */
 import { onDomChange, safeClick, isVisible } from "@core/dom";
-import { SITE, TEXT, matchFinishedVisible } from "@core/selectors";
+import { SITE, TEXT, hasPhaseMarker, matchFinishedVisible } from "@core/selectors";
 import { isGameRoomPath, isSearchPath } from "@shared/routes";
 import { log } from "@core/log";
 import { onMessage, sendRuntime } from "@core/messaging";
@@ -112,8 +112,18 @@ const PLAY_SETTLE_MS = 8000;
  * с перевзводом моста; повторное зажатие — честная сдача.
  */
 const JAM_RELOAD_AFTER_MS = 8000;
-/** Пауза между автокликами: сайт должен успеть отреагировать. */
+/**
+ * Пауза перед ПОВТОРОМ того же шага: сайт должен успеть отреагировать на
+ * предыдущий клик, а мы — не долбить кнопку.
+ */
 const MIN_CLICK_INTERVAL_MS = 1200;
+/**
+ * Пауза при переходе к СЛЕДУЮЩЕМУ шагу. Модалка подтверждения — прямое
+ * следствие нашего же клика по «Покинуть игру», ждать её лишнюю секунду
+ * незачем: пока машина молчала, игрок успевал дожать всё руками и решал,
+ * что расширение не работает (лог 07.08.2026, 20:57).
+ */
+const NEXT_STAGE_MIN_MS = 250;
 /** Бюджет попыток НА КАЖДЫЙ шаг (quit / confirm / play). */
 const MAX_STAGE_ATTEMPTS = 3;
 /** Игрок только что действовал сам — дорога его (инвариант §4 п.2). */
@@ -182,6 +192,8 @@ let quitAttempts = 0;
 let confirmAttempts = 0;
 let playAttempts = 0;
 let lastClickAt = 0;
+/** Какой шаг кликали последним — пауза зависит от того, тот же он или новый. */
+let lastClickStage = "";
 /** Последнее НАСТОЯЩЕЕ действие игрока (isTrusted проверяет слушатель). */
 let lastTrustedInputAt = 0;
 /** Латчи «сказали один раз» — машина тикает четыре раза в секунду. */
@@ -278,6 +290,7 @@ function resetEpisode(): void {
   confirmAttempts = 0;
   playAttempts = 0;
   lastClickAt = 0;
+  lastClickStage = "";
   backoffLogged = false;
   hiddenLogged = false;
   waitConfirmLogged = false;
@@ -435,6 +448,8 @@ function visibleEl(selector: string): HTMLElement | null {
  */
 function foreignModalOpen(): boolean {
   if (visibleEl(SITE.confirmQuitModal)) return false;
+  // «Вы уже играете» — второй штатный путь выхода, не чужое окно.
+  if (visibleEl(SITE.inProgressModal)) return false;
   return Array.from(document.querySelectorAll<HTMLElement>(SITE_MODAL_SELECTOR)).some(
     (el) => el.offsetWidth > 0 && el.offsetHeight > 0,
   );
@@ -478,13 +493,26 @@ function clickStage(
     return;
   }
   const now = Date.now();
-  if (now - lastClickAt < MIN_CLICK_INTERVAL_MS) {
+  // Тот же шаг повторяем медленно, к новому переходим быстро: модалка
+  // подтверждения — прямое следствие нашего клика, и лишняя секунда паузы
+  // отдавала цепочку игроку, который успевал дожать её сам.
+  const minGap = stageName === lastClickStage ? MIN_CLICK_INTERVAL_MS : NEXT_STAGE_MIN_MS;
+  if (now - lastClickAt < minGap) {
     // Пауза между попытками; сайт мог не дать ни одной мутации — будим себя.
-    scheduleDecision(lastClickAt + MIN_CLICK_INTERVAL_MS - now + 50);
+    scheduleDecision(lastClickAt + minGap - now + 50);
     return;
   }
   bumpAttempts();
   lastClickAt = now;
+  lastClickStage = stageName;
+  // Первый шаг цепочки — единственный тост про выход: молчащая машина
+  // выглядит как сломанная, и игрок начинает кликать сам (лог 07.08, 20:57).
+  // Дальнейшие шаги молчат: три плашки подряд — это уже шум.
+  if (stageName === "Покинуть игру" && attempts === 0) {
+    showToast("Выхожу из игры, дальше встану в поиск… 🔁", {
+      key: `postgame-quitting-${Date.now()}`,
+    });
+  }
   log.info(SCOPE, `шаг «${stageName}», попытка`, attempts + 1);
   safeClick(el);
   // Проверка результата — своя: сайт мог проглотить клик без мутаций.
@@ -535,6 +563,63 @@ function searchTick(): void {
       log.info(SCOPE, "возврат в поиск отложен: игрок только что действовал сам");
     }
     scheduleDecision(lastTrustedInputAt + USER_BACKOFF_MS - now + 100);
+    return;
+  }
+
+  // Шаг 2б: модалка «Вы уже играете» — второй путь выхода. Сайт открывает её
+  // в ответ на «Играть», когда сервер сказал in_game, а режим разрешает
+  // искать из игры. Кнопка «Завершить последнюю игру» = socket quit_game.
+  const inProgress = visibleEl(SITE.inProgressModal);
+  if (inProgress) {
+    confirmSeen = true;
+    loaderSince = 0;
+    // Модалку открыл сайт в ответ на «Играть» — сторож живого матча мог ещё
+    // не бегать (наш quit-шаг не ходил). Тот же гейт, что и у confirmQuit.
+    if (quitAttempts === 0) {
+      const gate = liveMatchGate(now);
+      if (gate === "wait") return;
+      if (gate === "live") {
+        giveUp("в другой вкладке идёт ваш матч — из игры не выходим");
+        return;
+      }
+    }
+    // Вариант модалки с угрозой блокировки (isWarning) автокликом НЕ трогаем:
+    // цена ошибки — бан игрока, и такое решение принимает только человек.
+    const warning = visibleEl(SITE.inProgressWarning);
+    if (warning && hasPhaseMarker(norm(warning.textContent), TEXT.banWarningMarker)) {
+      giveUp("сайт предупреждает о блокировке за выход — решайте сами");
+      return;
+    }
+    if (settings?.postgame_skip_confirm_enabled === false) {
+      waitingForConfirm = true;
+      if (!waitConfirmLogged) {
+        waitConfirmLogged = true;
+        log.info(SCOPE, "модалка «Вы уже играете» оставлена игроку (настройка) — ждём решения");
+        showToast("Подтвердите выход из игры — дальше продолжу сам 🔁", {
+          key: `postgame-confirm-${Date.now()}`,
+        });
+      }
+      scheduleDecision(armedAt + EPISODE_WINDOW_MS + CONFIRM_WAIT_EXTRA_MS - now + 250);
+      return;
+    }
+    const finishBtn = Array.from(
+      document.querySelectorAll<HTMLElement>(SITE.inProgressButtons),
+    ).find(
+      (el) => isVisible(el) && (TEXT.finishLastGameButton as readonly string[]).includes(norm(el.textContent)),
+    );
+    if (!finishBtn) {
+      // Кнопки с нужной подписью нет: «Вернуться в игру» жать нельзя ни при
+      // каких условиях — это противоположность тому, что просил игрок.
+      giveUp("в модалке «Вы уже играете» не нашлась кнопка завершения игры");
+      return;
+    }
+    clickStage(
+      finishBtn,
+      TEXT.finishLastGameButton,
+      confirmAttempts,
+      () => confirmAttempts++,
+      "Завершить последнюю игру",
+    );
     return;
   }
 

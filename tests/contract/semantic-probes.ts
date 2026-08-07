@@ -140,6 +140,18 @@ export const gameSearchProbes: Record<string, Probe> = {
     [],
     "кнопка модалки подтверждения: confirmQuit__content-btn + «Покинуть лобби»",
   ),
+  /**
+   * Второй путь выхода: на illegalState=in_game сайт открывает модалку
+   * «Вы уже играете» с колбэком quit_game. Ветка гейтится inGameUsersAllowed
+   * — значит модалка появляется не всегда, и decide-путь остаётся основным.
+   */
+  inGameModalWiring: inWindow(
+    'case"in_game":',
+    260,
+    ["storeChangeUserInGame(!0)", "inGameUsersAllowed", '"game-in-progress"', 'emit("quit_game")'],
+    [],
+    "illegalState=in_game → модалка game-in-progress с onQuitGame → quit_game",
+  ),
   /** disabled у «Играть» ⇔ не выбраны очереди (queue-requeue и postgame читают). */
   playDisabledBinding: re(
     /attrs:\{disabled:!\w+\.selectedCensorshipModes\.length\}/,

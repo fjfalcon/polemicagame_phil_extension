@@ -74,6 +74,8 @@ describe("каждая проба умирает от своего дрифта"
       (t) => t.replace("Покинуть лобби", "Да, выйти")],
     ["playDisabledBinding: disabled отвязан от очередей", gameSearchProbes, "playDisabledBinding", GS,
       (t) => t.replace(/attrs:\{disabled:!(\w+)\.selectedCensorshipModes\.length\}/, "attrs:{disabled:!$1.queuesOk}")],
+    ["inGameModalWiring: выход из модалки перестал слать quit_game", gameSearchProbes, "inGameModalWiring", GS,
+      (t) => t.replace('emit("quit_game")', 'emit("leave_game")')],
     ["searchBtnLoaderBinding: лоадер сменил класс", gameSearchProbes, "searchBtnLoaderBinding", GS,
       (t) => t.replaceAll("p-play__profile-game-loader-gradient", "p-play__profile-game-spinner")],
     ["searchDisabledWhileInGame: userInGame больше не запрещает поиск", gameSearchProbes, "searchDisabledWhileInGame", GS,
