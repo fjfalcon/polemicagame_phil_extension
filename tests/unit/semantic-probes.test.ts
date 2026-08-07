@@ -131,6 +131,8 @@ describe("каждая проба умирает от своего дрифта"
       // replaceAll: путь зрителя встречается в окне self_strike дважды
       // (немедленный редирект и ссылка continue_as_viewer).
       (t) => t.replaceAll('"/game?role=viewer&game_id="', '"/spectate?game_id="')],
+    ["eliminatedStateClasses: заголосованный больше не помечается классом", roomProbes, "eliminatedStateClasses", ROOM,
+      (t) => t.replace('"state-voted"', '"state-lynched"')],
     ["statsFooterSearchLink: «Поиск игры» повёл на главную", roomProbes, "statsFooterSearchLink", ROOM,
       (t) => t.replace('endGameLink:function(){return{link:"/game-search"', 'endGameLink:function(){return{link:"/"')],
     ["gameOverAutoRedirect: авторедиректа больше нет", roomProbes, "gameOverAutoRedirect", ROOM,

@@ -258,6 +258,19 @@ export const roomProbes: Record<string, Probe> = {
     [],
     "on_self_strike (не kick, игра идёт) → редирект в /game?role=viewer",
   ),
+  /**
+   * Выбытие игрока помечается классами плитки, и ровно ими postgame-search
+   * узнаёт «матч окончен ДЛЯ МЕНЯ»: сайт выбывшего из комнаты не уводит и в
+   * `?role=viewer` не переводит (жалоба 07.08.2026). Проба держит связь
+   * класс ⇔ состояние, а не факт существования строки.
+   */
+  eliminatedStateClasses: inWindow(
+    "notTransparentStateClasses:function",
+    400,
+    ['isKilled?', '"state-voted"', '"state-killed"', 'isDisqualified&&', '"state-disqualified"'],
+    [],
+    "state-voted/state-killed ⇔ isKilled(+votedBy), state-disqualified ⇔ isDisqualified",
+  ),
   /** Футер статистики: «Поиск игры» ведёт на /game-search (fromGame). */
   statsFooterSearchLink: re(
     /endGameLink:function\(\)\{return\{link:"\/game-search"/,

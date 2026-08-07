@@ -81,6 +81,18 @@ export const SITE = {
   /** Отметка «Готов» на СВОЕЙ плитке (player__topleftmenu). */
   myReadinessMark: ".player.my-player .player__readiness",
   /**
+   * Игра окончена ДЛЯ МЕНЯ: моя плитка помечена выбытием. Классы сайт
+   * вычисляет напрямую из состояния игрока (`notTransparentStateClasses`):
+   * state-killed ⇔ isKilled && !votedBy (ночной отстрел),
+   * state-voted ⇔ isKilled && votedBy (заголосован),
+   * state-disqualified ⇔ isDisqualified.
+   * Нужны потому, что выбывшего сайт НЕ уводит из комнаты и НЕ переводит в
+   * `?role=viewer` — он просто сидит мёртвым до конца матча (жалоба
+   * 07.08.2026: «меня заголосовали — кнопки в новую игру нет»).
+   */
+  myEliminatedState:
+    ".player.my-player .state.state-killed, .player.my-player .state.state-voted, .player.my-player .state.state-disqualified",
+  /**
    * Кнопка готовности в игровых контролах. Это ControlsButton
    * (`div.button.preset-1.<size>`) с подписью «Готов» и классом `active`,
    * когда игрок УЖЕ нажал (`:class="{active: votingForGameStart.voted}"`).

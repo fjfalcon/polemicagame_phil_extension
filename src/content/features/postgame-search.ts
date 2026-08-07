@@ -12,9 +12,12 @@
  *    (RollerFixedState), затем `game_statistics_saved` сам открывает модалку
  *    статистики; в её футере есть «Поиск игры» → goToUrl("/game-search") —
  *    но «Играть» она за игрока не жмёт;
- *  - смерть: `on_self_strike` (killed/voted при начавшейся игре) →
- *    location="/game?role=viewer&game_id=…" — игрок смотрит игру зрителем,
- *    но `userInGame` на сервере остаётся;
+ *  - выбытие: обычная смерть (`on_remote_strike` → updatePlayer(isKilled))
+ *    комнату НЕ меняет — игрок сидит мёртвым и досматривает матч, а его
+ *    плитка получает класс state-killed / state-voted / state-disqualified
+ *    (жалоба 07.08.2026: «меня заголосовали — кнопки в новую игру нет»);
+ *    в зрители (`?role=viewer`) сайт уводит только по `on_self_strike`
+ *    (кик/страйк). `userInGame` на сервере в обоих случаях остаётся;
  *  - страница поиска при `userInGame`: вместо «Играть» рисуется блок
  *    `.p-play__profile-game--decide` («Продолжить игру» / «Покинуть игру»);
  *    «Покинуть игру» = quitGame(false) — только открывает модалку
@@ -25,10 +28,11 @@
  * Наша механика — в два шага, соединённых одноразовым мостом sessionStorage
  * (формат и TTL — общий модуль requeue-pending):
  *  1. В комнате: плавающая кнопка «В поиск» — ТОЛЬКО когда матч завершён
- *     (победа одной из сторон) или вкладка в режиме зрителя. Живому игроку
- *     посреди матча кнопка не показывается никогда: увести его — значит
- *     сорвать игру остальным. Кнопка плавающая и поверх модалок: модалка
- *     статистики открывается сама, и кнопка в `.ended` была бы под ней.
+ *     (победа одной из сторон), вкладка в режиме зрителя или игрок из матча
+ *     ВЫБЫЛ (убит/заголосован/дисквалифицирован). Живому игроку посреди
+ *     матча кнопка не показывается никогда: увести его — значит сорвать игру
+ *     остальным. Кнопка плавающая и поверх модалок: модалка статистики
+ *     открывается сама, и кнопка в `.ended` была бы под ней.
  *  2. На поиске: свежий мост взводит машину «выйти и встать в поиск»:
  *     [решающий блок? → «Покинуть игру» → «Покинуть лобби»] → «Играть».
  *     Без моста машина не делает НИЧЕГО — автоклики только как продолжение
@@ -82,21 +86,25 @@ const EPISODE_WINDOW_MS = 30_000;
  */
 const CONFIRM_WAIT_EXTRA_MS = 120_000;
 /**
- * Выдержки перед кликом «Играть» (разбор лога 07.08.2026, 18:29): сайт
- * узнаёт «игрок ещё в игре» ЛЕНИВО — от сервера в ответ на попытку поиска
- * или от списка лобби. В первую секунду после загрузки он рисует «Играть»
- * даже умершему, и наш мгновенный клик уходил `toggleSearch`-ом при
- * userInGame: сервер отвечал in_game, а `searchBtnLoading` сайт в этой
- * ветке НЕ сбрасывает — после выхода из игры вместо кнопки оставалась
- * вечная крутилка (лечится только F5). Поэтому:
- *  - мост из viewer-вкладки (умерший — почти наверняка ещё в игре): ждём
- *    решающий блок до DECIDE_WAIT_MS и только потом трогаем «Играть»;
- *  - мост с экрана победы (сервер уже отпустил): короткая выдержка.
- * Выдержка не нужна вовсе, когда решающий блок уже видели или наш quit-шаг
- * уже ходил: статус игрока серверу известен.
+ * Выдержка перед первым кликом «Играть» (разбор лога 07.08.2026, 18:29).
+ *
+ * Сайт узнаёт «игрок ещё в игре» ЛЕНИВО — от сервера в ответ на попытку
+ * поиска или из списка лобби. Первые секунды после загрузки он рисует
+ * «Играть» даже тому, кого сервер из игры не выписал, и наш мгновенный клик
+ * уходил `toggleSearch`-ом: сервер отвечал illegalState=in_game, а
+ * `searchBtnLoading` в этой ветке НЕ сбрасывается — вместо кнопки навсегда
+ * оставалась крутилка (лечится только F5).
+ *
+ * Ждём одинаково для ЛЮБОГО источника моста. Сначала казалось, что с экрана
+ * победы сервер игрока уже отпустил и хватит короткой паузы, но лог владельца
+ * показал обратное: он шёл ровно с экрана победы и получил «Покинуть игру».
+ * Единственный достоверный сигнал «сервер ещё держит» — решающий блок, и
+ * дождаться его дешевле, чем зажать страницу.
+ *
+ * Выдержка не нужна, когда статус уже известен: решающий блок видели или
+ * наши шаги ходили.
  */
-const PLAY_SETTLE_FINISHED_MS = 2500;
-const PLAY_SETTLE_VIEWER_MS = 8000;
+const PLAY_SETTLE_MS = 8000;
 /**
  * Самолечение зависшей крутилки (второй пояс того же разбора): лоадер на
  * месте кнопки «Играть» без секундомера дольше этого срока — страница
@@ -185,8 +193,6 @@ let settleLogged = false;
 let confirmSeen = false;
 /** Машина стоит перед модалкой и ждёт человека (расширенный дедлайн). */
 let waitingForConfirm = false;
-/** Откуда пришёл мост (см. PLAY_SETTLE_*): по умолчанию — осторожный viewer. */
-let markSource: "finished" | "viewer" = "viewer";
 /** Мост уже переживал самолечебную перезагрузку — второй не будет. */
 let markReloaded = false;
 /** issuedAt потреблённого моста: перевзвод обязан сохранить потолок эпизода. */
@@ -278,7 +284,6 @@ function resetEpisode(): void {
   settleLogged = false;
   confirmSeen = false;
   waitingForConfirm = false;
-  markSource = "viewer";
   markReloaded = false;
   markIssuedAt = 0;
   decideSeen = false;
@@ -288,16 +293,14 @@ function resetEpisode(): void {
 
 /**
  * Записать мост. Формат совместим с requeue-pending (validateMark читает
- * issuedAt/refreshedAt и игнорирует лишние поля); source/reloaded — наша
- * добавка. Недоверие симметрично: при чтении оба поля валидируются.
+ * issuedAt/refreshedAt и игнорирует лишние поля); `reloaded` — наша добавка
+ * для одноразового самолечения. Недоверие симметрично: при чтении принимаем
+ * только буквальный true.
  */
-function writePostgameMark(source: "finished" | "viewer", reloaded: boolean, issuedAt: number): void {
+function writePostgameMark(reloaded: boolean, issuedAt: number): void {
   const now = Date.now();
   const base = refreshMark({ issuedAt, refreshedAt: issuedAt }, now);
-  sessionStorage.setItem(
-    POSTGAME_PENDING_KEY,
-    JSON.stringify({ ...base, source, reloaded }),
-  );
+  sessionStorage.setItem(POSTGAME_PENDING_KEY, JSON.stringify({ ...base, reloaded }));
 }
 
 // ── комната: кнопка ──
@@ -317,6 +320,20 @@ function isViewerMode(): boolean {
   }
 }
 
+/**
+ * Матч окончен ДЛЯ МЕНЯ: меня убили, заголосовали или дисквалифицировали.
+ *
+ * Отдельно от isViewerMode: в зрители сайт переводит только по
+ * `on_self_strike` (кик/страйк), а обычное выбытие — `on_remote_strike` →
+ * `updatePlayer(isKilled)`: игрок остаётся в комнате с той же ссылкой и
+ * досматривает игру. Кнопки «В поиск» ему не доставалось, хотя играть ему
+ * уже нечего (жалоба владельца 07.08.2026 со скриншотом: «Ночь 2 — Убит»,
+ * идёт День 3, кнопки нет).
+ */
+function isEliminated(): boolean {
+  return !!visibleEl(SITE.myEliminatedState);
+}
+
 /** Про недоступное хранилище при клике уже предупредили (один раз). */
 let clickStorageWarned = false;
 
@@ -324,9 +341,7 @@ function onButtonClick(): void {
   // Мост — ДО навигации: страница сейчас умрёт. Отказ хранилища не блокирует
   // сам переход: игрок окажется на поиске и продолжит руками.
   try {
-    // Источник решает выдержку перед «Играть» на поиске: с экрана победы
-    // сервер игрока уже отпустил, из viewer-вкладки — почти наверняка нет.
-    writePostgameMark(matchFinishedVisible() ? "finished" : "viewer", false, Date.now());
+    writePostgameMark(false, Date.now());
   } catch {
     if (!clickStorageWarned) {
       clickStorageWarned = true;
@@ -361,7 +376,15 @@ function syncButton(show: boolean): void {
   `;
   btn.addEventListener("click", onButtonClick);
   (document.body || document.documentElement).appendChild(btn);
-  log.info(SCOPE, "кнопка «В поиск» показана:", matchFinishedVisible() ? "матч завершён" : "режим зрителя");
+  log.info(
+    SCOPE,
+    "кнопка «В поиск» показана:",
+    matchFinishedVisible()
+      ? "матч завершён"
+      : isEliminated()
+        ? "игрок выбыл из матча"
+        : "режим зрителя",
+  );
 }
 
 // ── страница поиска: машина ──
@@ -385,21 +408,16 @@ function consumePending(): void {
   armed = true;
   armedAt = Date.now();
   markIssuedAt = verdict.mark.issuedAt;
-  // Добавочные поля читаем из сырого JSON без доверия: неизвестное значение
-  // source трактуем как осторожный viewer (длинная выдержка безвреднее
-  // преждевременного клика), reloaded — только буквальный true.
+  // Добавочное поле читаем из сырого JSON без доверия: только буквальный true.
   try {
-    const extra = JSON.parse(raw as string) as Record<string, unknown>;
-    markSource = extra.source === "finished" ? "finished" : "viewer";
-    markReloaded = extra.reloaded === true;
+    markReloaded = (JSON.parse(raw as string) as Record<string, unknown>).reloaded === true;
   } catch {
-    markSource = "viewer";
     markReloaded = false;
   }
   log.info(
     SCOPE,
     "мост «В поиск» из комнаты — выходим из игры и встаём в поиск",
-    `(источник: ${markSource}${markReloaded ? ", после перезагрузки" : ""})`,
+    markReloaded ? "(после перезагрузки)" : "",
   );
 }
 
@@ -627,7 +645,7 @@ function searchTick(): void {
         }
         let rearmed = false;
         try {
-          writePostgameMark(markSource, true, markIssuedAt || now);
+          writePostgameMark(true, markIssuedAt || now);
           rearmed = true;
         } catch {
           /* хранилище недоступно — перезагрузка без моста бессмысленна */
@@ -655,7 +673,7 @@ function searchTick(): void {
   // игрок в игре (см. PLAY_SETTLE_*). Когда решающий блок уже видели или
   // quit-шаг ходил — статус известен, выдержка не нужна.
   if (!decideSeen && quitAttempts === 0 && confirmAttempts === 0 && playAttempts === 0) {
-    const settleMs = markSource === "finished" ? PLAY_SETTLE_FINISHED_MS : PLAY_SETTLE_VIEWER_MS;
+    const settleMs = PLAY_SETTLE_MS;
     if (now - armedAt < settleMs) {
       if (!settleLogged) {
         settleLogged = true;
@@ -732,6 +750,10 @@ function roomHoldsLiveMatch(): boolean {
   if (!isGameRoomPath(location.pathname)) return false;
   if (isViewerMode()) return false;
   if (matchFinishedVisible()) return false;
+  // Матч идёт, но БЕЗ МЕНЯ: выбывший вправе выйти из игры и встать в поиск,
+  // и сторож не должен ему мешать — иначе кнопка появилась бы, а машина на
+  // поиске отказалась бы выходить, что хуже отсутствия кнопки.
+  if (isEliminated()) return false;
   if (document.querySelector(SITE.pregameScreen)) return true;
   if (document.querySelector(SITE.roomFixedState)) return true;
   return Array.from(document.querySelectorAll<HTMLElement>(SITE.runningStageMarkers)).some(
@@ -743,7 +765,9 @@ function tick(): void {
   if (!settings || settings.postgame_requeue_enabled === false) return;
   syncRoute();
   if (isGameRoomPath(location.pathname)) {
-    syncButton(!isStreamCaptureWindow() && (matchFinishedVisible() || isViewerMode()));
+    syncButton(
+      !isStreamCaptureWindow() && (matchFinishedVisible() || isViewerMode() || isEliminated()),
+    );
     return;
   }
   if (isSearchPath(location.pathname)) {

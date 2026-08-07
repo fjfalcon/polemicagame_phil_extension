@@ -73,6 +73,27 @@ function endedScreen(classes = "ended ended-mafia"): HTMLElement {
   return el;
 }
 
+/**
+ * Плитка игрока в комнате. `state` — класс выбытия сайта
+ * (state-killed | state-voted | state-disqualified) или "" для живого.
+ */
+function playerTile(mine: boolean, state = ""): void {
+  const tile = document.createElement("div");
+  tile.className = `player${mine ? " my-player" : ""}`;
+  tile.innerHTML = state
+    ? `<span class="state not-transparent ${state}"><span class="state__text">Ночь 2 ☠ Убит</span></span>`
+    : "";
+  document.body.append(tile);
+}
+
+/** Идущий матч (непустая стадия) — как в комнате во время игры. */
+function runningStage(): void {
+  const stage = document.createElement("div");
+  stage.className = "stage";
+  stage.innerHTML = `<div class="stage__name">День 3</div>`;
+  document.body.append(stage);
+}
+
 /** Решающий блок страницы поиска («Продолжить игру» / «Покинуть игру»). */
 function decideBlock(quitLabel = "Покинуть игру"): void {
   const div = document.createElement("div");
@@ -111,13 +132,12 @@ function foreignModal(): void {
   document.body.append(div);
 }
 
-/** Свежий мост в sessionStorage (как его пишет клик по кнопке).
- *  По умолчанию source=finished — короткая выдержка перед «Играть». */
+/** Свежий мост в sessionStorage (как его пишет клик по кнопке). */
 function plantMark(ageMs = 0, extra: Record<string, unknown> = {}): void {
   const at = Date.now() - ageMs;
   sessionStorage.setItem(
     POSTGAME_PENDING_KEY,
-    JSON.stringify({ issuedAt: at, refreshedAt: at, source: "finished", ...extra }),
+    JSON.stringify({ issuedAt: at, refreshedAt: at, ...extra }),
   );
 }
 
@@ -189,6 +209,56 @@ describe("комната: условия показа кнопки", () => {
     el.remove();
     domSubscriber?.();
     expect(document.getElementById(BUTTON_ID)).toBeNull();
+  });
+
+  test.each([
+    ["state-voted", "заголосован"],
+    ["state-killed", "убит ночью"],
+    ["state-disqualified", "дисквалифицирован"],
+  ])("выбывший игрок (%s, %s) видит кнопку посреди идущего матча", (state) => {
+    // Жалоба 07.08.2026: сайт НЕ уводит выбывшего из комнаты и не даёт ему
+    // ?role=viewer — он сидит мёртвым, а кнопки не было.
+    runningStage();
+    playerTile(true, state);
+    postgameSearchFeature.enable(ctx);
+    expect(document.getElementById(BUTTON_ID)).not.toBeNull();
+    expect(infoHas("игрок выбыл из матча")).toBe(true);
+  });
+
+  test("выбыл СОСЕД, а не я — кнопки нет: мой матч продолжается", () => {
+    // Мутант «селектор без .my-player»: кнопка вылезала бы живому игроку
+    // при первой же смерти за столом — прямой путь сорвать чужую игру.
+    runningStage();
+    playerTile(true);
+    playerTile(false, "state-killed");
+    postgameSearchFeature.enable(ctx);
+    expect(document.getElementById(BUTTON_ID)).toBeNull();
+  });
+
+  test("выбывший не считается «живым матчем» — иначе сторож запретит ему выход", () => {
+    runningStage();
+    playerTile(true, "state-voted");
+    postgameSearchFeature.enable(ctx);
+    const probe = messageHandler?.({ type: "postgame_live_probe" }) as Promise<{ live: boolean }>;
+    return expect(probe).resolves.toEqual({ live: false });
+  });
+
+  test("живой игрок в идущем матче — «живой матч» для сторожа", () => {
+    runningStage();
+    playerTile(true);
+    postgameSearchFeature.enable(ctx);
+    const probe = messageHandler?.({ type: "postgame_live_probe" }) as Promise<{ live: boolean }>;
+    return expect(probe).resolves.toEqual({ live: true });
+  });
+
+  test("мост выбывшего — обычный свежий мост, без флага перезагрузки", () => {
+    runningStage();
+    playerTile(true, "state-killed");
+    postgameSearchFeature.enable(ctx);
+    document.getElementById(BUTTON_ID)?.dispatchEvent(new MouseEvent("click"));
+    const mark = JSON.parse(sessionStorage.getItem(POSTGAME_PENDING_KEY) as string);
+    expect(mark.issuedAt).toBe(Date.now());
+    expect(mark.reloaded).toBe(false);
   });
 
   test("режим зрителя (role=viewer) → кнопка есть и без ended-экрана", () => {
@@ -374,8 +444,8 @@ describe("поиск: машина «выйти из игры → Играть»
     plantMark();
     playButton(true);
     enableOnSearch();
-    // Выдержка статуса (finished: 2.5 с) идёт ДО терминального вердикта.
-    await vi.advanceTimersByTimeAsync(2700);
+    // Выдержка статуса (8 с) идёт ДО терминального вердикта.
+    await vi.advanceTimersByTimeAsync(8200);
     expect(clicked()).toHaveLength(0);
     expect(warnHas("не выбраны очереди")).toBe(true);
   });
@@ -386,7 +456,7 @@ describe("поиск: машина «выйти из игры → Играть»
     plantMark();
     playButton(true);
     enableOnSearch();
-    await vi.advanceTimersByTimeAsync(2700);
+    await vi.advanceTimersByTimeAsync(8200);
     expect(warnHas("не выбраны очереди")).toBe(true);
     document.querySelector(".p-play__profile-button")?.removeAttribute("disabled");
     await vi.advanceTimersByTimeAsync(5000);
@@ -395,21 +465,22 @@ describe("поиск: машина «выйти из игры → Играть»
     expect(clicked()).toHaveLength(0);
   });
 
-  test("выдержка статуса: с экрана победы «Играть» не трогаем первые ~2.5 с", async () => {
+  test("выдержка статуса: «Играть» не трогаем, пока сайт не определится (8 с)", async () => {
     // Разбор лога 07.08 (18:29): мгновенный клик уходил при userInGame,
-    // сервер отвечал in_game и сайт зажимал кнопку вечным лоадером.
+    // сервер отвечал in_game и сайт зажимал кнопку вечным лоадером. Владелец
+    // шёл ровно с экрана победы — то есть короткой выдержки там мало.
     plantMark();
     playButton();
     enableOnSearch();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(clicked()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(clicked(), "три секунды — ещё рано").toHaveLength(0);
     expect(infoHas("ждём, пока сайт определит статус игрока")).toBe(true);
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(5500);
     expect(clicked().at(-1)?.className).toBe("p-play__profile-button");
   });
 
-  test("выдержка статуса: viewer-мост ждёт решающий блок и уходит в quit-флоу", async () => {
-    plantMark(0, { source: "viewer" });
+  test("выдержка статуса: за время ожидания появился решающий блок — идём в quit-флоу", async () => {
+    plantMark();
     playButton();
     enableOnSearch();
     // 5 секунд — «Играть» на месте, но мы её не трогаем (умерший почти
@@ -426,7 +497,7 @@ describe("поиск: машина «выйти из игры → Играть»
   test("выдержка не нужна, если решающий блок уже видели: игрок разрулил его сам", async () => {
     // Мутант «decideSeen не ставится»: viewer-мост зря ждал бы 8 секунд
     // после того, как статус игрока УЖЕ был известен и разрешён человеком.
-    plantMark(0, { source: "viewer" });
+    plantMark();
     decideBlock();
     enableOnSearch(); // проба ушла, машина ждёт вердикта
     document.body.innerHTML = ""; // игрок сам вышел из игры быстрее нас
@@ -449,7 +520,6 @@ describe("поиск: машина «выйти из игры → Играть»
     expect(raw, "мост перевзведён до перезагрузки").not.toBeNull();
     const mark = JSON.parse(raw as string);
     expect(mark.reloaded).toBe(true);
-    expect(mark.source).toBe("finished");
   });
 
   test("самолечение одноразовое: мост после перезагрузки второй reload не получает", async () => {
