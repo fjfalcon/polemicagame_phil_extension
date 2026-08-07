@@ -38,7 +38,7 @@
  * при включённом сворачивании — выключил, и клики снова целиком сайтовые.
  */
 import { onDomChange } from "@core/dom";
-import { SITE } from "@core/selectors";
+import { OWN, SITE } from "@core/selectors";
 import { log } from "@core/log";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
@@ -63,6 +63,14 @@ const STYLE_ID = "pn-nick-plate-styles";
 const TOP_OFFSET = "3.25rem";
 /** Отступ сайта от края плитки — повторяем, чтобы углы выглядели родными. */
 const EDGE = "0.625rem";
+/**
+ * На сколько ряд наших иконок отстоит от плашки. Значение — из notes.css
+ * (`.player-icons { top: -28px }`): там ряд висит НАД плашкой, потому что
+ * снизу у плитки край. При верхнем угле это выглядит наоборот — иконки
+ * прилипают к самой кромке, а номер оказывается под ними, поэтому там мы
+ * ряд переворачиваем вниз (просьба владельца 08.08.2026).
+ */
+const ICONS_OFFSET = "28px";
 
 /** Позиции (id игрока из класса `player-N`), развёрнутые вручную. */
 const opened = new Set<string>();
@@ -117,10 +125,24 @@ export function positionCss(position: PlatePosition): string {
   // Правые углы выравнивают содержимое по правому краю — иначе иконки и
   // плашка «висят» слева от угла и выглядят сдвинутыми.
   const align = position === "top-left" ? "" : " align-items: flex-end;";
+  // Ряд иконок абсолютен относительно плашки (notes.css): у верхних углов
+  // разворачиваем его ВНИЗ, у правых — прижимаем к правому краю плашки.
+  const iconsTop = position.startsWith("top-")
+    ? `top: auto !important; bottom: -${ICONS_OFFSET} !important;`
+    : "";
+  const iconsSide = position.endsWith("-right")
+    ? " left: auto !important; right: 0 !important;"
+    : "";
+  const icons = iconsTop || iconsSide
+    ? `
+    .${POS_CLASS_PREFIX}${position} ${SITE.playerInfo} > .${OWN.playerIcons} {
+      ${iconsTop}${iconsSide}
+    }`
+    : "";
   return `
     .${POS_CLASS_PREFIX}${position} ${SITE.plateContainer} {
       ${corner[position]}${align}
-    }`;
+    }${icons}`;
 }
 
 /**

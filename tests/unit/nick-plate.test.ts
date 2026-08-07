@@ -248,6 +248,56 @@ describe("угол плашки", () => {
     expect(rule).toMatch(/bottom:\s*auto/);
   });
 
+  test.each(["top-left", "top-right"])(
+    "угол %s: ряд иконок разворачивается ПОД плашку, а не липнет к кромке",
+    (pos) => {
+      // Просьба владельца 08.08.2026: «если плашка сверху — кнопки снизу».
+      // По умолчанию ряд висит на 28px ВЫШЕ плашки (notes.css) — у верхнего
+      // угла он оказывался у самого края, а номер под ним.
+      table();
+      nickPlateFeature.enable(posCtx(pos));
+      const rule = new RegExp(
+        `\\.pn-nick-pos-${pos} \\.player__info > \\.player-icons\\s*\\{([^}]*)\\}`,
+      ).exec(css())?.[1];
+      expect(rule, "правила для ряда иконок нет").toBeTruthy();
+      expect(rule).toMatch(/top:\s*auto\s*!important/);
+      expect(rule).toMatch(/bottom:\s*-28px\s*!important/);
+    },
+  );
+
+  test.each(["top-right", "bottom-right"])(
+    "угол %s: ряд иконок прижат к правому краю плашки",
+    (pos) => {
+      table();
+      nickPlateFeature.enable(posCtx(pos));
+      const rule = new RegExp(
+        `\\.pn-nick-pos-${pos} \\.player__info > \\.player-icons\\s*\\{([^}]*)\\}`,
+      ).exec(css())?.[1];
+      expect(rule, "правила для ряда иконок нет").toBeTruthy();
+      expect(rule).toMatch(/right:\s*0\s*!important/);
+      expect(rule).toMatch(/left:\s*auto\s*!important/);
+    },
+  );
+
+  test("у НИЖНЕГО угла ряд иконок остаётся НАД плашкой: снизу край плитки", () => {
+    // Мутант «переворачивать иконки всегда»: у нижнего угла ряд уехал бы
+    // за границу плитки и оказался обрезан.
+    table();
+    nickPlateFeature.enable(posCtx("bottom-right"));
+    const rule = /\.pn-nick-pos-bottom-right \.player__info > \.player-icons\s*\{([^}]*)\}/.exec(
+      css(),
+    )?.[1];
+    expect(rule, "правило для правого края должно быть").toBeTruthy();
+    expect(rule, "вниз ряд не разворачиваем").not.toMatch(/bottom:\s*-/);
+    expect(rule).not.toMatch(/top:\s*auto/);
+  });
+
+  test("угол «снизу слева» ряд иконок не трогает — там вид сайта", () => {
+    table();
+    nickPlateFeature.enable(posCtx("default"));
+    expect(css()).not.toContain(".player-icons");
+  });
+
   test("мусор в настройке — угол сайта, а не пустой экран", () => {
     table();
     nickPlateFeature.enable(posCtx("нет-такого-угла"));
