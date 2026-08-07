@@ -111,7 +111,45 @@ describe("ни одна настройка не потерялась при пе
     expect(values.sort()).toEqual([...PLATE_POSITIONS].sort());
   });
 
-  test("каждый чекбокс попапа подписан на сохранение", () => {
+  test("каждый КОНТРОЛ настройки подписан на сохранение (change)", () => {
+    // Баг 08.08.2026: `nick_plate_position` попал в разметку и в чтение, но
+    // не в список подписки — селект менялся, значение не сохранялось, и
+    // настройка выглядела «не работающей». Прошлая версия теста смотрела
+    // только чекбоксы и такую дыру не видела.
+    const d = doc();
+    const list = /const simpleChangeIds = \[([\s\S]*?)\];/.exec(popupSource)?.[1] || "";
+    expect(list, "список simpleChangeIds не найден").not.toBe("");
+    const subscribed = new Set([...list.matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]));
+
+    const controls = Array.from(
+      d.querySelectorAll<HTMLElement>('input[type="checkbox"][id], select[id]'),
+    )
+      .map((el) => el.id)
+      .filter((id) => id in DEFAULT_SETTINGS);
+    // Контролы с СОБСТВЕННЫМ обработчиком change: они не просто сохраняют
+    // (мастер-выключатель гасит интерфейс, OBS/Twitch подключаются и
+    // раскрывают свои блоки). Для них проверяем, что обработчик есть.
+    const OWN_HANDLER: Record<string, RegExp> = {
+      extension_enabled: /\$<HTMLInputElement>\("extension_enabled"\)\?\.addEventListener\("change"/,
+      obs_enabled: /obsEnabled\.addEventListener\("change"/,
+      obs_floating_panel_enabled: /obsFloatingEnabled\.addEventListener\("change"/,
+      obs_auto_mode_enabled: /obsAutoModeEnabled\.addEventListener\("change"/,
+      twitch_chat_enabled: /twitchEnabled\.addEventListener\("change"/,
+      twitch_floating_panel_enabled: /twitchFloatingEnabled\.addEventListener\("change"/,
+      // Селекты сцен: их значения нельзя писать вслепую — пустой список
+      // сцен означает «OBS не подключён», и сохранённый выбор надо беречь.
+      obs_day_scene: /obsDayScene\.addEventListener\("change"/,
+      obs_night_scene: /obsNightScene\.addEventListener\("change"/,
+    };
+    const missing = controls.filter((id) => {
+      if (subscribed.has(id)) return false;
+      const own = OWN_HANDLER[id];
+      return !own || !own.test(popupSource);
+    });
+    expect(missing, `контролы без подписки на change: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  test("каждый чекбокс попапа упомянут в коде попапа", () => {
     // Контрол, забытый в simpleChangeIds, выглядит рабочим и молча теряет
     // значение при закрытии попапа.
     const d = doc();

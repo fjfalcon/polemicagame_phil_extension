@@ -1179,6 +1179,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "btn_hide_video_enabled",
     "role_marker_enabled",
     "compact_nicknames_enabled",
+    "nick_plate_position",
     "f5_refresh_fix_enabled",
     "update_check_enabled",
     "debug_logging_enabled",
