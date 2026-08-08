@@ -281,6 +281,27 @@ describe("settings, release and manifest consistency", () => {
     expect(manifest.version).toBe(pkg.version);
   });
 
+  test("Firefox manifest declares data collection (AMO requirement)", () => {
+    // AMO предупреждает о пропущенном ключе на каждой заливке и обещает
+    // сделать его обязательным. Расширение НИЧЕГО не собирает: заметки и
+    // логи лежат в браузере пользователя, наружу уходят только запросы к
+    // самому сайту игры, к GitHub за номером версии и к локальному OBS.
+    // Поэтому «none»; появится сбор — этот тест придётся осознанно менять.
+    const ff = JSON.parse(read("src/manifest/manifest.firefox.json")) as {
+      browser_specific_settings: {
+        gecko: { data_collection_permissions?: { required?: string[] } };
+      };
+    };
+    expect(ff.browser_specific_settings.gecko.data_collection_permissions?.required).toEqual([
+      "none",
+    ]);
+    // Ключ — только у Firefox: Chrome такого не знает и ругается на лишнее.
+    expect(read("src/manifest/manifest.base.json")).not.toContain("data_collection_permissions");
+    expect(read("src/manifest/manifest.chrome.json")).not.toContain(
+      "data_collection_permissions",
+    );
+  });
+
   test("manifest permissions exactly match privileged browser API usage", () => {
     const manifest = JSON.parse(read("src/manifest/manifest.base.json")) as { permissions: string[] };
     const apiNamespaces = new Set<string>();
