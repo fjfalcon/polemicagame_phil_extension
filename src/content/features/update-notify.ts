@@ -2,6 +2,17 @@
  * Уведомление о новой версии. Раз в N часов проверяет последний релиз на GitHub
  * и, если он новее установленной версии, показывает ненавязчивый баннер со ссылкой
  * на страницу релиза. «Закрыть» прячет баннер для этой версии (больше не напоминаем).
+ *
+ * СТОРОВЫЕ УСТАНОВКИ ИСКЛЮЧЕНЫ ЦЕЛИКОМ (решение владельца 09.08.2026). Их
+ * обновляет сам браузер, причём только после проверки магазином, — а релиз на
+ * GitHub появляется раньше. Баннер в этом промежутке говорил человеку о
+ * версии, которую он не может ни поставить, ни ускорить: чистое раздражение.
+ * Ссылка на zip там и вовсе вредна — ручная установка поверх сторовой ломает
+ * автообновление.
+ *
+ * Речь именно об АВТОМАТИЧЕСКОМ баннере. Кнопка «Проверить обновление» в
+ * попапе для стора остаётся: её человек нажимает сам, и она спрашивает не
+ * GitHub, а сам браузер — раздаёт ли магазин новую версию.
  */
 import { browser, isStoreInstall } from "@core/env";
 import { log } from "@core/log";
@@ -78,21 +89,15 @@ function showBanner(latest: string, dismissed: string): void {
     font: 13px system-ui, sans-serif;
   `;
 
-  // Сторовая установка обновляется самим браузером (и только после проверки
-  // стором — версия с GitHub может быть ещё недоступна), поэтому призыв
-  // «обновитесь» со ссылкой на zip тут не только бесполезен, но и вреден:
-  // ручная установка поверх сторовой ломает автообновление.
-  const store = isStoreInstall();
+  // Сторовых установок здесь уже не бывает — они отсеяны в enable().
   const text = document.createElement("span");
-  text.textContent = store
-    ? `Вышла версия Polemica Notes ${latest} — браузер обновит расширение сам`
-    : `Доступна новая версия Polemica Notes (${latest}) — обновитесь`;
+  text.textContent = `Доступна новая версия Polemica Notes (${latest}) — обновитесь`;
 
   const link = document.createElement("a");
   link.href = RELEASES_URL;
   link.target = "_blank";
   link.rel = "noopener";
-  link.textContent = store ? "Что нового" : "Обновить";
+  link.textContent = "Обновить";
   link.style.cssText =
     "background:#3b82f6;color:#fff;text-decoration:none;padding:5px 12px;border-radius:8px;font-weight:600;";
 
@@ -150,6 +155,12 @@ export const updateNotifyFeature: Feature = {
   id: "update-notify",
   settingKey: "update_check_enabled",
   enable() {
+    if (isStoreInstall()) {
+      // Ни баннера, ни запроса: GitHub тут нечего спросить по делу, а лишний
+      // сетевой запрос с каждой вкладки — плата ни за что.
+      log.debug("update-notify", "установка из магазина — уведомления о версиях выключены");
+      return;
+    }
     // Небольшая задержка, чтобы не мешать загрузке страницы.
     timer = setTimeout(() => void check(), 4000);
   },

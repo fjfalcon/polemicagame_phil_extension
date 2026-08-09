@@ -19,7 +19,7 @@ import {
   parseGameRows,
   type GameRow,
 } from "@core/crossover";
-import { ownIdFromHref, readOwnIdFromDom } from "@core/own-user";
+import { ownIdFromHref, ownNameFromTable, readOwnIdFromDom } from "@core/own-user";
 
 const g = (id: number, role: string, win: boolean): GameRow => ({ id, role, win });
 
@@ -125,6 +125,21 @@ describe("свой id", () => {
     // На странице разбора матча ссылок на профили много — своя только в шапке.
     document.body.innerHTML = `<main><a href="/profile/999">Игрок</a></main>`;
     expect(readOwnIdFromDom(document)).toBeNull();
+  });
+
+  test("в комнате id берётся окольно — со своей плитки за столом", () => {
+    // Шапки сайта в игре нет, а кнопка пересечений живёт именно там: первая
+    // версия молча отвечала «не знаю твой id» всю игру (жалоба 09.08.2026).
+    document.body.innerHTML = `
+      <div class="player desktop-version"><div class="player__info"><span class="info__name">Чужой</span></div></div>
+      <div class="player my-player"><div class="player__info"><span class="info__name"> fj </span></div></div>`;
+    expect(readOwnIdFromDom(document), "шапки в комнате нет").toBeNull();
+    expect(ownNameFromTable(document)).toBe("fj");
+  });
+
+  test("без своей плитки (зритель) ник не выдумывается", () => {
+    document.body.innerHTML = `<div class="player"><span class="info__name">Чужой</span></div>`;
+    expect(ownNameFromTable(document)).toBeNull();
   });
 
   test("мусорный адрес не превращается в id", () => {

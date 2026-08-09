@@ -102,6 +102,8 @@ export const SITE = {
   disbandmentTimer: ".disbandment-timer",
   /** Отметка «Готов» на СВОЕЙ плитке (player__topleftmenu). */
   myReadinessMark: ".player.my-player .player__readiness",
+  /** Мой ник за столом: единственный след «кто я» на странице комнаты. */
+  myPlayerName: ".player.my-player .info__name",
   /**
    * Игра окончена ДЛЯ МЕНЯ: моя плитка помечена выбытием. Классы сайт
    * вычисляет напрямую из состояния игрока (`notTransparentStateClasses`):

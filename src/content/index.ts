@@ -15,6 +15,7 @@ import { setupNicknameLengthsResponder } from "./nickname-lengths";
 import { setupDiagnostics } from "./diag";
 import { startOrphanWatch, stopOrphanWatch } from "./orphan-watch";
 import { LEGACY_PROBE_FLAG_KEY, WS_LOG_FLAG_KEY } from "./page/room-probe-inject";
+import { getOwnUserId } from "@core/own-user";
 
 import { searchFeature } from "./features/search";
 import { autoStartFeature } from "./features/auto-start";
@@ -168,6 +169,14 @@ function mirrorWsLogFlag(on: boolean): void {
     /* приватный режим: зонд останется на дефолте */
   }
 }
+/**
+ * Свой userId читаем на КАЖДОЙ обычной странице сайта и запоминаем: в игровой
+ * комнате шапки с ссылкой на профиль нет, а статистика пересечений нужна
+ * именно там. Без этого id узнавался бы только в самой комнате и окольным
+ * путём (жалоба владельца 09.08.2026).
+ */
+void getOwnUserId();
+
 void getSetting("ws_full_log_enabled")
   .catch(() => false)
   .then((on) => mirrorWsLogFlag(on === true));

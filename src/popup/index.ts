@@ -211,6 +211,16 @@ document.addEventListener("DOMContentLoaded", () => {
       return { status: "error" };
     }
   };
+  // Сторовую установку обновляет браузер, и баннера о версиях у неё больше
+  // нет (решение владельца 09.08.2026). Тумблер, который ничего не включает,
+  // — обещание впустую: убираем его и объясняем, почему.
+  if (isStoreInstall()) {
+    const row = $("update_notify_row");
+    if (row) row.style.display = "none";
+    const note = $("store_update_note");
+    if (note) note.style.display = "";
+  }
+
   const checkUpdateBtn = $<HTMLButtonElement>("check_update_now");
   if (checkUpdateBtn) {
     checkUpdateBtn.addEventListener("click", async () => {

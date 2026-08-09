@@ -72,6 +72,30 @@ export async function getOwnUserId(): Promise<number | null> {
   return null;
 }
 
+/**
+ * Запомнить id, добытый другим путём (в комнате — через свой ник за столом).
+ *
+ * Без этого кнопка пересечений в игре молчала бы всегда: шапки в комнате нет,
+ * а на страницу с шапкой к моменту наведения никто и не заходил — id просто
+ * некому было прочитать (жалоба владельца 09.08.2026, скриншот из игры).
+ */
+export async function rememberOwnUserId(id: number): Promise<void> {
+  if (!Number.isSafeInteger(id) || id <= 0 || cached === id) return;
+  cached = id;
+  try {
+    await browser.storage.local.set({ [OWN_ID_KEY]: id });
+  } catch {
+    /* хранилище недоступно — обойдёмся памятью вкладки */
+  }
+}
+
+/** Мой ник со своей плитки за столом; null — своей плитки нет (зритель, лобби). */
+export function ownNameFromTable(doc: Document = document): string | null {
+  const el = doc.querySelector<HTMLElement>(SITE.myPlayerName);
+  const name = el?.textContent?.trim();
+  return name ? name : null;
+}
+
 /** Сбросить память процесса (тесты и выключение фичи). */
 export function resetOwnUserIdCache(): void {
   cached = null;

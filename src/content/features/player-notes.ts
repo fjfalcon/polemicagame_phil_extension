@@ -21,7 +21,7 @@
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import { crossoverWith, type Crossover } from "@core/crossover";
-import { getOwnUserId } from "@core/own-user";
+import { getOwnUserId, ownNameFromTable, rememberOwnUserId } from "@core/own-user";
 import { showToast } from "@core/toast";
 import { onDomChange, paintNickEl } from "@core/dom";
 import { onMessage, sendRuntime } from "@core/messaging";
@@ -3229,7 +3229,7 @@ class PlayerNotesManager {
     const inFlight = this.crossoverInFlight.get(key);
     if (inFlight) return inFlight.catch(() => null);
 
-    const myId = await getOwnUserId();
+    const myId = await this.myUserId();
     if (myId === null) return undefined;
 
     const promise = (async (): Promise<Crossover | null> => {
@@ -3249,6 +3249,28 @@ class PlayerNotesManager {
       return null;
     } finally {
       this.crossoverInFlight.delete(key);
+    }
+  }
+
+  /**
+   * Свой userId. Сначала дешёвые пути (шапка сайта, кэш), а в комнате шапки
+   * нет — и тогда идём тем же путём, что и для любого игрока: со СВОЕЙ плитки
+   * берём ник и резолвим его в id. Ровно этого не хватало в первой версии:
+   * кнопка живёт в игре, а id читался только там, где кнопки нет.
+   */
+  private async myUserId(): Promise<number | string | null> {
+    const known = await getOwnUserId();
+    if (known !== null) return known;
+    const myName = ownNameFromTable();
+    if (!myName) return null;
+    try {
+      const id = await this.resolveUserId(myName, myName.toLowerCase());
+      const numeric = typeof id === "number" ? id : Number(id);
+      if (Number.isSafeInteger(numeric) && numeric > 0) void rememberOwnUserId(numeric);
+      return id;
+    } catch {
+      // Свой ник не резолвится (нет в рейтинге, сеть) — честно молчим.
+      return null;
     }
   }
 
@@ -3313,7 +3335,7 @@ class PlayerNotesManager {
           if (tooltip.dataset.pnShown !== "1") return;
           tooltip.innerHTML =
             data === undefined
-              ? "Не знаю твой id — открой страницу поиска игры или свой профиль, и он запомнится"
+              ? "Не удалось определить твой профиль — открой страницу поиска игры, и он запомнится"
               : data === null
                 ? "Не удалось посчитать пересечения"
                 : this.formatCrossover(data);
