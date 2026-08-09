@@ -259,8 +259,17 @@
             <div class="row"><span>Блокировать клики по веб-камерам<span class="hint">⚠ глушит ВСЕ клики по плиткам с видео — в том числе выстрел, проверку и голосование кликом по игроку. Включайте, только если точно знаете, зачем</span></span>
                 <label class="switch"><input type="checkbox" id="disable_webcam_clicks"><span class="slider"></span></label>
             </div>
-            <div class="row"><span>Безопасный ряд кнопок<span class="hint">«Завершите речь» уходит вправо, «Оставить ЛХ» — влево, чтобы после речи не попасть по «Выкрикнуть»</span></span>
+            <div class="row"><span>Раскладка кнопок в игре<span class="hint">кнопка «Завершите речь» подменяется «Выкрикнуть» на том же месте — разведи их по краям, чтобы не попасть случайно</span></span>
                 <label class="switch"><input type="checkbox" id="safe_controls_layout_enabled" checked><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>— Завершите речь</span>
+                <select id="ctl_pos_finish" class="sel"><option value="left">слева</option><option value="center">по центру</option><option value="right" selected>справа</option></select>
+            </div>
+            <div class="row"><span>— Выкрикнуть</span>
+                <select id="ctl_pos_outcry" class="sel"><option value="left">слева</option><option value="center" selected>по центру</option><option value="right">справа</option></select>
+            </div>
+            <div class="row"><span>— Лучший ход</span>
+                <select id="ctl_pos_guess" class="sel"><option value="left" selected>слева</option><option value="center">по центру</option><option value="right">справа</option></select>
             </div>
             <div class="row"><span>F5 обновляет страницу<span class="hint">а не открывает настройки игры</span></span>
                 <label class="switch"><input type="checkbox" id="f5_refresh_fix_enabled" checked><span class="slider"></span></label>

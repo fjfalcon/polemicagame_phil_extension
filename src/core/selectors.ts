@@ -261,6 +261,7 @@ export const TEXT = {
    * переименованием следит контрактная проба.
    */
   finishSpeechButton: ["завершите речь", "end the speech"] as readonly string[],
+  outcryButton: ["выкрикнуть", "outcry"] as readonly string[],
   guessButtons: [
     "оставить лх",
     "сбросить лх",

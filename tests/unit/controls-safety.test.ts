@@ -22,12 +22,20 @@ vi.mock("@core/log", () => ({
 }));
 
 import {
-  FINISH_CLASS,
-  GUESS_CLASS,
+  KIND_CLASS,
   classifyButton,
   controlsSafetyFeature,
   markButtons,
+  readPositions,
+  styleText,
 } from "@content/features/controls-safety";
+import { DEFAULT_CONTROL_POSITIONS } from "@shared/controls-layout";
+
+const FINISH_CLASS = KIND_CLASS.finish;
+const GUESS_CLASS = KIND_CLASS.guess;
+const OUTCRY_CLASS = KIND_CLASS.outcry;
+/** Контекст фичи с раскладкой по умолчанию. */
+const ctx = { settings: {} } as never;
 
 /** Ряд контролов сайта: три зоны, кнопки действий — в центре. */
 function buildControls(labels: string[]): void {
@@ -59,26 +67,36 @@ describe("что и куда уезжает", () => {
     expect(finish.classList.contains(FINISH_CLASS)).toBe(true);
   });
 
-  test("«Выкрикнуть» НЕ трогаем — от неё и уводим", () => {
-    // Уведи мы её вправо, она встала бы ровно туда, куда уходит «Завершите
-    // речь», и подмена на месте вернулась бы.
+  test("по умолчанию «Выкрикнуть» остаётся по центру", () => {
+    // Уедь она вправо, встала бы ровно туда, куда уходит «Завершите речь», и
+    // подмена под пальцем вернулась бы.
     buildControls(["Выкрикнуть"]);
-    markButtons();
+    controlsSafetyFeature.enable(ctx);
     const [outcry] = centerButtons();
-    expect(outcry.classList.contains(FINISH_CLASS)).toBe(false);
-    expect(outcry.classList.contains(GUESS_CLASS)).toBe(false);
+    expect(outcry.classList.contains(OUTCRY_CLASS), "метку ставим всегда").toBe(true);
+    expect(getComputedStyle(outcry).marginLeft, "но никуда не двигаем").not.toBe("auto");
+    expect(getComputedStyle(outcry).marginRight).not.toBe("auto");
+  });
+
+  test("дефолты — это прежняя безопасная раскладка", () => {
+    // Настройка появилась позже самой фичи: молча сменить поведение у всех,
+    // кто ничего не менял, нельзя.
+    expect(DEFAULT_CONTROL_POSITIONS).toEqual({ finish: "right", outcry: "center", guess: "left" });
+    expect(readPositions(null)).toEqual(DEFAULT_CONTROL_POSITIONS);
+    // Мусор из storage не должен обнулять раскладку.
+    expect(readPositions({ ctl_pos_finish: "чёрт-те что" } as never).finish).toBe("right");
   });
 
   test("английский интерфейс понимается так же", () => {
     // Сайт двуязычный: на EN подписи другие, а опасность та же.
-    expect(classifyButton("End the speech")).toBe(FINISH_CLASS);
-    expect(classifyButton("Make a guess")).toBe(GUESS_CLASS);
-    expect(classifyButton("Reset guess")).toBe(GUESS_CLASS);
-    expect(classifyButton("Outcry"), "выкрик не наш").toBeNull();
+    expect(classifyButton("End the speech")).toBe("finish");
+    expect(classifyButton("Make a guess")).toBe("guess");
+    expect(classifyButton("Reset guess")).toBe("guess");
+    expect(classifyButton("Outcry")).toBe("outcry");
   });
 
   test("подпись с лишними пробелами и регистром всё равно узнаётся", () => {
-    expect(classifyButton("  ЗАВЕРШИТЕ   РЕЧЬ ")).toBe(FINISH_CLASS);
+    expect(classifyButton("  ЗАВЕРШИТЕ   РЕЧЬ ")).toBe("finish");
     expect(classifyButton("")).toBeNull();
     expect(classifyButton("Готов")).toBeNull();
   });
@@ -94,6 +112,27 @@ describe("что и куда уезжает", () => {
 });
 
 describe("жизнь на живой странице", () => {
+  test("раскладка берётся из настроек и меняется без перезагрузки", () => {
+    // Ради этого настройка и делалась: перестановка не должна стоить релиза.
+    buildControls(["Завершите речь"]);
+    controlsSafetyFeature.enable(ctx);
+    const finish = centerButtons()[0];
+    expect(getComputedStyle(finish).marginLeft).toBe("auto");
+
+    controlsSafetyFeature.update?.({ settings: { ctl_pos_finish: "left" } } as never);
+    expect(getComputedStyle(finish).marginRight, "уехала влево").toBe("auto");
+    expect(getComputedStyle(finish).marginLeft).not.toBe("auto");
+
+    controlsSafetyFeature.update?.({ settings: { ctl_pos_finish: "center" } } as never);
+    expect(getComputedStyle(finish).marginLeft, "центр — без отступов вовсе").not.toBe("auto");
+    expect(getComputedStyle(finish).marginRight).not.toBe("auto");
+  });
+
+  test("центр не порождает CSS-правил", () => {
+    // Правило «margin: 0» перебило бы вёрстку сайта там, где мы не просили.
+    expect(styleText({ finish: "center", outcry: "center", guess: "center" })).toBe("");
+  });
+
   test("Vue переиспользовал узел под другое действие — метка снимается", () => {
     // Ровно этот случай и опасен: узел был «Завершите речь», стал
     // «Выкрикнуть». Оставь мы класс — выкрик уехал бы вправо, туда, где
@@ -106,6 +145,7 @@ describe("жизнь на живой странице", () => {
     button.textContent = "Выкрикнуть";
     markButtons();
     expect(button.classList.contains(FINISH_CLASS)).toBe(false);
+    expect(button.classList.contains(OUTCRY_CLASS), "и появляется метка нового действия").toBe(true);
   });
 
   test("повторный проход НИЧЕГО не пишет в DOM", async () => {
@@ -129,14 +169,14 @@ describe("жизнь на живой странице", () => {
     // стиль, а не наличие метки: именно автоотступ и разводит кнопки, а при
     // одной кнопке в центре только он и работает (порядок бессмысленен).
     buildControls(["Завершите речь"]);
-    controlsSafetyFeature.enable({ settings: {} } as never);
+    controlsSafetyFeature.enable(ctx);
     const finish = centerButtons()[0];
     expect(getComputedStyle(finish).marginLeft, "прижата к правому краю").toBe("auto");
     expect(getComputedStyle(finish).marginRight).not.toBe("auto");
 
     controlsSafetyFeature.disable();
     buildControls(["Оставить ЛХ"]);
-    controlsSafetyFeature.enable({ settings: {} } as never);
+    controlsSafetyFeature.enable(ctx);
     const guess = centerButtons()[0];
     expect(getComputedStyle(guess).marginRight, "прижата к левому краю").toBe("auto");
     expect(getComputedStyle(guess).marginLeft).not.toBe("auto");
@@ -144,7 +184,7 @@ describe("жизнь на живой странице", () => {
 
   test("выключение снимает и стиль, и все метки", () => {
     buildControls(["Завершите речь", "Оставить ЛХ"]);
-    controlsSafetyFeature.enable({ settings: {} } as never);
+    controlsSafetyFeature.enable(ctx);
     expect(document.getElementById("pn-controls-safety")).not.toBeNull();
     expect(document.querySelectorAll(`.${FINISH_CLASS}, .${GUESS_CLASS}`)).toHaveLength(2);
 

@@ -23,6 +23,7 @@ import {
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
 // Список углов — общий с content-скриптом (см. shared/nick-plate).
 import { PLATE_POSITIONS } from "@shared/nick-plate";
+import { readControlPosition } from "@shared/controls-layout";
 import { escapeHtml } from "@core/escape";
 import {
   loadNotes,
@@ -1018,6 +1019,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     set("ws_full_log_enabled", items.ws_full_log_enabled);
     set("safe_controls_layout_enabled", items.safe_controls_layout_enabled);
+    for (const kind of ["finish", "outcry", "guess"] as const) {
+      const sel = $<HTMLSelectElement>(`ctl_pos_${kind}`);
+      // Мусор из storage не должен оставлять селект пустым — нормализуем.
+      if (sel) sel.value = readControlPosition(kind, (items as unknown as Record<string, unknown>)[`ctl_pos_${kind}`]);
+    }
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
     set("debug_logging_enabled", items.debug_logging_enabled);
@@ -1114,6 +1120,9 @@ document.addEventListener("DOMContentLoaded", () => {
       nick_plate_position: $<HTMLSelectElement>("nick_plate_position")?.value || "default",
       ws_full_log_enabled: cb("ws_full_log_enabled", false),
       safe_controls_layout_enabled: cb("safe_controls_layout_enabled", true),
+      ctl_pos_finish: $<HTMLSelectElement>("ctl_pos_finish")?.value || "right",
+      ctl_pos_outcry: $<HTMLSelectElement>("ctl_pos_outcry")?.value || "center",
+      ctl_pos_guess: $<HTMLSelectElement>("ctl_pos_guess")?.value || "left",
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
       debug_logging_enabled: cb("debug_logging_enabled", true),
@@ -1229,6 +1238,9 @@ document.addEventListener("DOMContentLoaded", () => {
     "nick_plate_position",
     "ws_full_log_enabled",
     "safe_controls_layout_enabled",
+    "ctl_pos_finish",
+    "ctl_pos_outcry",
+    "ctl_pos_guess",
     "f5_refresh_fix_enabled",
     "update_check_enabled",
     "debug_logging_enabled",

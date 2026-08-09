@@ -47,6 +47,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // случайного выкрика — цена ошибки (потраченный фол) выше, чем привычка
   // к прежнему месту кнопки (просьба владельца 09.08.2026).
   safe_controls_layout_enabled: true,
+  // Дефолты = прежняя зашитая раскладка: конец речи и выкрик по разным краям.
+  ctl_pos_finish: "right",
+  ctl_pos_outcry: "center",
+  ctl_pos_guess: "left",
   f5_refresh_fix_enabled: true,
   hotkey_role_fake: "KeyF",
   hotkey_role_reset: "KeyE",
