@@ -301,6 +301,28 @@ export const roomProbes: Record<string, Probe> = {
     /\["player-number","player-"\.concat\(\w+\.id\)\][^)]*\)[^)]*textContent:v\(\w+\.id\+1\)/,
     "PlayerNumber: класс player-<id>, текст id+1 (id 0-based, подпись с единицы)",
   ),
+  /**
+   * Инициатор паузы приходит с сервера: сайт читает `pause.initiatorId` из
+   * состояния игры и прокидывает его в обработчик паузы (сам обработчик
+   * поле игнорирует — именно поэтому «кто поставил» нигде не видно). На
+   * этом стоит фича pause-initiator: пропадёт поле — фича замолчит, и
+   * узнать об этом надо тестом, а не по жалобе.
+   */
+  pauseInitiatorInState: re(
+    /\w+\.pause&&\w+\.pause\.initiatorId&&\(\w+=\w+\.pause\.initiatorId\)/,
+    "состояние игры несёт pause.initiatorId",
+  ),
+  /**
+   * …и доезжает до обработчика паузы. ВАЖНО про честность формулировки: это
+   * ВНУТРЕННИЙ вызов сайта (`e.on_start_pause({…, initiatorId:f})`), а не
+   * доказательство того, что поле есть в проводном событии `on_start_pause`.
+   * Что кладёт туда сервер, из бандла не следует — обработчик поле не
+   * читает. Проверять это можно только живой сессией (ревью 08.08.2026).
+   */
+  pauseInitiatorReachesHandler: re(
+    /on_start_pause\(\{time:\w+,voted:[^}]*initiatorId:\w+\}\)/,
+    "сайт передаёт initiatorId в свой обработчик паузы (внутренний вызов)",
+  ),
   /** Футер статистики: «Поиск игры» ведёт на /game-search (fromGame). */
   statsFooterSearchLink: re(
     /endGameLink:function\(\)\{return\{link:"\/game-search"/,

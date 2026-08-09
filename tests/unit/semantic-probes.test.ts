@@ -144,6 +144,12 @@ describe("каждая проба умирает от своего дрифта"
       // replaceAll: путь зрителя встречается в окне self_strike дважды
       // (немедленный редирект и ссылка continue_as_viewer).
       (t) => t.replaceAll('"/game?role=viewer&game_id="', '"/spectate?game_id="')],
+    ["pauseInitiatorInState: инициатор пропал из состояния игры", roomProbes, "pauseInitiatorInState", ROOM,
+      // Единственный источник «кто поставил паузу» — если сайт уберёт поле,
+      // фича замолчит, и узнать об этом надо тестом, а не по жалобе.
+      (t) => t.replace(/\.pause\.initiatorId/g, ".pause.startedBy")],
+    ["pauseInitiatorReachesHandler: id больше не доезжает до обработчика паузы", roomProbes, "pauseInitiatorReachesHandler", ROOM,
+      (t) => t.replace("initiatorId:f", "unused:f")],
     ["playerInfoPlate: у плашки пропал сайтовый клик превью", roomProbes, "playerInfoPlate", ROOM,
       // Если сайт уберёт свой onClick, гасить всплытие станет незачем —
       // и это надо заметить, а не гасить чужие клики «на всякий случай».

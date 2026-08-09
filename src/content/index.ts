@@ -14,6 +14,7 @@ import { clearToasts } from "@core/toast";
 import { setupNicknameLengthsResponder } from "./nickname-lengths";
 import { setupDiagnostics } from "./diag";
 import { startOrphanWatch, stopOrphanWatch } from "./orphan-watch";
+import { PROBE_FLAG_KEY } from "./page/room-probe-inject";
 
 import { searchFeature } from "./features/search";
 import { autoStartFeature } from "./features/auto-start";
@@ -31,6 +32,7 @@ import { queuePeekFeature } from "./features/queue-peek";
 import { queueRequeueFeature } from "./features/queue-requeue";
 import { postgameSearchFeature } from "./features/postgame-search";
 import { nickPlateFeature } from "./features/nick-plate";
+import { pauseInitiatorFeature } from "./features/pause-initiator";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -51,6 +53,7 @@ const manager = new FeatureManager().register(
   queueRequeueFeature,
   postgameSearchFeature,
   nickPlateFeature,
+  pauseInitiatorFeature,
   obsPanelFeature,
   twitchPanelFeature,
 );
@@ -147,6 +150,30 @@ void getSetting("extension_enabled")
   .then((on) => setupUrlRouter(on));
 setupNicknameLengthsResponder();
 setupDiagnostics();
+
+/**
+ * Зеркало настройки «кто поставил паузу» в localStorage страницы.
+ *
+ * Ранний инжектор зонда (document_start) обязан решить «ставить или нет»
+ * СИНХРОННО — иначе он опоздает к созданию сокета комнаты, ради чего и
+ * существует. storage расширения асинхронный, поэтому единственную нужную
+ * ему крупицу состояния держим здесь: пишем при загрузке и на каждое
+ * изменение настройки. Значение применится со следующей загрузки страницы —
+ * зонд ставится один раз и снимается только перезагрузкой.
+ */
+function mirrorProbeFlag(on: boolean): void {
+  try {
+    localStorage.setItem(PROBE_FLAG_KEY, on ? "1" : "0");
+  } catch {
+    /* приватный режим: зонд останется на дефолте — это его штатное поведение */
+  }
+}
+void getSetting("pause_initiator_enabled")
+  .catch(() => true)
+  .then((on) => mirrorProbeFlag(on !== false));
+onSettingsChanged((patch) => {
+  if ("pause_initiator_enabled" in patch) mirrorProbeFlag(patch.pause_initiator_enabled !== false);
+});
 
 // Сторож осиротевшей вкладки (F5-баннер). Гейт по мастер-выключателю:
 // выключенное расширение не имеет права напоминать о себе баннером.

@@ -16,6 +16,11 @@ export default defineConfig({
     // PAGE-скрипт диагностики подключения (MAIN world, инжект тегом).
     // Самодостаточен: без импортов core/* (см. шапку файла).
     "conn-diag-page": "src/content/page/conn-diag-page.ts",
+    // Зонд комнаты: PAGE-скрипт (мир страницы) и его ранний инжектор
+    // (content-скрипт на document_start — сокет комнаты создаётся раньше,
+    // чем грузится основной content.js).
+    "room-probe-page": "src/content/page/room-probe-page.ts",
+    "room-probe-inject": "src/content/page/room-probe-inject.ts",
   },
   outDir: ".dist-js",
   format: ["iife"],

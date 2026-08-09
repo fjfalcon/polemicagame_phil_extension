@@ -98,6 +98,22 @@ export const SITE = {
    * держим в SITE, чтобы их сторожил контрактный тест по живым бандлам.
    */
   roomMatchEnded: ".ended.ended-mafia, .ended.ended-civilian",
+  /**
+   * Экран паузы. Сайт рисует его тем же блоком `.ended`, что итог игры и
+   * промах мафии, но с классом `ended-pause` (contClasses у RollerFixedState:
+   * PAUSE → "ended-pause"). Сюда фича pause-initiator дописывает, кто паузу
+   * поставил, — сайт этого не показывает нигде.
+   */
+  roomPauseScreen: ".ended.ended-pause",
+  /**
+   * Плитка СУДЬИ. Сайт рисует её обычным компонентом Player с id = 10
+   * (`isPlayerJudge(e) { return e === this.$root.totalPlayers }`, totalPlayers
+   * = 11 при судье), но помечает классом. Без этой метки пауза от судьи
+   * подписывалась бы несуществующим местом «№11».
+   */
+  judgeTileClass: "judge-player",
+  /** Своя плитка — нужна, чтобы отличить «паузу поставили вы». */
+  myPlayerTile: ".player.my-player",
   /** Обратный отсчёт роспуска: «Игра будет распущена через MM:SS». */
   disbandmentTimer: ".disbandment-timer",
   /** Отметка «Готов» на СВОЕЙ плитке (player__topleftmenu). */

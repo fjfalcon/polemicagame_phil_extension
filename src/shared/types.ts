@@ -69,6 +69,8 @@ export interface Settings {
   requeue_after_lobby_fail_enabled: boolean;
   /** Кнопка «В поиск» после конца игры/смерти: выйти из игры и снова в очередь. */
   postgame_requeue_enabled: boolean;
+  /** Показывать, кто поставил паузу (сайт этого не сообщает). */
+  pause_initiator_enabled: boolean;
   /** Свернуть ники игроков «гармошкой» — видна только цифра. */
   compact_nicknames_enabled: boolean;
   /** Угол плитки для плашки игрока: default | top-left | top-right | bottom-right. */
