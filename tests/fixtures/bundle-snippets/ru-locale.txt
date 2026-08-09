@@ -13,3 +13,4 @@
 тов",readiness_timeout:"Игра будет распущена через",confirm_continue_ga
 /* подписи кнопок центра (сняты с живой RU.js 09.08.2026) */
 speech_player_finish:"Завершите речь",outcry:"Выкрикнуть",send_guess:"Оставить ЛХ",cancel_guess:"Сбросить ЛХ",
+waiting_for_game:"Ожидание начала игры",

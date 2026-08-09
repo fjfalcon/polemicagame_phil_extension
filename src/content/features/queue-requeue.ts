@@ -275,6 +275,12 @@ function norm(text: string | null | undefined): string {
  * момент пустой, но он ЕСТЬ: фича видела его на первом же тике, ставила
  * `gameStarted` и молча выключала себя на всю жизнь страницы.
  */
+/** Текст стадии говорит об ИДУЩЕМ матче (а не об ожидании его начала). */
+export function isRunningStageText(text: string): boolean {
+  if (text.length === 0) return false;
+  return !(TEXT.waitingForGameStage as readonly string[]).some((m) => text.includes(m));
+}
+
 function matchIsRunning(): boolean {
   // Пауза/промах/итог игры рисуются вместо роллера, стадии там нет вообще —
   // но все три бывают только после старта матча (ревью 02.08.2026).
@@ -284,8 +290,13 @@ function matchIsRunning(): boolean {
   // Непустой текст обязателен: в свежезагруженной комнате сайт рисует ТРИ
   // пустых `.substage` (массив substages в data фиксирован: current/next/temp,
   // а текст берётся из ещё не пришедшей стадии).
+  //
+  // И этого мало: пока состояние комнаты не пришло, `gameView` не определён,
+  // тернарник роллера уходит в ветку ОБЫЧНОЙ стадии (не «набор игроков») и
+  // пишет «Ожидание начала игры». Такой текст непустой — и лобби, в которое
+  // мы только что вошли, читалось как идущий матч (жалоба 09.08.2026).
   return Array.from(document.querySelectorAll<HTMLElement>(SITE.runningStageMarkers)).some(
-    (el) => norm(el.textContent).length > 0,
+    (el) => isRunningStageText(norm(el.textContent)),
   );
 }
 

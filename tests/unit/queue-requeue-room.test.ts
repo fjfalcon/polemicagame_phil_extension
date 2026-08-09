@@ -173,6 +173,59 @@ describe("этап 2: комната до старта игры", () => {
     expect(sessionStorage.getItem(PENDING_KEY)).not.toBeNull();
   });
 
+  test("«Ожидание начала игры» — это НЕ идущий матч (жалоба 09.08.2026)", () => {
+    // Пока состояние комнаты не пришло, gameView не определён, тернарник
+    // роллера уходит в ветку ОБЫЧНОЙ стадии (а не «набор игроков») и пишет
+    // «Ожидание начала игры». Текст непустой — и лобби, в которое игрок
+    // только что вошёл, читалось как идущий матч: фича выключала себя через
+    // секунду после входа, а развал лобби потом никто не ловил.
+    roomJustLoaded();
+    queueRequeueFeature.enable(ctx);
+    document.body.innerHTML = `
+      <div class="roller">
+        <span class="stage">
+          <div class="stage__name">Ожидание начала игры</div>
+        </span>
+        <div class="disbandment-timer">Игра будет распущена через 00:20</div>
+      </div>
+      <div class="player my-player">
+        <div class="player__topleftmenu"><div class="player__readiness"><span>Готов</span></div></div>
+      </div>`;
+    domSubscriber?.();
+    expect(sessionStorage.getItem(PENDING_KEY), "возврат обязан остаться взведённым").not.toBeNull();
+  });
+
+  test("английский интерфейс: «Waiting for game» тоже не матч", () => {
+    roomJustLoaded();
+    queueRequeueFeature.enable(ctx);
+    document.body.innerHTML = `
+      <div class="roller">
+        <span class="stage"><div class="stage__name">Waiting for game</div></span>
+        <div class="disbandment-timer">Игра будет распущена через 00:20</div>
+      </div>
+      <div class="player my-player">
+        <div class="player__topleftmenu"><div class="player__readiness"><span>Готов</span></div></div>
+      </div>`;
+    domSubscriber?.();
+    expect(sessionStorage.getItem(PENDING_KEY)).not.toBeNull();
+  });
+
+  test("настоящая стадия матча по-прежнему выключает возвраты", () => {
+    // Обратная сторона правки: исключение не должно съесть живые стадии.
+    roomJustLoaded();
+    queueRequeueFeature.enable(ctx);
+    document.body.innerHTML = `
+      <div class="roller">
+        <span class="stage"><div class="stage__name">Речь игрока</div></span>
+        <div class="disbandment-timer">Игра будет распущена через 00:20</div>
+      </div>
+      <div class="player my-player">
+        <div class="player__topleftmenu"><div class="player__readiness"><span>Готов</span></div></div>
+      </div>`;
+    domSubscriber?.();
+    expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
+  });
+
   test("пауза и итог игры рисуются вместо роллера — это тоже идущий матч", () => {
     // fixedState (пауза/промах/победа) подменяет роллер целиком: ни .stage,
     // ни .new-stage там нет, и без этого правила F5 прямо в паузу оставлял бы

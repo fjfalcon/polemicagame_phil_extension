@@ -53,6 +53,7 @@
 import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { SITE, TEXT, hasPhaseMarker, matchFinishedVisible } from "@core/selectors";
 import { isGameRoomPath, isSearchPath } from "@shared/routes";
+import { isRunningStageText } from "./queue-requeue";
 import { log } from "@core/log";
 import { fetchQueueState, formatQueues } from "@core/queue-state";
 import { onMessage, sendRuntime } from "@core/messaging";
@@ -918,8 +919,10 @@ function roomHoldsLiveMatch(): boolean {
   if (isEliminated()) return false;
   if (document.querySelector(SITE.pregameScreen)) return true;
   if (document.querySelector(SITE.roomFixedState)) return true;
+  // «Ожидание начала игры» — стадия ДО прихода состояния комнаты, матчем её
+  // считать нельзя (см. queue-requeue.isRunningStageText и жалобу 09.08.2026).
   return Array.from(document.querySelectorAll<HTMLElement>(SITE.runningStageMarkers)).some(
-    (el) => norm(el.textContent).length > 0,
+    (el) => isRunningStageText(norm(el.textContent)),
   );
 }
 

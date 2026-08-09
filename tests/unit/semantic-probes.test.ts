@@ -88,6 +88,8 @@ describe("каждая проба умирает от своего дрифта"
     // room
     ["readyActiveBoundToVoted: active отвязан от voted", roomProbes, "readyActiveBoundToVoted", ROOM,
       (t) => t.replace(/\{active:(\w+(\.\$parent)?)\.votingForGameStart\.voted\}/, "{active:$1.votingForGameStart.inProgress}")],
+    ["waitingForGameLabel: стадия ожидания переименована", ruLocaleProbes, "waitingForGameLabel", RU,
+      (t) => t.replace('waiting_for_game:"Ожидание начала игры"', 'waiting_for_game:"Подготовка"')],
     ["controlActionLabels: «Завершите речь» переименована", ruLocaleProbes, "controlActionLabels", RU,
       (t) => t.replace('speech_player_finish:"Завершите речь"', 'speech_player_finish:"Закончить"')],
     ["rollerPregameTernary: стадия переименована", roomProbes, "rollerPregameTernary", ROOM,

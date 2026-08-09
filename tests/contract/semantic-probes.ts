@@ -475,6 +475,16 @@ export const ruLocaleProbes: Record<string, Probe> = {
       detail: `подписи кнопок действий в центре ряда (${missing.join("; ") || "ок"})`,
     };
   },
+  /**
+   * Текст стадии ДО прихода состояния комнаты. По нему queue-requeue и
+   * postgame-search отличают свежезагруженную комнату от идущего матча —
+   * переименует сайт, и возврат после развала снова начнёт выключаться сам
+   * (жалоба 09.08.2026).
+   */
+  waitingForGameLabel: (text) => ({
+    ok: text.includes('waiting_for_game:"Ожидание начала игры"'),
+    detail: "подпись стадии ожидания начала игры",
+  }),
   pauseLabels: (text) => ({
     ok:
       text.includes('pause:"Пауза"') &&
