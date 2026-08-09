@@ -42,6 +42,8 @@ export interface Settings {
   btn_stats_enabled: boolean;
   btn_note_enabled: boolean;
   btn_last_games_enabled: boolean;
+  /** Кнопка «пересечения»: сколько игр сыграно с этим игроком и кем он был. */
+  btn_crossover_enabled: boolean;
   btn_hide_video_enabled: boolean;
   /** Квадратик-метка роли у игрока (мой read, сбрасывается за игру). */
   role_marker_enabled: boolean;

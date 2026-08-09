@@ -995,6 +995,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("btn_stats_enabled", items.btn_stats_enabled);
     set("btn_note_enabled", items.btn_note_enabled);
     set("btn_last_games_enabled", items.btn_last_games_enabled);
+    set("btn_crossover_enabled", items.btn_crossover_enabled);
     set("btn_hide_video_enabled", items.btn_hide_video_enabled);
     set("role_marker_enabled", items.role_marker_enabled);
     set("compact_nicknames_enabled", items.compact_nicknames_enabled);
@@ -1095,6 +1096,7 @@ document.addEventListener("DOMContentLoaded", () => {
       btn_stats_enabled: cb("btn_stats_enabled", true),
       btn_note_enabled: cb("btn_note_enabled", true),
       btn_last_games_enabled: cb("btn_last_games_enabled", true),
+      btn_crossover_enabled: cb("btn_crossover_enabled", true),
       btn_hide_video_enabled: cb("btn_hide_video_enabled", true),
       role_marker_enabled: cb("role_marker_enabled", false),
       compact_nicknames_enabled: cb("compact_nicknames_enabled", false),
@@ -1208,6 +1210,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "btn_stats_enabled",
     "btn_note_enabled",
     "btn_last_games_enabled",
+    "btn_crossover_enabled",
     "btn_hide_video_enabled",
     "role_marker_enabled",
     "compact_nicknames_enabled",

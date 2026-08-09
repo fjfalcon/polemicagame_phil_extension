@@ -265,6 +265,66 @@ function enhance(gameData: any): void {
   }, 10000);
 }
 
+/** Класс нашей ссылки на профиль — по нему же идёт идемпотентность и уборка. */
+const PROFILE_LINK_CLASS = "pn-profile-link";
+
+/**
+ * Ники игроков в таблице разбора → ссылки на их профили.
+ *
+ * Просьба владельца 09.08.2026: со страницы разбора некуда перейти к игроку,
+ * а именно там чаще всего и хочется — «кто это вообще был».
+ *
+ * id берём из данных матча (`data.players[].player`), а не из разметки:
+ * позиция и ник в ячейке могут повторяться, id — нет. Привязка сначала по
+ * позиции (`data-player` у ячейки), и только потом по тексту: у ника нет
+ * гарантии уникальности внутри таблицы, а позиция уникальна всегда.
+ *
+ * Запись строго идемпотентна (§4 п.1): своя же ссылка второй раз не
+ * переписывается, иначе подписчик onDomChange будил бы сам себя.
+ */
+function linkPlayerNames(table: HTMLElement, players: any[]): void {
+  const byPosition = new Map<string, { id: number; name: string }>();
+  const byName = new Map<string, { id: number; name: string }>();
+  for (const p of players) {
+    const id = typeof p?.player === "number" ? p.player : Number(p?.player);
+    const name = typeof p?.username === "string" ? p.username.trim() : "";
+    if (!Number.isSafeInteger(id) || id <= 0 || !name) continue;
+    const entry = { id, name };
+    if (p.position !== undefined) byPosition.set(String(p.position), entry);
+    byName.set(name, entry);
+  }
+  if (byPosition.size === 0 && byName.size === 0) return;
+
+  table.querySelectorAll<HTMLElement>(SITE.statsUsernameCell).forEach((cell) => {
+    const existing = cell.querySelector<HTMLAnchorElement>(`.${PROFILE_LINK_CLASS}`);
+    const shown = (existing ?? cell).textContent?.trim() ?? "";
+    const entry = byPosition.get(cell.dataset.player ?? "") ?? byName.get(shown);
+    if (!entry) return;
+    const href = `/profile/${entry.id}`;
+    if (existing) {
+      if (existing.getAttribute("href") !== href) existing.setAttribute("href", href);
+      return;
+    }
+    const link = document.createElement("a");
+    link.className = PROFILE_LINK_CLASS;
+    link.setAttribute("href", href);
+    // Новая вкладка: разбор матча открыт не для того, чтобы его потерять.
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.title = "Открыть профиль игрока";
+    link.textContent = shown || entry.name;
+    cell.textContent = "";
+    cell.appendChild(link);
+  });
+}
+
+/** Снять наши ссылки, вернув ячейкам обычный текст. */
+function unlinkPlayerNames(root: ParentNode = document): void {
+  root.querySelectorAll<HTMLAnchorElement>(`.${PROFILE_LINK_CLASS}`).forEach((link) => {
+    link.replaceWith(document.createTextNode(link.textContent ?? ""));
+  });
+}
+
 function removeEnhancements(): void {
   document
     .querySelectorAll(
@@ -377,6 +437,8 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
   const phases = processGamePhases(gameDetails);
   // Один раз на перерисовку: enhanceTable синхронна, вид посреди неё не меняется.
   const classic = viewMode() === "classic";
+
+  linkPlayerNames(table, players);
 
   const rows = Array.from(table.querySelectorAll<HTMLElement>(SITE.statsRow));
   const roleRow = rows.find(
@@ -1635,6 +1697,11 @@ function stopMatchRoute(preserveSnapshot = true): void {
   for (const style of injectedStyles) style.remove();
   injectedStyles.length = 0;
   removeEnhancements();
+  // Ссылки на профили снимаем ТОЛЬКО здесь, при уходе со страницы или
+  // выключении фичи. В removeEnhancements нельзя: он зовётся на каждой
+  // перерисовке, и ссылки пересоздавались бы заново — та самая петля
+  // «подписчик будит сам себя» (§4 п.1), которую поймал тест.
+  unlinkPlayerNames();
   restoreHeader();
   restoreInlineStyles();
   pendingGameData = null;

@@ -20,6 +20,8 @@
  */
 import { browser } from "@core/env";
 import { log } from "@core/log";
+import { crossoverWith, type Crossover } from "@core/crossover";
+import { getOwnUserId } from "@core/own-user";
 import { showToast } from "@core/toast";
 import { onDomChange, paintNickEl } from "@core/dom";
 import { onMessage, sendRuntime } from "@core/messaging";
@@ -40,6 +42,7 @@ import {
   NOTES_VERSION,
   buildNickColorIndex,
   nickColorFrom,
+  withNickHistory,
 } from "@core/notes-store";
 import type { NoteRecord, NotesMap, NickColorIndex } from "@core/notes-store";
 import type { Feature, FeatureContext } from "@core/feature";
@@ -112,6 +115,12 @@ const VERSION = NOTES_VERSION;
 
 /** TTL кэшей статистики: за игровой вечер MMR меняется каждой игрой. */
 const STATS_TTL_MS = 5 * 60 * 1000;
+/**
+ * Задержка намерения для кнопки пересечений: сводка стоит двух историй по
+ * 200 игр, и курсор, мазнувший по столу, не должен поднимать десяток пар
+ * запросов. Соседние кнопки дешевле и грузятся сразу.
+ */
+const CROSSOVER_INTENT_MS = 350;
 /** Пауза перед повторной попыткой после ошибки статистики (не долбим API). */
 const STATS_ERROR_BACKOFF_MS = 30 * 1000;
 /** TTL пустой истории игр: короче обычного, чтобы новые игры подтянулись. */
@@ -375,6 +384,9 @@ class PlayerNotesManager {
   private statsErrorAt = new Map<string, number>();
   /** Запросы истории игр в полёте (дедупликация одновременных hover'ов). */
   private lastGamesInFlight = new Map<string, Promise<LastGameEntry[]>>();
+  /** Пересечения: своя история весит 200 строк, дважды её не тянем. */
+  private crossoverCache = new Map<string, { at: number; data: Crossover | null }>();
+  private crossoverInFlight = new Map<string, Promise<Crossover | null>>();
   /** Тултипы, живущие порталом в body (для уборки осиротевших). */
   private portaledTooltips = new Set<HTMLElement>();
   /** Снятые в этой вкладке мьюты — не воскрешаем их при слиянии с диском. */
@@ -620,6 +632,8 @@ class PlayerNotesManager {
     this.playerStats.clear();
     this.lastGamesCache.clear();
     this.lastGamesInFlight.clear();
+    this.crossoverCache.clear();
+    this.crossoverInFlight.clear();
     this.statsErrorAt.clear();
     this.portaledTooltips.clear();
     for (const t of this.toasts) t.remove();
@@ -878,6 +892,17 @@ class PlayerNotesManager {
     return typeof note === "string" ? note : note.text || "";
   }
 
+  /**
+   * Прежние ники игрока. Есть только у записей с вечным ключом `u:<id>` —
+   * у ник-ключа прошлого имени взяться неоткуда, ключ им и является.
+   */
+  private getFormerNicks(username: string): string[] {
+    const note = this.getNote(username);
+    if (!note || typeof note === "string") return [];
+    const current = username.toLowerCase();
+    return (note.nicks ?? []).filter((n) => n.toLowerCase() !== current);
+  }
+
   private getNoteTag(username: string): string {
     const note = this.getNote(username);
     return note && typeof note !== "string" ? note.tag || "" : "";
@@ -977,7 +1002,7 @@ class PlayerNotesManager {
       if (!winner.nickColor && loser.nickColor) winner.nickColor = loser.nickColor;
     }
 
-    fresh[key] = { ...winner, nick: username };
+    fresh[key] = { ...winner, ...withNickHistory(winner, username) };
     for (const nk of freshNickKeys) delete fresh[nk];
 
     const migrationOps: NoteOp[] = [
@@ -2158,6 +2183,16 @@ class PlayerNotesManager {
     title.textContent = `Заметка для игрока ${username}`;
     title.style.cssText = "margin: 0 0 15px 0; color: white; font-size: 16px;";
 
+    // Прежние ники: заметка живёт на вечном id, а человек мог переименоваться
+    // — без этой строки узнать его было бы не по чему.
+    const formerNicks = this.getFormerNicks(username);
+    const former = document.createElement("div");
+    if (formerNicks.length > 0) {
+      former.textContent = `Раньше играл как: ${formerNicks.join(", ")}`;
+      former.style.cssText =
+        "margin: -8px 0 12px 0; color: rgba(255,255,255,.65); font-size: 12px;";
+    }
+
     const textarea = document.createElement("textarea");
     textarea.value = this.getNoteText(username);
     textarea.style.cssText = `
@@ -2359,7 +2394,7 @@ class PlayerNotesManager {
           nickColor: selectedNickColor || unseenColor || undefined,
           // nick обязателен у ЛЮБОЙ id-записи (в т.ч. при записи в openedKey
           // без резолвленного id) — по нему работает фолбэк-поиск.
-          ...(isIdKey(key) ? { nick: username } : {}),
+          ...(isIdKey(key) ? withNickHistory(this.notes[key], username) : {}),
         };
       } else if (unseen === undefined) {
         delete this.notes[key];
@@ -2461,7 +2496,7 @@ class PlayerNotesManager {
       if (e.target === overlay) close();
     });
 
-    modal.append(title, textarea, tagLabel, tagRow, nickColorLabel, nickColorRow, buttons);
+    modal.append(title, former, textarea, tagLabel, tagRow, nickColorLabel, nickColorRow, buttons);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
@@ -2493,7 +2528,7 @@ class PlayerNotesManager {
           version: VERSION,
           nickColor: color,
           // Ник храним только у id-ключей (у ник-ключей он и есть ключ).
-          ...(isIdKey(key) ? { nick: createNick } : {}),
+          ...(isIdKey(key) ? withNickHistory(this.notes[key], createNick) : {}),
         };
       } else if (typeof prev === "string") {
         // Легаси-строка: повышаем до записи, текст сохраняем.
@@ -3148,6 +3183,158 @@ class PlayerNotesManager {
     document.body.appendChild(overlay);
   }
 
+  /**
+   * userId игрока по нику. Порядок источников — от бесплатного к дорогому:
+   * уже загруженная статистика → заметка на вечном ключе (`u:<id>`) → запрос
+   * рейтинга. Раньше единственным путём был последний, и после перехода
+   * статистики на ленивую загрузку (9.0.0) наведение сразу на «Последние
+   * игры» всегда упиралось в сеть, а адрес рейтинга к тому же был мёртв
+   * (жалоба 01.08.2026: «Нет данных о последних играх»).
+   *
+   * Бросает, если id определить не удалось: честное «не удалось» лучше
+   * пустого ответа, который читается как «у игрока ничего нет».
+   */
+  private async resolveUserId(username: string, key: string): Promise<number | string> {
+    const stats = this.playerStats.get(key);
+    if (stats && !stats.ratingUnavailable && stats.id) return stats.id;
+    const fromNote = this.noteUserId(username);
+    if (fromNote !== undefined) return fromNote;
+    try {
+      const player = await findRatingPlayer(username);
+      if (!player) {
+        log.warn("player-notes", `player ${username} not found in rating`);
+        throw new Error("player id unresolved");
+      }
+      return player.user_id;
+    } catch (err) {
+      log.warn("player-notes", "player ID lookup failed", err);
+      throw err;
+    }
+  }
+
+  // ─────────── Статистика пересечений ───────────
+
+  /**
+   * Пересечение с игроком: сколько сыграно вместе и кем он в этих играх был.
+   *
+   * `undefined` — свой id неизвестен (в комнате шапки сайта нет, а на обычные
+   * страницы игрок ещё не заходил): это НЕ ошибка сети и говорить о ней надо
+   * иначе. `null` — не удалось загрузить историю; пустая сводка читалась бы
+   * как «вы никогда не играли вместе», а это другое утверждение.
+   */
+  private async getCrossover(username: string): Promise<Crossover | null | undefined> {
+    const key = username.toLowerCase();
+    const hit = this.crossoverCache.get(key);
+    if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
+    const inFlight = this.crossoverInFlight.get(key);
+    if (inFlight) return inFlight.catch(() => null);
+
+    const myId = await getOwnUserId();
+    if (myId === null) return undefined;
+
+    const promise = (async (): Promise<Crossover | null> => {
+      const theirId = await this.resolveUserId(username, key);
+      return crossoverWith(myId, theirId);
+    })();
+    this.crossoverInFlight.set(key, promise);
+    try {
+      const data = await promise;
+      // Кэшируем и неудачу: иначе каждый повторный наведённый курсор гнал бы
+      // два запроса по 200 строк (урок кэша последних игр, находка 7).
+      this.crossoverCache.set(key, { at: Date.now(), data });
+      return data;
+    } catch (e) {
+      log.warn("player-notes", "пересечения не сложились", e);
+      this.crossoverCache.set(key, { at: Date.now(), data: null });
+      return null;
+    } finally {
+      this.crossoverInFlight.delete(key);
+    }
+  }
+
+  /** Сводка пересечений в HTML. Числа — свои, ников и текстов игрока здесь нет. */
+  private formatCrossover(x: Crossover): string {
+    if (x.together === 0) {
+      return x.capped
+        ? "Общих игр в доступной истории нет<div style=\"opacity:.7;margin-top:4px\">видно последние 200 игр каждого</div>"
+        : "Вы ещё не играли вместе";
+    }
+    const winPct = Math.round((x.myWins / x.together) * 100);
+    const rows = [
+      `<b>Вместе игр: ${x.together}</b>`,
+      `Он был чёрным: ${x.theirBlack}`,
+      `В одной команде: ${x.sameTeam}`,
+      `Твои победы: ${x.myWins} (${winPct}%)`,
+    ];
+    const recent = x.recent
+      .map(
+        (r) => `
+        <div style="display:flex;align-items:center;gap:5px;margin-top:3px">
+          ${this.createRoleSvg(r.theirRole === "don" ? "godfather" : r.theirRole, 13)}
+          <span style="opacity:.75">${r.sameTeam ? "вместе" : "против"}</span>
+          <span style="color:${r.myWin ? "#4CAF50" : "#f44336"}">${r.myWin ? "победа" : "поражение"}</span>
+        </div>`,
+      )
+      .join("");
+    // Обрезанную историю обязаны показать: «вместе 3» и «3 за последние 200
+    // его игр» — разные утверждения, и второе легко принять за первое.
+    const note = x.capped
+      ? '<div style="opacity:.7;margin-top:5px">по последним 200 играм каждого</div>'
+      : "";
+    return `${rows.join("<br>")}<div style="margin-top:6px;opacity:.85">Последние общие:</div>${recent}${note}`;
+  }
+
+  private createCrossoverButton(username: string): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.className = OWN.crossoverButton;
+    button.dataset.username = username;
+    button.style.cssText = BUTTON_PLAIN_CSS;
+    button.innerHTML = `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="color: rgba(66, 103, 178, 0.9);">
+        <circle cx="9" cy="12" r="6" stroke="currentColor" stroke-width="2"/>
+        <circle cx="15" cy="12" r="6" stroke="currentColor" stroke-width="2"/>
+      </svg>
+    `;
+
+    const tooltip = document.createElement("div");
+    tooltip.className = OWN.tooltip;
+    tooltip.style.cssText = TOOLTIP_CSS;
+
+    let intent: ReturnType<typeof setTimeout> | null = null;
+    button.addEventListener("mouseenter", () => {
+      tooltip.innerHTML = "Загрузка...";
+      this.showTooltip(tooltip, button);
+      // Задержка намерения: сводка стоит ДВУХ историй по 200 игр, и курсор,
+      // мазнувший по столу, не должен поднимать десяток таких пар.
+      intent = setTimeout(() => {
+        intent = null;
+        void (async () => {
+          const data = await this.getCrossover(username);
+          if (tooltip.dataset.pnShown !== "1") return;
+          tooltip.innerHTML =
+            data === undefined
+              ? "Не знаю твой id — открой страницу поиска игры или свой профиль, и он запомнится"
+              : data === null
+                ? "Не удалось посчитать пересечения"
+                : this.formatCrossover(data);
+          this.showTooltip(tooltip, button);
+        })();
+      }, CROSSOVER_INTENT_MS);
+    });
+    button.addEventListener("mouseleave", () => {
+      if (intent) {
+        clearTimeout(intent);
+        intent = null;
+      }
+      this.hideTooltip(tooltip);
+    });
+
+    button.appendChild(tooltip);
+    this.tooltipAnchors.set(tooltip, button);
+    this.applyButtonTheme(button);
+    return button;
+  }
+
   // ─────────── История последних игр (с кэшем) ───────────
 
   /** Список игр; null — загрузить НЕ УДАЛОСЬ (это не «игр нет»). */
@@ -3179,34 +3366,7 @@ class PlayerNotesManager {
   private async fetchLastGames(username: string, key: string): Promise<LastGameEntry[]> {
     try {
       const dataPromise = (async (): Promise<LastGameEntry[]> => {
-        let userId: number | string | undefined;
-        const stats = this.playerStats.get(key);
-        if (stats && !stats.ratingUnavailable && stats.id) {
-          userId = stats.id;
-        } else {
-          // Сначала id, который у нас УЖЕ есть: из заметки на вечном ключе
-          // или со страницы профиля. Раньше единственным путём был запрос
-          // рейтинга, и после перехода статистики на ленивую загрузку
-          // (9.0.0) наведение сразу на «Последние игры» всегда упиралось в
-          // сеть — а адрес рейтинга к тому же был мёртв (жалоба 01.08.2026:
-          // «Нет данных о последних играх»).
-          userId = this.noteUserId(username);
-        }
-        if (userId === undefined) {
-          try {
-            const player = await findRatingPlayer(username);
-            if (!player) {
-              // id не определён — честнее сказать «не удалось», чем врать,
-              // что у игрока нет игр (ревью, мелочь 3).
-              log.warn("player-notes", `player ${username} not found in rating`);
-              throw new Error("player id unresolved");
-            }
-            userId = player.user_id;
-          } catch (err) {
-            log.warn("player-notes", "player ID lookup failed", err);
-            throw err;
-          }
-        }
+        const userId = await this.resolveUserId(username, key);
 
         try {
           // Настоящий таймаут через AbortSignal вместо Promise.race: race не
@@ -3427,6 +3587,7 @@ class PlayerNotesManager {
       s.btn_stats_enabled === false ? 0 : 1,
       s.btn_note_enabled === false ? 0 : 1,
       s.btn_last_games_enabled === false ? 0 : 1,
+      s.btn_crossover_enabled === false ? 0 : 1,
       s.btn_hide_video_enabled === false ? 0 : 1,
       // Наличие медиа — часть состава ряда: камера может подключиться позже,
       // и без пересборки кнопка «скрыть камеру» не появилась бы никогда.
@@ -3493,6 +3654,9 @@ class PlayerNotesManager {
       if (s.btn_last_games_enabled !== false) {
         iconsGroup.appendChild(this.createLastGamesButton(username));
       }
+      if (s.btn_crossover_enabled !== false) {
+        iconsGroup.appendChild(this.createCrossoverButton(username));
+      }
       if (s.btn_hide_video_enabled !== false && hasMedia) {
         iconsGroup.appendChild(this.createHideVideoButton(username, container));
       }
@@ -3540,6 +3704,7 @@ class PlayerNotesManager {
       `.${OWN.noteButton}[data-username=${sel}]`,
       `.${OWN.statsButton}[data-username=${sel}]`,
       `.${OWN.lastGamesButton}[data-username=${sel}]`,
+      `.${OWN.crossoverButton}[data-username=${sel}]`,
       `.${OWN.hideVideoButton}[data-username=${sel}]`,
     ].forEach((s) => root.querySelectorAll(s).forEach((b) => b.remove()));
   }

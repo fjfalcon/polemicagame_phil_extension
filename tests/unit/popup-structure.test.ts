@@ -173,6 +173,7 @@ describe("вкладка «Иконки» собрала всё про плит�
       "btn_stats_enabled",
       "btn_note_enabled",
       "btn_last_games_enabled",
+      "btn_crossover_enabled",
       "btn_hide_video_enabled",
       "camera_rotate_enabled",
       "player_mute_enabled",

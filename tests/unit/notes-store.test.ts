@@ -18,9 +18,12 @@ import {
   canonicalNoteKey,
   isSafeNoteKey,
   isSafeTag,
+  MAX_NICK_HISTORY,
+  mergeNickLists,
   mergeNotes,
   nickColorFrom,
   normalizeNoteRecord,
+  withNickHistory,
   type NoteRecord,
   type NotesMap,
 } from "@core/notes-store";
@@ -415,5 +418,59 @@ describe("color index and canonical identity", () => {
     });
     expect(nickColorFrom(index, 1, null)).toBe("#111");
     expect(nickColorFrom(index, null, "Alice")).toBe("#222");
+  });
+});
+
+describe("история ников", () => {
+  test("переименование сохраняет прошлое имя", () => {
+    const before: NoteRecord = { text: "врун", timestamp: NOW, nick: "Vasya" };
+    expect(withNickHistory(before, "Петя")).toEqual({ nick: "Петя", nicks: ["Vasya"] });
+  });
+
+  test("тот же ник в другом регистре историей не считается", () => {
+    // Сайт различает «Vasya» и «vasya», человек — нет. Иначе хвост забился бы
+    // одним и тем же именем и вытеснил настоящие прошлые ники.
+    const before: NoteRecord = { text: "", timestamp: NOW, nick: "Vasya" };
+    expect(withNickHistory(before, "vasya")).toEqual({ nick: "vasya" });
+  });
+
+  test("прежние имена копятся, свежие впереди, длина ограничена", () => {
+    let rec: NoteRecord = { text: "", timestamp: NOW, nick: "n0" };
+    for (let i = 1; i <= MAX_NICK_HISTORY + 2; i++) {
+      rec = { ...rec, ...withNickHistory(rec, `n${i}`) };
+    }
+    expect(rec.nick).toBe(`n${MAX_NICK_HISTORY + 2}`);
+    expect(rec.nicks).toHaveLength(MAX_NICK_HISTORY);
+    expect(rec.nicks?.[0], "самое свежее прошлое имя — первым").toBe(`n${MAX_NICK_HISTORY + 1}`);
+  });
+
+  test("у записи без прошлого ника хвост не появляется", () => {
+    expect(withNickHistory(undefined, "Петя")).toEqual({ nick: "Петя" });
+    expect(withNickHistory("легаси-текст", "Петя")).toEqual({ nick: "Петя" });
+  });
+
+  test("слияние двух устройств не теряет половину истории", () => {
+    // На каждом устройстве игрок застал СВОИ переименования: победа свежей
+    // записи целиком выкинула бы чужой хвост.
+    const a: NoteRecord = { text: "a", timestamp: NOW, nick: "Now", nicks: ["A1", "A2"] };
+    const b: NoteRecord = { text: "b", timestamp: NOW - 1000, nick: "Now", nicks: ["B1"] };
+    const merged = mergeNotes({ "u:1": a }, { "u:1": b });
+    const out = merged.merged["u:1"] as NoteRecord;
+    expect(out.nicks).toEqual(["A1", "A2", "B1"]);
+  });
+
+  test("текущий ник в хвост не попадает", () => {
+    expect(mergeNickLists(["Петя", "Vasya"], undefined, "Петя")).toEqual(["Vasya"]);
+  });
+
+  test("импорт чужого файла: мусор вместо истории не доезжает", () => {
+    const clean = normalizeNoteRecord({
+      text: "t",
+      timestamp: NOW,
+      nick: "Петя",
+      nicks: ["ок", 42, null, "тоже ок"],
+    });
+    expect(clean?.nicks).toEqual(["ок", "тоже ок"]);
+    expect(normalizeNoteRecord({ text: "t", timestamp: NOW, nicks: "строка" })?.nicks).toBeUndefined();
   });
 });

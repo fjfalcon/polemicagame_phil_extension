@@ -439,9 +439,11 @@ describe("§4.7 lifecycle heuristic", () => {
       reason: "timeline row listeners are removed with nodes; timers are tracked in module sets",
     },
     "src/content/features/player-notes.ts": {
-      listeners: 34,
+      listeners: 36,
       timers: 1,
-      reason: "modal/button handlers are removed with owned nodes; toast removal is a harmless one-shot",
+      reason:
+        "modal/button handlers are removed with owned nodes; toast removal is a harmless one-shot; " +
+        "+2 (9.13.0) — hover-обработчики кнопки пересечений живут на её же узле, а таймер намерения гасится в mouseleave",
     },
     "src/content/features/postgame-search.ts": {
       listeners: 1,

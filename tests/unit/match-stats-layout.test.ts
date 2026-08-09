@@ -80,6 +80,12 @@ function buildSitePage(scopeAttr: string | null): void {
           <div class="cell player"${scope}>Мирный</div>
         </div>
         <div class="row"${scope}>
+          <div class="cell title"${scope}>Игрок</div>
+          <div class="cell username"${scope} data-player="1">a</div>
+          <div class="cell username"${scope} data-player="2">a</div>
+          <div class="cell username"${scope}>b</div>
+        </div>
+        <div class="row"${scope}>
           <div class="cell title"${scope}>Итог</div>
           <div class="cell player"${scope}>1.5</div>
           <div class="cell player"${scope}>0.5</div>
@@ -92,8 +98,8 @@ function buildSitePage(scopeAttr: string | null): void {
 const GAME_DATA = {
   data: {
     players: [
-      { position: 1, role: 1, username: "a" },
-      { position: 2, role: 2, username: "b" },
+      { position: 1, role: 1, username: "a", player: 111 },
+      { position: 2, role: 2, username: "b", player: 222 },
     ],
     votes: [{ day: 1, voter: 2, candidate: 1, num: 1 }],
     shots: [{ night: 1, shooter: 1, target: 2 }],
@@ -215,5 +221,78 @@ describe("строки фаз наследуют Vue-scope сайта", () => {
       expect(cell.style.minWidth, "min-width остаётся за CSS сайта").toBe("");
       expect(cell.style.display, "раскладка чипов внутри ячейки — наша").toBe("flex");
     }
+  });
+});
+
+describe("ники в разборе ведут в профиль игрока", () => {
+  const links = (): HTMLAnchorElement[] =>
+    Array.from(document.querySelectorAll<HTMLAnchorElement>("a.pn-profile-link"));
+
+  test("ссылка ставится по позиции ячейки, а не по одному лишь тексту", () => {
+    // Позиция уникальна всегда, ник — нет. В таблице два игрока с ником «a»:
+    // по тексту оба уехали бы в ОДИН профиль, что и есть тихое враньё.
+    buildSitePage(SCOPE_ATTR);
+    matchStatsFeature.enable(ctx as never);
+    fireGameData();
+    const hrefs = links()
+      .filter((a) => a.textContent === "a")
+      .map((a) => a.getAttribute("href"));
+    expect(hrefs).toEqual(["/profile/111", "/profile/222"]);
+  });
+
+  test("без атрибута позиции выручает ник", () => {
+    buildSitePage(SCOPE_ATTR);
+    matchStatsFeature.enable(ctx as never);
+    fireGameData();
+    const byName = links().find((a) => a.textContent === "b");
+    expect(byName?.getAttribute("href")).toBe("/profile/222");
+  });
+
+  test("повторная отрисовка НИЧЕГО не пишет в DOM", () => {
+    // Таблицу перерисовывает Vue, а наш подписчик пишет снова. Считать узлы
+    // мало: пересоздание ссылки даёт то же их число, но будит наблюдатель на
+    // каждом проходе — это и есть петля из §4 п.1. Сторожим тождество узла.
+    buildSitePage(SCOPE_ATTR);
+    matchStatsFeature.enable(ctx as never);
+    fireGameData();
+    const first = links()[0];
+    fireGameData();
+    expect(links()).toHaveLength(3);
+    expect(links()[0], "узел обязан быть ТЕМ ЖЕ").toBe(first);
+    expect(document.querySelectorAll("a.pn-profile-link a")).toHaveLength(0);
+  });
+
+  test("игрок без валидного id ссылкой не становится", () => {
+    // Данные матча приходят с сайта: у гостя или битой записи id может не
+    // быть вовсе, и «/profile/undefined» вело бы в никуда.
+    buildSitePage(SCOPE_ATTR);
+    matchStatsFeature.enable(ctx as never);
+    document.dispatchEvent(
+      new CustomEvent("gameDataParsed", {
+        detail: {
+          ...GAME_DATA,
+          data: {
+            ...GAME_DATA.data,
+            players: [
+              { position: 1, role: 1, username: "a", player: null },
+              { position: 2, role: 2, username: "b", player: 222 },
+            ],
+          },
+        },
+      }),
+    );
+    vi.advanceTimersByTime(600);
+    expect(links().map((a) => a.getAttribute("href"))).toEqual(["/profile/222", "/profile/222"]);
+  });
+
+  test("выключение фичи возвращает ячейкам обычный текст", () => {
+    buildSitePage(SCOPE_ATTR);
+    matchStatsFeature.enable(ctx as never);
+    fireGameData();
+    expect(links().length).toBeGreaterThan(0);
+    matchStatsFeature.disable();
+    expect(links()).toHaveLength(0);
+    const cell = document.querySelector<HTMLElement>('.cell.username[data-player="1"]');
+    expect(cell?.textContent).toBe("a");
   });
 });

@@ -23,7 +23,18 @@ export type NoteRecord = {
   nickColor?: string;
   /** Последний известный ник — для экспорта/отображения записей с id-ключом. */
   nick?: string;
+  /**
+   * Прежние ники этого игрока, свежие первыми.
+   *
+   * Люди переименовываются, и узнать человека становится нечем — при том что
+   * заметка на него уже написана (ключ-то вечный, `u:<id>`). Копим короткий
+   * хвост, чтобы можно было сказать «раньше играл как …».
+   */
+  nicks?: string[];
 };
+
+/** Сколько прежних ников помним. Хвост нужен для узнавания, а не для архива. */
+export const MAX_NICK_HISTORY = 5;
 export type NotesMap = Record<string, NoteRecord | string>;
 
 /**
@@ -209,6 +220,13 @@ export function normalizeNoteRecord(raw: unknown, maxText = MAX_NOTE_TEXT): Note
   if (isSafeTag(r.tag)) rec.tag = r.tag;
   if (isSafeTag(r.nickColor)) rec.nickColor = r.nickColor;
   if (typeof r.nick === "string" && r.nick) rec.nick = r.nick.slice(0, MAX_NOTE_KEY);
+  if (Array.isArray(r.nicks)) {
+    const nicks = r.nicks
+      .filter((n): n is string => typeof n === "string" && n.length > 0)
+      .map((n) => n.slice(0, MAX_NOTE_KEY))
+      .slice(0, MAX_NICK_HISTORY);
+    if (nicks.length > 0) rec.nicks = nicks;
+  }
   return rec;
 }
 
@@ -233,6 +251,47 @@ function fieldsOf(note: NoteRecord | string | null | undefined): NoteRecord {
  * Правило симметрично: неважно, в каком аргументе приехала непустая запись
  * (тест-набор 01.08.2026, №4).
  */
+/**
+ * Слить списки прежних ников: свежие первыми, без повторов и без текущего.
+ * Сравнение регистронезависимое — сайт различает «Vasya» и «vasya», а
+ * человек нет.
+ */
+export function mergeNickLists(
+  a: string[] | undefined,
+  b: string[] | undefined,
+  current?: string,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  if (current) seen.add(current.toLowerCase());
+  for (const nick of [...(a ?? []), ...(b ?? [])]) {
+    const k = nick.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(nick);
+    if (out.length >= MAX_NICK_HISTORY) break;
+  }
+  return out;
+}
+
+/**
+ * Поля записи при появлении НОВОГО ника игрока: сам ник и хвост прежних.
+ * Вызывается всюду, где мы пишем `nick` у id-записи, — иначе переименование
+ * просто затирало бы прошлое имя, и узнавать человека было бы не по чему.
+ */
+export function withNickHistory(
+  prev: NoteRecord | string | null | undefined,
+  nick: string,
+): { nick: string; nicks?: string[] } {
+  const rec = fieldsOf(prev);
+  const previous = typeof rec.nick === "string" ? rec.nick : "";
+  // Отсев «того же ника в другом регистре» делает mergeNickLists — второй
+  // проверки здесь быть не должно: одно правило в двух местах расходится.
+  const carried = previous ? [previous, ...(rec.nicks ?? [])] : (rec.nicks ?? []);
+  const nicks = mergeNickLists(carried, undefined, nick);
+  return nicks.length > 0 ? { nick, nicks } : { nick };
+}
+
 function combineNotes(a: NoteRecord | string, b: NoteRecord | string): NoteRecord {
   const [winner, loser] = noteTimestamp(b) > noteTimestamp(a) ? [b, a] : [a, b];
   const w = fieldsOf(winner);
@@ -242,6 +301,10 @@ function combineNotes(a: NoteRecord | string, b: NoteRecord | string): NoteRecor
   if (!out.tag && l.tag) out.tag = l.tag;
   if (!out.nickColor && l.nickColor) out.nickColor = l.nickColor;
   if (!out.nick && l.nick) out.nick = l.nick;
+  // Историю ников СЛИВАЕМ, а не выбираем: на двух устройствах игрок мог
+  // застать разные переименования, и «победа свежего» теряла бы половину.
+  const nicks = mergeNickLists(out.nicks, l.nicks, out.nick);
+  if (nicks.length > 0) out.nicks = nicks;
   if (!out.version && l.version) out.version = l.version;
   return out;
 }
@@ -262,6 +325,7 @@ function sameNote(a: NoteRecord | string, b: NoteRecord | string): boolean {
     Object.is(x.tag, y.tag) &&
     Object.is(x.nickColor, y.nickColor) &&
     Object.is(x.nick, y.nick) &&
+    (x.nicks ?? []).join("\u0000") === (y.nicks ?? []).join("\u0000") &&
     Object.is(x.version, y.version)
   );
 }

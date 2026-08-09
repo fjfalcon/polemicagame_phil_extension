@@ -150,6 +150,13 @@ export const SITE = {
   searchPanel: ".p-play__profile-panel",
   /** Обёртка кнопки «Играть» внутри панели: вставляемся сразу после неё. */
   searchPlayWrap: ".p-play-profile__wr",
+  /**
+   * Ссылка на СВОЙ профиль в шапке сайта — единственный способ узнать свой
+   * userId из разметки (сайт держит его в состоянии Vue, а у изолированного
+   * мира своего доступа туда нет). В игровой комнате шапки нет, поэтому
+   * прочитанное значение кэшируется (см. core/own-user).
+   */
+  ownProfileLink: '.p-header__userCont-dropdown a[href^="/profile/"], .p-header__userCont a[href^="/profile/"]',
   webcamButton: "div.button.preset-1.small.desktop-version",
   webcamButtonOffClass: "off",
   // Меню «показать/скрыть роли» (auto-start)
@@ -225,6 +232,8 @@ export const SITE = {
   statsHeader: ".game-stats-header",
   statsRow: ".row",
   statsCellTitle: ".cell.title",
+  /** Ячейка с ником игрока в таблице разбора — якорь ссылки на профиль. */
+  statsUsernameCell: ".cell.username",
   penaltyDots: ".penalty-dots",
   penaltyDot: ".penalty-dot",
   bestMoveDot: ".best-move-dot",
@@ -368,6 +377,8 @@ export const OWN = {
   statsButton: "stats-button",
   noteButton: "note-button",
   lastGamesButton: "last-games-button",
+  /** Кнопка «пересечения» — префикс обязателен: голые имена уже кусались. */
+  crossoverButton: "pn-crossover-button",
   hideVideoButton: "hide-video-button",
   rotateButton: "rotate-button",
   muteButton: "mute-button",
@@ -387,7 +398,8 @@ export const OWN = {
 
 /** Все классы наших элементов, которые надо удалять при выключении фичи. */
 export const OWN_BUTTON_SELECTOR =
-  ".stats-button, .note-button, .last-games-button, .hide-video-button, .rotate-button, .mute-button";
+  ".stats-button, .note-button, .last-games-button, .pn-crossover-button, " +
+  ".hide-video-button, .rotate-button, .mute-button";
 
 /** Матч маркера фазы в тексте этапа (для classifyPhaseText и спецслучаев). */
 export function hasPhaseMarker(text: string, markers: readonly string[]): boolean {

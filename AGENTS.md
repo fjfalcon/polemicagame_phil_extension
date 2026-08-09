@@ -196,6 +196,9 @@ src/
                      модификаторы, e.repeat
     log.ts           кольцевой буфер → storage.local (ключ на контекст),
                      prime при старте, pagehide-флеш
+    crossover.ts     «сыграно вместе N, он был чёрным K» — пересечение
+                     историй игр по номеру матча (сеть отделена от счёта)
+    own-user.ts      свой userId из шапки сайта + кэш
     ws-log.ts        полный лог кадров сокета комнаты (отдельный файл и
                      отдельное хранилище; медиа и секреты не пишутся).
                      Кадры даёт зонд page-мира content/page/room-probe-*,
@@ -308,6 +311,7 @@ src/
 | local | pn_muted_players | player-notes: ники (lowercase) с локально выключенным звуком (8.1.41, глушение через video.volume=0 + маркер data-pn-muted) |
 | local | pn_update_last_check, pn_update_latest, pn_update_dismissed | update-notify (8.1.44). Переехали из localStorage страницы: тот принадлежит сайту (недоверенный) и не виден попапу с кнопкой ручной проверки |
 | local | polemica:logs:{content-<session>,bg,popup,ext} | log.ts (CAP 600/контекст; content-сессии старше 24ч чистятся) |
+| local | pn_own_user_id | own-user.ts — свой userId, прочитанный из ссылки профиля в шапке; нужен статистике пересечений (в комнате шапки нет) |
 | local | polemica:wslog:{session} | ws-log.ts — полный лог кадров игрового сокета: ВЫКЛЮЧЕН по умолчанию, потолок 2 млн символов, TTL 24ч, медиа и секреты не пишутся |
 | local | obs_connection_state, obs_auto_scene_state | obs-client/obs-panel |
 | local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |
