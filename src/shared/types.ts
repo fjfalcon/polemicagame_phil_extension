@@ -47,6 +47,8 @@ export interface Settings {
   btn_hide_video_enabled: boolean;
   /** Квадратик-метка роли у игрока (мой read, сбрасывается за игру). */
   role_marker_enabled: boolean;
+  /** Развести «Завершите речь» и «Выкрикнуть» по разным краям ряда кнопок. */
+  safe_controls_layout_enabled: boolean;
   /** Возвращать F5 нормальное обновление страницы (сайт перехватывает его под настройки). */
   f5_refresh_fix_enabled: boolean;
   /** Клавиша подмены роли (KeyboardEvent.code, дефолт KeyF). */

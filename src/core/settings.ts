@@ -43,6 +43,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // нишевая фича, новичку она мешает. Уже включившим её пользователям
   // значение из storage сохранит прежнее поведение.
   role_marker_enabled: false,
+  // Включено по умолчанию: фича ничего не делает за игрока, а защищает от
+  // случайного выкрика — цена ошибки (потраченный фол) выше, чем привычка
+  // к прежнему месту кнопки (просьба владельца 09.08.2026).
+  safe_controls_layout_enabled: true,
   f5_refresh_fix_enabled: true,
   hotkey_role_fake: "KeyF",
   hotkey_role_reset: "KeyE",

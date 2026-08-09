@@ -445,6 +445,24 @@ export const ruLocaleProbes: Record<string, Probe> = {
       detail: `обе подписи кнопки готовности и отметка плитки — ровно «Готов» (${missing.join("; ") || "ок"})`,
     };
   },
+  /**
+   * Подписи кнопок центра — по ним controls-safety отличает «Завершите
+   * речь» и ЛХ от остальных: классы у всех кнопок одинаковые. Переименует
+   * сайт — защита от случайного выкрика молча перестанет действовать.
+   */
+  controlActionLabels: (text) => {
+    const keys = [
+      'speech_player_finish:"Завершите речь"',
+      'outcry:"Выкрикнуть"',
+      'send_guess:"Оставить ЛХ"',
+      'cancel_guess:"Сбросить ЛХ"',
+    ];
+    const missing = keys.filter((k) => !text.includes(k));
+    return {
+      ok: missing.length === 0,
+      detail: `подписи кнопок действий в центре ряда (${missing.join("; ") || "ок"})`,
+    };
+  },
   pauseLabels: (text) => ({
     ok:
       text.includes('pause:"Пауза"') &&

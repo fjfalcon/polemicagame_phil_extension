@@ -124,6 +124,14 @@ export const SITE = {
    * файла (см. CAMERA_ICON_HASHES в auto-start).
    */
   readyButton: ".controls .button",
+  /**
+   * Центральная зона ряда контролов: сюда UserControls рисует кнопки
+   * доступных действий, и там почти всегда РОВНО ОДНА кнопка — своя речь
+   * подменяется выкриком на том же месте (см. controls-safety).
+   */
+  controlsCenter: ".controls .center",
+  /** Кнопка контролов (у всех один класс — различаем по подписи). */
+  controlsButton: ".button",
   readyButtonActiveClass: "active",
   /** Экран смерти комнаты: ссылка на поиск. */
   roomDeadLink: ".error a[href='/game-search']",
@@ -243,6 +251,22 @@ export const SITE = {
 
 /** Текстовые маркеры (сайт двуязычный). Используются для поиска кнопок/фаз по тексту. */
 export const TEXT = {
+  /**
+   * Подписи кнопок игровых контролов (RU + EN, сверено с живыми
+   * room/bundle/locales/RU.js и EN.js 09.08.2026):
+   *   speech_player_finish «Завершите речь» / «End the speech»
+   *   send_guess «Оставить ЛХ» / «Make a guess»
+   *   cancel_guess «Сбросить ЛХ» / «Reset guess»
+   * Классы у кнопок одинаковые, отличить их можно только подписью — за
+   * переименованием следит контрактная проба.
+   */
+  finishSpeechButton: ["завершите речь", "end the speech"] as readonly string[],
+  guessButtons: [
+    "оставить лх",
+    "сбросить лх",
+    "make a guess",
+    "reset guess",
+  ] as readonly string[],
   // Сверено с room/bundle/locales/RU.js (31.07.2026): ночные этапы —
   // card_distribution «Раздача карт», familiarity_with_mafia «Знакомство
   // мафии», first_night «Первая ночь», night «Ночь», mafia_acts «Ход мафии»

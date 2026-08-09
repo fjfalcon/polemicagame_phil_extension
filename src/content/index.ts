@@ -34,6 +34,7 @@ import { queueRequeueFeature } from "./features/queue-requeue";
 import { postgameSearchFeature } from "./features/postgame-search";
 import { nickPlateFeature } from "./features/nick-plate";
 import { wsLogFeature } from "./features/ws-log";
+import { controlsSafetyFeature } from "./features/controls-safety";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -55,6 +56,7 @@ const manager = new FeatureManager().register(
   postgameSearchFeature,
   nickPlateFeature,
   wsLogFeature,
+  controlsSafetyFeature,
   obsPanelFeature,
   twitchPanelFeature,
 );
