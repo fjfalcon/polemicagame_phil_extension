@@ -32,6 +32,7 @@
  */
 import { onDomChange } from "@core/dom";
 import { SITE, TEXT } from "@core/selectors";
+import { isGameRoomPath } from "@shared/routes";
 import {
   CONTROL_KINDS,
   DEFAULT_CONTROL_POSITIONS,
@@ -52,6 +53,8 @@ export const KIND_CLASS: Record<ControlKind, string> = {
 
 let unsubscribe: (() => void) | null = null;
 let positions: Record<ControlKind, ControlPosition> = { ...DEFAULT_CONTROL_POSITIONS };
+/** Что-то из нашего уже стоит на странице — чтобы зря не мести чистое. */
+let applied = false;
 
 /** Нормализовать подпись кнопки для сравнения с маркерами. */
 function norm(text: string | null | undefined): string {
@@ -133,12 +136,29 @@ export function markButtons(root: ParentNode = document): void {
   }
 }
 
-/** Снять всё наше (выключение фичи). */
+/** Снять всё наше (выключение фичи или уход из комнаты). */
 function cleanup(): void {
   document.getElementById(STYLE_ID)?.remove();
   for (const cls of Object.values(KIND_CLASS)) {
     document.querySelectorAll<HTMLElement>(`.${cls}`).forEach((el) => el.classList.remove(cls));
   }
+  applied = false;
+}
+
+/**
+ * Работаем ТОЛЬКО в комнате: ряда кнопок больше нигде нет, а фича живёт на
+ * всех страницах сайта (гейт по маршруту внутри обработчика — тот же приём,
+ * что у postgame-search: переживает переходы SPA без пересборки фич).
+ * Без него мы вешали бы <style> и щупали DOM на профиле и в разборе матча.
+ */
+function apply(): void {
+  if (!isGameRoomPath(location.pathname)) {
+    if (applied) cleanup();
+    return;
+  }
+  syncStyle();
+  markButtons();
+  applied = true;
 }
 
 export const controlsSafetyFeature: Feature = {
@@ -147,18 +167,16 @@ export const controlsSafetyFeature: Feature = {
 
   enable(ctx: FeatureContext) {
     positions = readPositions(ctx.settings);
-    syncStyle();
-    markButtons();
+    apply();
     // Кнопки появляются и исчезают на каждой смене говорящего — держим метки
     // тем же общим наблюдателем, что и остальные фичи.
-    unsubscribe = onDomChange(() => markButtons());
+    unsubscribe = onDomChange(() => apply());
   },
 
   update(ctx: FeatureContext) {
     // Смена раскладки в попапе применяется сразу, без перезагрузки игры.
     positions = readPositions(ctx.settings);
-    syncStyle();
-    markButtons();
+    apply();
   },
 
   disable() {

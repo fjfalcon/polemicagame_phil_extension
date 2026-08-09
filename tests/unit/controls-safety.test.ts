@@ -9,8 +9,14 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+let domSubscriber: (() => void) | null = null;
 vi.mock("@core/dom", () => ({
-  onDomChange: vi.fn(() => () => {}),
+  onDomChange: vi.fn((cb: () => void) => {
+    domSubscriber = cb;
+    return () => {
+      domSubscriber = null;
+    };
+  }),
   safeClick: vi.fn(),
   isVisible: () => true,
 }));
@@ -108,6 +114,41 @@ describe("что и куда уезжает", () => {
     document.querySelector(".left .button")!.textContent = "Завершите речь";
     markButtons();
     expect(document.querySelector(".left .button")!.classList.contains(FINISH_CLASS)).toBe(false);
+  });
+});
+
+describe("границы: только игровая комната", () => {
+  /** Сменить адрес страницы, как это делает переход SPA. */
+  function goTo(path: string): void {
+    window.history.replaceState({}, "", path);
+  }
+
+  test("вне комнаты ни стиля, ни меток — фича живёт на всех страницах сайта", () => {
+    // Разметка похожая бывает и в разборе матча; лезть туда нам незачем.
+    goTo("/match/617128");
+    buildControls(["Завершите речь"]);
+    controlsSafetyFeature.enable(ctx);
+    expect(document.getElementById("pn-controls-safety"), "стиль не ставим").toBeNull();
+    expect(centerButtons()[0].classList.contains(FINISH_CLASS)).toBe(false);
+    goTo("/game");
+  });
+
+  test("уход из комнаты убирает наше, возврат — возвращает", () => {
+    goTo("/game");
+    buildControls(["Завершите речь"]);
+    controlsSafetyFeature.enable(ctx);
+    const finish = centerButtons()[0];
+    expect(finish.classList.contains(FINISH_CLASS)).toBe(true);
+
+    goTo("/profile/13509");
+    domSubscriber?.();
+    expect(document.getElementById("pn-controls-safety")).toBeNull();
+    expect(finish.classList.contains(FINISH_CLASS), "метка снята").toBe(false);
+
+    goTo("/game");
+    domSubscriber?.();
+    expect(document.getElementById("pn-controls-safety")).not.toBeNull();
+    expect(finish.classList.contains(FINISH_CLASS)).toBe(true);
   });
 });
 
