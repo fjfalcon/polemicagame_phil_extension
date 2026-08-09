@@ -131,7 +131,9 @@ describe("перехват сокета", () => {
     );
 
     expect(gameHandler, "кадр обязан дойти до игры").toHaveBeenCalledTimes(1);
-    expect(posted).toEqual([{ source: "pn-room-probe", initiatorId: 3, finished: false }]);
+    expect(posted).toEqual([
+      { source: "pn-room-probe", initiatorId: 3, finished: false, event: "on_start_pause" },
+    ]);
     postSpy.mockRestore();
   });
 
@@ -183,6 +185,34 @@ describe("перехват сокета", () => {
       ),
     ).not.toThrow();
     expect(gameHandler).toHaveBeenCalledTimes(1);
+    postSpy.mockRestore();
+  });
+
+  test("зонд оставляет метку на <html>: по логу видно, что он встал", async () => {
+    // Без метки разбор жалобы «пауза была, подписи нет» упирается в
+    // догадки: «зонд не встал» и «сервер молчит» выглядят одинаково
+    // (разбор 09.08.2026).
+    document.documentElement.removeAttribute("data-pn-room-probe-ready");
+    await installProbe();
+    expect(document.documentElement.getAttribute("data-pn-room-probe-ready")).toBe("1");
+  });
+
+  test("кадр про паузу с незнакомым именем — сообщаем имя, не тело", async () => {
+    await installProbe();
+    const posted: Array<Record<string, unknown>> = [];
+    const postSpy = vi.spyOn(window, "postMessage").mockImplementation(((m: Record<string, unknown>) => {
+      posted.push(m);
+    }) as unknown as typeof window.postMessage);
+    const ws = makeSocket();
+    ws.onmessage = () => {};
+    (ws.onmessage as (e: MessageEvent) => void).call(
+      ws,
+      new MessageEvent("message", {
+        data: `42${JSON.stringify(["on_pause_changed", { initiatorId: 4, secret: "роль" }])}`,
+      }),
+    );
+    expect(posted).toEqual([{ source: "pn-room-probe", unrecognized: "on_pause_changed" }]);
+    expect(JSON.stringify(posted), "тело кадра наружу не уходит").not.toContain("роль");
     postSpy.mockRestore();
   });
 

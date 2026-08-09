@@ -45,6 +45,22 @@ export interface PauseSignal {
   initiatorId: number | null;
   /** Пауза закончилась — подпись пора убирать. */
   finished: boolean;
+  /** Какое событие принесло сигнал — нужно для разбора жалоб по логу. */
+  event?: string;
+}
+
+/** Маркер «зонд на месте»: читается content-скриптом без гонок с postMessage. */
+export const PROBE_MARK_ATTR = "data-pn-room-probe-ready";
+
+/**
+ * Имя события в кадре — ТОЛЬКО для диагностики: по логу «пауза была, а
+ * подписи нет» иначе невозможно отличить «кадр не пришёл» от «пришёл, но
+ * называется иначе» (разбор 09.08.2026). Имя события не секрет: тела и
+ * поля кадра наружу по-прежнему не уходят.
+ */
+export function frameEventName(raw: string): string | null {
+  const m = /\[\s*"([A-Za-z0-9_.:-]{1,40})"/.exec(raw);
+  return m ? m[1] : null;
 }
 
 /**
@@ -75,16 +91,16 @@ export function readPauseFrame(raw: unknown): PauseSignal | null {
   const event = parsed[0] as string;
   const payload = parsed[1] as Record<string, unknown> | undefined;
 
-  if (event === END_EVENT) return { initiatorId: null, finished: true };
+  if (event === END_EVENT) return { initiatorId: null, finished: true, event };
   if (PAUSE_EVENTS.includes(event)) {
-    return { initiatorId: playerIdOrNull(payload?.initiatorId), finished: false };
+    return { initiatorId: playerIdOrNull(payload?.initiatorId), finished: false, event };
   }
   if (event === STATE_EVENT) {
     const pause = payload?.pause as Record<string, unknown> | undefined;
     // Нет объекта паузы — состояние без паузы; это не сигнал «паузу сняли»:
     // такой кадр приходит и в обычной игре, и гасить им подпись нельзя.
     if (!pause || !pauseStillRunning(pause)) return null;
-    return { initiatorId: playerIdOrNull(pause.initiatorId), finished: false };
+    return { initiatorId: playerIdOrNull(pause.initiatorId), finished: false, event };
   }
   return null;
 }
@@ -130,7 +146,17 @@ function playerIdOrNull(value: unknown): number | null {
   const handle = (raw: unknown): void => {
     try {
       const signal = readPauseFrame(raw);
-      if (signal) send(signal);
+      if (signal) {
+        send(signal);
+        return;
+      }
+      // Кадр про паузу, который мы НЕ поняли: сообщаем одно лишь имя
+      // события. Без этого лог не отличает «сервер молчит» от «сервер
+      // назвал событие иначе» — тупик разбора 09.08.2026.
+      if (typeof raw === "string" && raw.indexOf("pause") >= 0) {
+        const name = frameEventName(raw);
+        if (name) window.postMessage({ source: "pn-room-probe", unrecognized: name }, location.origin);
+      }
     } catch {
       /* кадр не наш и не разобрался — молчим */
     }
@@ -168,4 +194,12 @@ function playerIdOrNull(value: unknown): number | null {
       return desc.set!.call(this, wrapped);
     },
   });
+
+  /**
+   * Метка «зонд установлен» — атрибутом на <html>, а не сообщением: content
+   * -скрипт стартует позже нас, и разовый postMessage он бы уже не застал.
+   * Без такой метки по логу нельзя отличить «паузы не было» от «зонд не
+   * встал» — ровно тот тупик, в который упёрся разбор лога 09.08.2026.
+   */
+  document.documentElement.setAttribute(PROBE_MARK_ATTR, "1");
 })();

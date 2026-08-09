@@ -94,6 +94,9 @@ describe("разбор кадров сокета", () => {
     expect(readPauseFrame(frame("on_start_pause", { time: 60, initiatorId: 4 }))).toEqual({
       initiatorId: 4,
       finished: false,
+      // Имя события едет с сигналом ради разбора логов: «пришёл кадр, но
+      // без инициатора» обязано быть отличимо от «кадров не было».
+      event: "on_start_pause",
     });
   });
 
@@ -103,7 +106,11 @@ describe("разбор кадров сокета", () => {
       gameTime: 100,
       pause: { time: { total: 60, current: 10 }, initiatorId: 2 },
     });
-    expect(readPauseFrame(raw)).toEqual({ initiatorId: 2, finished: false });
+    expect(readPauseFrame(raw)).toEqual({
+      initiatorId: 2,
+      finished: false,
+      event: "on_detailed_game_state",
+    });
   });
 
   test("ИСТЁКШАЯ пауза в состоянии игры инициатора не воскрешает", () => {
@@ -121,6 +128,7 @@ describe("разбор кадров сокета", () => {
     expect(readPauseFrame(frame("on_start_pause", { initiatorId: -1 }))).toEqual({
       initiatorId: null,
       finished: false,
+      event: "on_start_pause",
     });
     for (const bad of [1.5, NaN, Infinity, "3", null]) {
       expect(
@@ -146,6 +154,7 @@ describe("разбор кадров сокета", () => {
     expect(readPauseFrame(frame("on_finish_pause", {}))).toEqual({
       initiatorId: null,
       finished: true,
+      event: "on_finish_pause",
     });
   });
 
@@ -153,6 +162,7 @@ describe("разбор кадров сокета", () => {
     expect(readPauseFrame(frame("on_update_pause_time", { time: 42 }))).toEqual({
       initiatorId: null,
       finished: false,
+      event: "on_update_pause_time",
     });
   });
 

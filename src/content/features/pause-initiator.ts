@@ -23,7 +23,9 @@
  */
 import { onDomChange } from "@core/dom";
 import { SITE } from "@core/selectors";
+import { PROBE_MARK_ATTR } from "../page/room-probe-page";
 import { log } from "@core/log";
+import { isGameRoomPath } from "@shared/routes";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const SCOPE = "pause-initiator";
@@ -120,10 +122,29 @@ export function renderLabel(doc: Document = document): void {
   screen.appendChild(el);
 }
 
+/** Про нераспознанные события паузы говорим один раз на имя. */
+const unknownEventsSeen = new Set<string>();
+
 function onProbeMessage(e: MessageEvent): void {
   if (e.source !== window) return;
-  const data = e.data as { source?: string; initiatorId?: unknown; finished?: unknown };
+  const data = e.data as {
+    source?: string;
+    initiatorId?: unknown;
+    finished?: unknown;
+    unrecognized?: unknown;
+    event?: unknown;
+  };
   if (data?.source !== PROBE_SOURCE) return;
+  if (typeof data.unrecognized === "string") {
+    // Кадр про паузу пришёл, но его имя нам незнакомо: значит протокол не
+    // тот, что мы прочитали в бандле. Пишем по разу на имя — иначе строка
+    // повторялась бы на каждом тике паузы.
+    if (!unknownEventsSeen.has(data.unrecognized)) {
+      unknownEventsSeen.add(data.unrecognized);
+      log.info(SCOPE, "событие паузы не распознано:", data.unrecognized);
+    }
+    return;
+  }
   if (data.finished === true) {
     // Пауза кончилась — забываем инициатора, иначе следующая пауза начнётся
     // с чужой подписью, пока не придёт свой id.
@@ -133,9 +154,17 @@ function onProbeMessage(e: MessageEvent): void {
     return;
   }
   const id = typeof data.initiatorId === "number" ? data.initiatorId : null;
-  // null здесь — не «инициатора нет», а «в этом кадре его не прислали»:
-  // затирать им уже известного нельзя (кадры обновления времени идут чаще).
-  if (id === null) return;
+  if (id === null) {
+    // Кадр про паузу есть, инициатора в нём нет. Это ровно тот случай, из-за
+    // которого фича может молчать, — и по логу он обязан быть отличим от
+    // «кадров не было вовсе» (разбор жалобы 09.08.2026).
+    const name = typeof data.event === "string" ? data.event : "?";
+    if (!unknownEventsSeen.has(`no-id:${name}`)) {
+      unknownEventsSeen.add(`no-id:${name}`);
+      log.info(SCOPE, "сигнал паузы получен, инициатора в нём нет:", name);
+    }
+    return;
+  }
   initiatorId = id;
   if (loggedFor !== id) {
     loggedFor = id;
@@ -149,6 +178,13 @@ export const pauseInitiatorFeature: Feature = {
   settingKey: "pause_initiator_enabled",
 
   enable(_ctx: FeatureContext) {
+    // Зонд ставится РАНЬШЕ нас (document_start) и оставляет метку на <html>.
+    // Её отсутствие — единственный способ отличить «паузы не было» от
+    // «зонд не встал»; без строки в логе разбор жалобы упирается в догадки.
+    if (isGameRoomPath(location.pathname)) {
+      const ready = document.documentElement.hasAttribute(PROBE_MARK_ATTR);
+      log.info(SCOPE, ready ? "зонд комнаты на месте" : "зонд комнаты НЕ установлен");
+    }
     probeListener = (e: MessageEvent) => onProbeMessage(e);
     window.addEventListener("message", probeListener);
     // Роллер перерисовывается на каждом тике паузы и сносит наш узел —
@@ -166,6 +202,7 @@ export const pauseInitiatorFeature: Feature = {
     }
     initiatorId = null;
     loggedFor = null;
+    unknownEventsSeen.clear();
     document.querySelector(`.${LABEL_CLASS}`)?.remove();
   },
 };
