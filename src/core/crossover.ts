@@ -1,17 +1,27 @@
 /**
- * Статистика пересечений: «сколько мы с этим игроком сыграли вместе и кем
- * он в этих играх был».
+ * Статистика пересечений: «сколько мы с этим игроком сыграли вместе, в каких
+ * цветах и чем это кончалось».
  *
- * Почему это вообще возможно без разбора каждого матча: история игр профиля
+ * Почему это возможно без разбора каждого матча: история игр профиля
  * (`/profile/default/get-games`) отдаёт по строке на игру, и в строке есть
  * НОМЕР МАТЧА, роль и результат. Значит достаточно взять свою историю и его,
  * пересечь по номеру — и обе роли в общей игре известны точно, без догадок.
- * Проверено живьём 09.08.2026: один запрос отдаёт до 200 игр и сообщает
- * `totalCount`, по которому видно, упёрлись ли мы в потолок.
  *
- * Сеть отделена от счёта намеренно: считать пересечение — чистая функция,
- * и именно в ней легче всего молча начать врать (спутать команды, посчитать
- * ничью за победу). Её и покрываем тестами.
+ * ПРО ПОТОЛОК. Одна страница отдаёт 200 игр, и первая версия этим и
+ * ограничивалась. На живых данных 09.08.2026 это недосчитывало до полутора
+ * раз: у владельца 374 игры, у соперника 3654 — последние 200 его игр
+ * покрывают куда меньший срок, и всё, что раньше, выпадало. Поэтому история
+ * тянется страницами, но не бесконечно:
+ *  - у обоих есть общий предел страниц (иначе одно наведение мыши стоило бы
+ *    двух десятков запросов);
+ *  - чужую историю тянем только до САМОЙ СТАРОЙ своей игры: раньше неё
+ *    пересекаться нечему по определению;
+ *  - если упёрлись в предел, сводка честно это сообщает — «вместе 12» и
+ *    «12 за доступный отрезок» разные утверждения.
+ *
+ * Сеть отделена от счёта намеренно: считать пересечение — чистая функция, и
+ * именно в ней легче всего молча начать врать (спутать команды, посчитать
+ * чужую победу за свою).
  */
 import { log } from "./log";
 
@@ -25,7 +35,7 @@ export interface GameRow {
   role: string;
   /** Победа игрока в этой игре. */
   win: boolean;
-  /** Дата начала (для показа последних общих игр). */
+  /** Дата начала — по ней ограничиваем глубину чужой истории. */
   date?: string;
 }
 
@@ -38,21 +48,32 @@ export interface SharedGame {
   date?: string;
 }
 
+/** Сыграно и выиграно (МНОЙ) — во всех разрезах считаем одинаково. */
+export interface Bucket {
+  games: number;
+  wins: number;
+}
+
 export interface Crossover {
   /** Сколько игр сыграно вместе. */
   together: number;
-  /** Сколько раз ОН был чёрным. */
+  /** Одноцвет — были в одной команде. */
+  sameTeam: Bucket;
+  /** …из них оба красными и оба чёрными. */
+  sameRed: Bucket;
+  sameBlack: Bucket;
+  /** Разноцвет — играли друг против друга. */
+  versus: Bucket;
+  /** …из них я красный (он чёрный) и я чёрный (он красный). */
+  versusMyRed: Bucket;
+  versusMyBlack: Bucket;
+  /** Сколько раз ОН был чёрным — во всех общих играх. */
   theirBlack: number;
-  /** Сколько раз мы были в одной команде. */
-  sameTeam: number;
-  /** Мои победы в общих играх. */
-  myWins: number;
   /** Последние общие игры — свежие первыми. */
   recent: SharedGame[];
   /**
-   * История хотя бы одного из двоих обрезана потолком выдачи, то есть общих
-   * игр могло быть больше. Показать это обязательно: «вместе 3 игры» звучит
-   * как факт, а на деле может значить «3 за последние 200 его игр».
+   * Историю пришлось оборвать пределом страниц: общих игр могло быть больше.
+   * Показывать это обязательно — иначе число читается как полный итог.
    */
   capped: boolean;
 }
@@ -67,27 +88,49 @@ export function isBlackRole(role: string): boolean {
 /** Сколько общих игр показываем списком. */
 export const RECENT_LIMIT = 5;
 
+function bump(b: Bucket, win: boolean): void {
+  b.games++;
+  if (win) b.wins++;
+}
+
+const empty = (): Bucket => ({ games: 0, wins: 0 });
+
 /**
- * Пересечь две истории. Строки старше потолка выдачи сюда просто не
- * доезжают — за это отвечает `capped`.
+ * Пересечь две истории. Победы ВЕЗДЕ считаются мои: в одноцвете это и наша
+ * общая победа, в разноцвете — именно моя, а не «чья-нибудь».
  */
 export function crossGames(mine: GameRow[], theirs: GameRow[], capped = false): Crossover {
   const byId = new Map<number, GameRow>();
   for (const row of theirs) byId.set(row.id, row);
 
-  const recent: SharedGame[] = [];
-  let theirBlack = 0;
-  let sameTeam = 0;
-  let myWins = 0;
+  const out: Crossover = {
+    together: 0,
+    sameTeam: empty(),
+    sameRed: empty(),
+    sameBlack: empty(),
+    versus: empty(),
+    versusMyRed: empty(),
+    versusMyBlack: empty(),
+    theirBlack: 0,
+    recent: [],
+    capped,
+  };
 
   for (const my of mine) {
     const their = byId.get(my.id);
     if (!their) continue;
-    const same = isBlackRole(my.role) === isBlackRole(their.role);
-    if (isBlackRole(their.role)) theirBlack++;
-    if (same) sameTeam++;
-    if (my.win) myWins++;
-    recent.push({
+    const myBlack = isBlackRole(my.role);
+    const theirBlack = isBlackRole(their.role);
+    const same = myBlack === theirBlack;
+    if (theirBlack) out.theirBlack++;
+    if (same) {
+      bump(out.sameTeam, my.win);
+      bump(myBlack ? out.sameBlack : out.sameRed, my.win);
+    } else {
+      bump(out.versus, my.win);
+      bump(myBlack ? out.versusMyBlack : out.versusMyRed, my.win);
+    }
+    out.recent.push({
       id: my.id,
       myRole: my.role,
       theirRole: their.role,
@@ -96,17 +139,12 @@ export function crossGames(mine: GameRow[], theirs: GameRow[], capped = false): 
       date: my.date ?? their.date,
     });
   }
+  out.together = out.recent.length;
   // История приходит свежими вперёд, но полагаться на это нельзя: сортируем
   // по номеру матча — он растёт со временем.
-  recent.sort((a, b) => b.id - a.id);
-  return {
-    together: recent.length,
-    theirBlack,
-    sameTeam,
-    myWins,
-    recent: recent.slice(0, RECENT_LIMIT),
-    capped,
-  };
+  out.recent.sort((a, b) => b.id - a.id);
+  out.recent = out.recent.slice(0, RECENT_LIMIT);
+  return out;
 }
 
 /** Разбор ответа истории игр. Чужой формат — не повод падать. */
@@ -115,7 +153,12 @@ export function parseGameRows(payload: unknown): { rows: GameRow[]; total: numbe
   if (!data || !Array.isArray(data.rows)) return null;
   const rows: GameRow[] = [];
   for (const raw of data.rows) {
-    const r = raw as { id?: unknown; role?: { type?: unknown }; result?: { code?: unknown }; date_start?: unknown };
+    const r = raw as {
+      id?: unknown;
+      role?: { type?: unknown };
+      result?: { code?: unknown };
+      date_start?: unknown;
+    };
     const id = typeof r?.id === "number" ? r.id : Number(r?.id);
     if (!Number.isSafeInteger(id) || id <= 0) continue;
     rows.push({
@@ -129,17 +172,23 @@ export function parseGameRows(payload: unknown): { rows: GameRow[]; total: numbe
   return { rows, total };
 }
 
-/** Потолок выдачи за один запрос (проверено живьём: 200 отдаёт, больше не нужно). */
-export const PAGE_LIMIT = 200;
+/** Игр за один запрос (потолок выдачи сайта, проверено живьём). */
+export const PAGE_SIZE = 200;
+/**
+ * Сколько страниц готовы взять на одного игрока. Восемь — это 1600 игр:
+ * полная история почти для всех, а для завсегдатаев с тремя тысячами партий
+ * честная оговорка в сводке лучше двадцати запросов на одно наведение.
+ */
+export const MAX_PAGES = 8;
 const REQUEST_TIMEOUT_MS = 15_000;
 
-/** Скачать историю игр профиля. null — не удалось (это НЕ «игр нет»). */
-export async function fetchGameHistory(
+async function fetchPage(
   userId: number | string,
+  page: number,
 ): Promise<{ rows: GameRow[]; total: number } | null> {
   try {
     const res = await fetch(
-      `https://polemicagame.com/profile/default/get-games?userId=${encodeURIComponent(String(userId))}&page=1&limit=${PAGE_LIMIT}`,
+      `https://polemicagame.com/profile/default/get-games?userId=${encodeURIComponent(String(userId))}&page=${page}&limit=${PAGE_SIZE}`,
       { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
     );
     if (!res.ok) {
@@ -155,20 +204,71 @@ export async function fetchGameHistory(
   }
 }
 
+export interface History {
+  rows: GameRow[];
+  total: number;
+  /** Остались непрочитанные страницы — история оборвана пределом. */
+  truncated: boolean;
+}
+
+/**
+ * Скачать историю игр.
+ *
+ * `until` — дата самой старой игры второго участника: глубже лезть незачем,
+ * пересекаться там не с чем. Возвращает null, если не удалось получить даже
+ * первую страницу (это НЕ «игр нет»).
+ */
+export async function fetchHistory(
+  userId: number | string,
+  until?: string,
+  maxPages = MAX_PAGES,
+): Promise<History | null> {
+  const first = await fetchPage(userId, 1);
+  if (!first) return null;
+  const rows = [...first.rows];
+  let page = 1;
+  const reachedDepth = (): boolean =>
+    until !== undefined && rows.length > 0 && (rows[rows.length - 1].date ?? "") < until;
+
+  while (rows.length < first.total && page < maxPages && !reachedDepth()) {
+    page++;
+    const next = await fetchPage(userId, page);
+    // Обрыв посреди листания — не выдумываем: считаем историю неполной.
+    if (!next || next.rows.length === 0) {
+      return { rows, total: first.total, truncated: true };
+    }
+    rows.push(...next.rows);
+  }
+  return {
+    rows,
+    total: first.total,
+    truncated: rows.length < first.total && !reachedDepth(),
+  };
+}
+
+/** Самая старая дата в истории — граница, глубже которой искать нечего. */
+export function oldestDate(rows: GameRow[]): string | undefined {
+  let oldest: string | undefined;
+  for (const r of rows) {
+    if (!r.date) continue;
+    if (oldest === undefined || r.date < oldest) oldest = r.date;
+  }
+  return oldest;
+}
+
 /**
  * Пересечение с игроком. null — не удалось получить хотя бы одну историю:
- * пустая сводка выглядела бы как «вы никогда не играли вместе», а это
- * другое утверждение.
+ * пустая сводка выглядела бы как «вы никогда не играли вместе», а это другое
+ * утверждение.
+ *
+ * Свою историю загружает вызывающий и переиспользует для всех игроков — она
+ * одна на сессию, и тянуть её заново на каждого соседа по столу незачем.
  */
 export async function crossoverWith(
-  myUserId: number | string,
+  myHistory: History,
   theirUserId: number | string,
 ): Promise<Crossover | null> {
-  const [mine, theirs] = await Promise.all([
-    fetchGameHistory(myUserId),
-    fetchGameHistory(theirUserId),
-  ]);
-  if (!mine || !theirs) return null;
-  const capped = mine.total > mine.rows.length || theirs.total > theirs.rows.length;
-  return crossGames(mine.rows, theirs.rows, capped);
+  const theirs = await fetchHistory(theirUserId, oldestDate(myHistory.rows));
+  if (!theirs) return null;
+  return crossGames(myHistory.rows, theirs.rows, myHistory.truncated || theirs.truncated);
 }

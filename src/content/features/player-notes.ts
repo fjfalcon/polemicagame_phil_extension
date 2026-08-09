@@ -20,7 +20,13 @@
  */
 import { browser } from "@core/env";
 import { log } from "@core/log";
-import { crossoverWith, type Crossover } from "@core/crossover";
+import {
+  crossoverWith,
+  fetchHistory,
+  type Bucket,
+  type Crossover,
+  type History,
+} from "@core/crossover";
 import { getOwnUserId, ownNameFromTable, rememberOwnUserId } from "@core/own-user";
 import { showToast } from "@core/toast";
 import { onDomChange, paintNickEl } from "@core/dom";
@@ -387,6 +393,9 @@ class PlayerNotesManager {
   /** Пересечения: своя история весит 200 строк, дважды её не тянем. */
   private crossoverCache = new Map<string, { at: number; data: Crossover | null }>();
   private crossoverInFlight = new Map<string, Promise<Crossover | null>>();
+  /** Своя история игр — одна на сессию, общая для всех соперников за столом. */
+  private myHistory: History | null = null;
+  private myHistoryAt = 0;
   /** Тултипы, живущие порталом в body (для уборки осиротевших). */
   private portaledTooltips = new Set<HTMLElement>();
   /** Снятые в этой вкладке мьюты — не воскрешаем их при слиянии с диском. */
@@ -634,6 +643,8 @@ class PlayerNotesManager {
     this.lastGamesInFlight.clear();
     this.crossoverCache.clear();
     this.crossoverInFlight.clear();
+    this.myHistory = null;
+    this.myHistoryAt = 0;
     this.statsErrorAt.clear();
     this.portaledTooltips.clear();
     for (const t of this.toasts) t.remove();
@@ -3215,6 +3226,20 @@ class PlayerNotesManager {
   // ─────────── Статистика пересечений ───────────
 
   /**
+   * Своя история игр. Тянется целиком (страницами) и переиспользуется всеми
+   * кнопками за столом: она одна и та же, а весит несколько сотен строк.
+   */
+  private async getMyHistory(myId: number | string): Promise<History | null> {
+    if (this.myHistory && Date.now() - this.myHistoryAt < STATS_TTL_MS) return this.myHistory;
+    const history = await fetchHistory(myId);
+    if (history) {
+      this.myHistory = history;
+      this.myHistoryAt = Date.now();
+    }
+    return history;
+  }
+
+  /**
    * Пересечение с игроком: сколько сыграно вместе и кем он в этих играх был.
    *
    * `undefined` — свой id неизвестен (в комнате шапки сайта нет, а на обычные
@@ -3233,8 +3258,12 @@ class PlayerNotesManager {
     if (myId === null) return undefined;
 
     const promise = (async (): Promise<Crossover | null> => {
-      const theirId = await this.resolveUserId(username, key);
-      return crossoverWith(myId, theirId);
+      const [theirId, mine] = await Promise.all([
+        this.resolveUserId(username, key),
+        this.getMyHistory(myId),
+      ]);
+      if (!mine) return null;
+      return crossoverWith(mine, theirId);
     })();
     this.crossoverInFlight.set(key, promise);
     try {
@@ -3274,36 +3303,45 @@ class PlayerNotesManager {
     }
   }
 
-  /** Сводка пересечений в HTML. Числа — свои, ников и текстов игрока здесь нет. */
+  /**
+   * Сводка пересечений таблицей: сначала итог, потом разрезы по цветам.
+   * Форма подсказана владельцем (образец 09.08.2026) — «одноцвет/разноцвет»
+   * читается игроками сходу, в отличие от голых процентов.
+   *
+   * Победы ВЕЗДЕ мои: в одноцвете это и общая победа, в разноцвете — именно
+   * моя. Иначе одна и та же колонка означала бы разное в разных строках.
+   */
   private formatCrossover(x: Crossover): string {
     if (x.together === 0) {
       return x.capped
-        ? "Общих игр в доступной истории нет<div style=\"opacity:.7;margin-top:4px\">видно последние 200 игр каждого</div>"
+        ? "Общих игр в доступной истории нет"
         : "Вы ещё не играли вместе";
     }
-    const winPct = Math.round((x.myWins / x.together) * 100);
+    const line = (label: string, b: Bucket, inset = false): string => {
+      if (b.games === 0) return "";
+      const pct = Math.round((b.wins / b.games) * 100);
+      return `
+        <div style="display:flex;justify-content:space-between;gap:14px;${inset ? "opacity:.8;padding-left:10px;" : ""}">
+          <span>${label}</span><span>${b.wins} / ${b.games} (${pct}%)</span>
+        </div>`;
+    };
     const rows = [
-      `<b>Вместе игр: ${x.together}</b>`,
-      `Он был чёрным: ${x.theirBlack}`,
-      `В одной команде: ${x.sameTeam}`,
-      `Твои победы: ${x.myWins} (${winPct}%)`,
-    ];
-    const recent = x.recent
-      .map(
-        (r) => `
-        <div style="display:flex;align-items:center;gap:5px;margin-top:3px">
-          ${this.createRoleSvg(r.theirRole === "don" ? "godfather" : r.theirRole, 13)}
-          <span style="opacity:.75">${r.sameTeam ? "вместе" : "против"}</span>
-          <span style="color:${r.myWin ? "#4CAF50" : "#f44336"}">${r.myWin ? "победа" : "поражение"}</span>
-        </div>`,
-      )
-      .join("");
-    // Обрезанную историю обязаны показать: «вместе 3» и «3 за последние 200
-    // его игр» — разные утверждения, и второе легко принять за первое.
+      `<div style="display:flex;justify-content:space-between;gap:14px;font-weight:600">
+         <span>Совместных игр</span><span>${x.together}</span>
+       </div>`,
+      line("Одноцвет", x.sameTeam),
+      line("— оба красные", x.sameRed, true),
+      line("— оба чёрные", x.sameBlack, true),
+      line("Разноцвет", x.versus),
+      line("— ты красный", x.versusMyRed, true),
+      line("— ты чёрный", x.versusMyBlack, true),
+    ].join("");
+    // Оборванную историю обязаны показать: «вместе 12» и «12 за доступный
+    // отрезок» — разные утверждения, и второе легко принять за первое.
     const note = x.capped
-      ? '<div style="opacity:.7;margin-top:5px">по последним 200 играм каждого</div>'
+      ? '<div style="opacity:.7;margin-top:6px">история длинная — учтён доступный отрезок</div>'
       : "";
-    return `${rows.join("<br>")}<div style="margin-top:6px;opacity:.85">Последние общие:</div>${recent}${note}`;
+    return `${rows}${note}`;
   }
 
   private createCrossoverButton(username: string): HTMLButtonElement {
