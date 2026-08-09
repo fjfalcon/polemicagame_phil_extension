@@ -1005,7 +1005,6 @@ document.addEventListener("DOMContentLoaded", () => {
         ? items.nick_plate_position
         : "default";
     }
-    set("pause_initiator_enabled", items.pause_initiator_enabled);
     set("ws_full_log_enabled", items.ws_full_log_enabled);
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
@@ -1100,7 +1099,6 @@ document.addEventListener("DOMContentLoaded", () => {
       role_marker_enabled: cb("role_marker_enabled", false),
       compact_nicknames_enabled: cb("compact_nicknames_enabled", false),
       nick_plate_position: $<HTMLSelectElement>("nick_plate_position")?.value || "default",
-      pause_initiator_enabled: cb("pause_initiator_enabled", true),
       ws_full_log_enabled: cb("ws_full_log_enabled", false),
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
@@ -1214,7 +1212,6 @@ document.addEventListener("DOMContentLoaded", () => {
     "role_marker_enabled",
     "compact_nicknames_enabled",
     "nick_plate_position",
-    "pause_initiator_enabled",
     "ws_full_log_enabled",
     "f5_refresh_fix_enabled",
     "update_check_enabled",

@@ -14,7 +14,7 @@ import { clearToasts } from "@core/toast";
 import { setupNicknameLengthsResponder } from "./nickname-lengths";
 import { setupDiagnostics } from "./diag";
 import { startOrphanWatch, stopOrphanWatch } from "./orphan-watch";
-import { PROBE_FLAG_KEY, WS_LOG_FLAG_KEY } from "./page/room-probe-inject";
+import { LEGACY_PROBE_FLAG_KEY, WS_LOG_FLAG_KEY } from "./page/room-probe-inject";
 
 import { searchFeature } from "./features/search";
 import { autoStartFeature } from "./features/auto-start";
@@ -32,7 +32,6 @@ import { queuePeekFeature } from "./features/queue-peek";
 import { queueRequeueFeature } from "./features/queue-requeue";
 import { postgameSearchFeature } from "./features/postgame-search";
 import { nickPlateFeature } from "./features/nick-plate";
-import { pauseInitiatorFeature } from "./features/pause-initiator";
 import { wsLogFeature } from "./features/ws-log";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
@@ -54,7 +53,6 @@ const manager = new FeatureManager().register(
   queueRequeueFeature,
   postgameSearchFeature,
   nickPlateFeature,
-  pauseInitiatorFeature,
   wsLogFeature,
   obsPanelFeature,
   twitchPanelFeature,
@@ -154,7 +152,7 @@ setupNicknameLengthsResponder();
 setupDiagnostics();
 
 /**
- * Зеркало настройки «кто поставил паузу» в localStorage страницы.
+ * Зеркало настройки «Полный лог общения с сервером» в localStorage страницы.
  *
  * Ранний инжектор зонда (document_start) обязан решить «ставить или нет»
  * СИНХРОННО — иначе он опоздает к созданию сокета комнаты, ради чего и
@@ -162,25 +160,6 @@ setupDiagnostics();
  * ему крупицу состояния держим здесь: пишем при загрузке и на каждое
  * изменение настройки. Значение применится со следующей загрузки страницы —
  * зонд ставится один раз и снимается только перезагрузкой.
- */
-function mirrorProbeFlag(on: boolean): void {
-  try {
-    localStorage.setItem(PROBE_FLAG_KEY, on ? "1" : "0");
-  } catch {
-    /* приватный режим: зонд останется на дефолте — это его штатное поведение */
-  }
-}
-void getSetting("pause_initiator_enabled")
-  .catch(() => true)
-  .then((on) => mirrorProbeFlag(on !== false));
-onSettingsChanged((patch) => {
-  if ("pause_initiator_enabled" in patch) mirrorProbeFlag(patch.pause_initiator_enabled !== false);
-});
-
-/**
- * Второе зеркало — для полного лога кадров. Своё, а не общее с подписью
- * паузы: дефолты у настроек разные (лог выключен), и выключив подпись,
- * человек не должен незаметно потерять лог, который сам только что включил.
  */
 function mirrorWsLogFlag(on: boolean): void {
   try {
@@ -195,6 +174,13 @@ void getSetting("ws_full_log_enabled")
 onSettingsChanged((patch) => {
   if ("ws_full_log_enabled" in patch) mirrorWsLogFlag(patch.ws_full_log_enabled === true);
 });
+// Зеркало убранной фичи «кто поставил паузу»: без уборки строка осталась бы
+// в localStorage САЙТА у всех, кто ставил прежние версии.
+try {
+  localStorage.removeItem(LEGACY_PROBE_FLAG_KEY);
+} catch {
+  /* приватный режим — чистить нечего */
+}
 
 // Сторож осиротевшей вкладки (F5-баннер). Гейт по мастер-выключателю:
 // выключенное расширение не имеет права напоминать о себе баннером.

@@ -197,7 +197,9 @@ src/
     log.ts           кольцевой буфер → storage.local (ключ на контекст),
                      prime при старте, pagehide-флеш
     ws-log.ts        полный лог кадров сокета комнаты (отдельный файл и
-                     отдельное хранилище; медиа и секреты не пишутся)
+                     отдельное хранилище; медиа и секреты не пишутся).
+                     Кадры даёт зонд page-мира content/page/room-probe-*,
+                     он ставится ТОЛЬКО при включённой настройке
     messaging.ts, errors.ts, escape.ts, selectors.ts, FloatingPanel.ts
   content/     — content-скрипт: index.ts (регистрация фич), фичи, панели
   background/  — SW (Chrome) / event page (Firefox): OBS-клиент, инжект автопринятия
