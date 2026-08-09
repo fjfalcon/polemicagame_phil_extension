@@ -185,13 +185,18 @@ function readEnvelopeFrame(raw: string): PauseSignal | null {
  */
 export function pausedTimer(state: Record<string, unknown>): Record<string, unknown> | null {
   const own = state.timer as Record<string, unknown> | undefined;
-  if (own && own.passed != null) return own;
+  if (own && own.passed != null && own.isSystem !== true) return own;
   const players = Array.isArray(state.players) ? state.players : [];
   const timers = players
     .map(p => (p && typeof p === "object" ? (p as Record<string, unknown>).timer : null))
     .filter(t => t != null) as Array<Record<string, unknown>>;
-  if (timers.length === 1 && timers[0].passed != null) return timers[0];
-  return null;
+  if (timers.length !== 1) return null;
+  const only = timers[0];
+  // `isSystem` — заморозка таймера самим сервером, а не игроком: так сайт
+  // помечает трёхсекундный выкрик, во время которого речь тоже стоит
+  // (видно в живых кадрах 09.08.2026). Настоящая пауза этого флага не несёт.
+  if (only.isSystem === true) return null;
+  return only.passed != null ? only : null;
 }
 
 /** Сколько узлов состояния просматриваем — страховка от разросшегося кадра. */

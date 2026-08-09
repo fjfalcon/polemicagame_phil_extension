@@ -230,6 +230,35 @@ describe("конверт нового протокола", () => {
     expect(isEnvelopeFrame(foreign)).toBe(false);
   });
 
+  test("ЖИВЫЕ кадры комнаты: пауза, речь и выкрик различаются", async () => {
+    // Кадры сняты полным логом в настоящей игре 09.08.2026 (обезличены).
+    // Три предыдущие версии фичи молчали в бою при зелёных тестах — эта
+    // фикстура и есть то, чего им не хватало.
+    const fs = await import("node:fs");
+    const real = JSON.parse(fs.readFileSync("tests/fixtures/room-frames.json", "utf8")) as
+      Record<"speech" | "outcry" | "pause", string>;
+
+    expect(readPauseFrame(real.pause), "пауза обязана распознаться").toMatchObject({
+      finished: false,
+      event: "events/roomState",
+    });
+    // Выкрик: речь тоже заморожена, но это НЕ пауза — иначе подпись
+    // выскакивала бы посреди игры по нескольку раз за круг.
+    expect(readPauseFrame(real.outcry)).toBeNull();
+    expect(readPauseFrame(real.speech)).toMatchObject({ finished: true });
+
+    // И главный факт, ради которого лог снимался: инициатора на проводе нет.
+    expect(real.pause, "появится поле — фича сразу оживёт").not.toMatch(/initiator/i);
+  });
+
+  test("системная заморозка таймера паузой не считается", () => {
+    // Тот же выкрик, но если бы игрок с таймером остался один.
+    const system = {
+      players: [{ position: 6, timer: { duration: 60000, passed: 13320, isSystem: true } }],
+    };
+    expect(pausedTimer(system)).toBeNull();
+  });
+
   test("старый протокол по-прежнему понимается", () => {
     // Обе ветки живут одновременно: какая работает — зависит от версии комнаты.
     expect(readPauseFrame(pauseFrame)).toMatchObject({ initiatorId: 3, event: "on_start_pause" });
