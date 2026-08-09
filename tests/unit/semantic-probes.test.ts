@@ -75,6 +75,8 @@ describe("каждая проба умирает от своего дрифта"
       (t) => t.replace('ConfirmQuitGameModal",{on:', 'ConfirmQuitGameModal",{attrs:{ban:30},on:')],
     ["confirmQuitButtonLabel: «Покинуть лобби» переименована", gameSearchProbes, "confirmQuitButtonLabel", GS,
       (t) => t.replace("Покинуть лобби", "Да, выйти")],
+    ["censorshipModeTitles: очередь переименована", gameSearchProbes, "censorshipModeTitles", GS,
+      (t) => t.replace('title:"Рейтинг"', 'title:"Рейтинговая"')],
     ["playDisabledBinding: disabled отвязан от очередей", gameSearchProbes, "playDisabledBinding", GS,
       (t) => t.replace(/attrs:\{disabled:!(\w+)\.selectedCensorshipModes\.length\}/, "attrs:{disabled:!$1.queuesOk}")],
     ["inGameModalWiring: выход из модалки перестал слать quit_game", gameSearchProbes, "inGameModalWiring", GS,

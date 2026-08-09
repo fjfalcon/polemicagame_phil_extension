@@ -152,6 +152,18 @@ export const gameSearchProbes: Record<string, Probe> = {
     [],
     "illegalState=in_game → модалка game-in-progress с onQuitGame → quit_game",
   ),
+  /**
+   * Режимы очередей и их подписи: их показывает панелька «сколько в
+   * очередях» после игры, а сам список приходит с /api/search по ключам
+   * mode. Переименуют — панель начнёт врать заголовками.
+   */
+  censorshipModeTitles: inWindow(
+    "censorshipModes:[",
+    900,
+    ['mode:"standard"', 'title:"Обычный"', 'mode:"polite"', 'title:"Рейтинг"', 'mode:"prime"', 'title:"Prime"'],
+    [],
+    "очереди: standard «Обычный», polite «Рейтинг», prime «Prime»",
+  ),
   /** disabled у «Играть» ⇔ не выбраны очереди (queue-requeue и postgame читают). */
   playDisabledBinding: re(
     /attrs:\{disabled:!\w+\.selectedCensorshipModes\.length\}/,

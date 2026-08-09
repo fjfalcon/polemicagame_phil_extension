@@ -446,9 +446,11 @@ describe("§4.7 lifecycle heuristic", () => {
         "+2 (9.13.0) — hover-обработчики кнопки пересечений живут на её же узле, а таймер намерения гасится в mouseleave",
     },
     "src/content/features/postgame-search.ts": {
-      listeners: 1,
+      listeners: 2,
       timers: 0,
-      reason: "click handler is owned by the removable «В поиск» button node",
+      reason:
+        "click handler is owned by the removable «В поиск» button node; " +
+        "+1 (9.16.0) — «обновить» у панели очередей живёт на её же узле и снимается вместе с ним",
     },
     "src/content/features/queue-peek.ts": {
       listeners: 4,

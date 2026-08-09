@@ -54,6 +54,7 @@ import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { SITE, TEXT, hasPhaseMarker, matchFinishedVisible } from "@core/selectors";
 import { isGameRoomPath, isSearchPath } from "@shared/routes";
 import { log } from "@core/log";
+import { fetchQueueState, formatQueues } from "@core/queue-state";
 import { onMessage, sendRuntime } from "@core/messaging";
 import { showToast } from "@core/toast";
 import { refreshMark, validateMark } from "./requeue-pending";
@@ -70,6 +71,8 @@ export const POSTGAME_PENDING_KEY = "pn_postgame_pending";
 
 /** Наша кнопка в комнате. */
 export const BUTTON_ID = "pn-postgame-search";
+/** Панелька с составом очередей — живёт и умирает вместе с кнопкой. */
+export const QUEUES_ID = "pn-postgame-queues";
 
 /**
  * Дедлайн эпизода на странице поиска. Внутри должны уместиться: рендер
@@ -365,8 +368,63 @@ function onButtonClick(): void {
   location.assign("/game-search");
 }
 
+/**
+ * Сколько людей в очередях — рядом с кнопкой, чтобы решать «идти или нет»,
+ * не уходя со страницы (просьба владельца 09.08.2026).
+ *
+ * Запрос один: при показе кнопки. Дальше — только по кнопке «обновить».
+ * Опрос по таймеру здесь был бы платой ни за что: цифра нужна в момент
+ * решения, а вкладок с игрой у человека может быть несколько.
+ */
+function syncQueuePanel(show: boolean): void {
+  const existing = document.getElementById(QUEUES_ID);
+  if (!show) {
+    existing?.remove();
+    return;
+  }
+  if (existing) return;
+
+  const panel = document.createElement("div");
+  panel.id = QUEUES_ID;
+  panel.style.cssText = `
+    position: fixed; bottom: 62px; left: 50%; transform: translateX(-50%);
+    z-index: 2147483600; display: flex; align-items: center; gap: 8px;
+    background: rgba(30,31,38,.92); color: #e6e9f0; border-radius: 10px;
+    padding: 6px 10px; font: 12px/1.2 system-ui, sans-serif;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  `;
+
+  const text = document.createElement("span");
+  text.textContent = "Очереди: загрузка…";
+
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.textContent = "⟳";
+  refresh.title = "Обновить состояние очередей";
+  refresh.style.cssText = `
+    background: rgba(255,255,255,.12); color: inherit; border: 0;
+    border-radius: 6px; padding: 2px 7px; cursor: pointer; font-size: 13px;
+  `;
+
+  const load = async (): Promise<void> => {
+    refresh.disabled = true;
+    const counts = await fetchQueueState();
+    // Панель могли снять, пока шёл запрос: писать в отсоединённый узел
+    // незачем, а следующий показ загрузит заново.
+    if (!panel.isConnected) return;
+    text.textContent = counts ? `Очереди: ${formatQueues(counts)}` : "Очереди: не удалось узнать";
+    refresh.disabled = false;
+  };
+  refresh.addEventListener("click", () => void load());
+
+  panel.append(text, refresh);
+  (document.body || document.documentElement).appendChild(panel);
+  void load();
+}
+
 /** Нарисовать/убрать кнопку (идемпотентно — инвариант §4 п.1). */
 function syncButton(show: boolean): void {
+  syncQueuePanel(show);
   const existing = document.getElementById(BUTTON_ID);
   if (!show) {
     existing?.remove();
@@ -924,6 +982,7 @@ export const postgameSearchFeature: Feature = {
     lastPathname = "";
     clickStorageWarned = false;
     document.getElementById(BUTTON_ID)?.remove();
+    document.getElementById(QUEUES_ID)?.remove();
     settings = null;
   },
 };
