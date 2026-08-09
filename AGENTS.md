@@ -192,6 +192,8 @@ src/
                      модификаторы, e.repeat
     log.ts           кольцевой буфер → storage.local (ключ на контекст),
                      prime при старте, pagehide-флеш
+    ws-log.ts        полный лог кадров сокета комнаты (отдельный файл и
+                     отдельное хранилище; медиа и секреты не пишутся)
     messaging.ts, errors.ts, escape.ts, selectors.ts, FloatingPanel.ts
   content/     — content-скрипт: index.ts (регистрация фич), фичи, панели
   background/  — SW (Chrome) / event page (Firefox): OBS-клиент, инжект автопринятия
@@ -300,6 +302,7 @@ src/
 | local | pn_muted_players | player-notes: ники (lowercase) с локально выключенным звуком (8.1.41, глушение через video.volume=0 + маркер data-pn-muted) |
 | local | pn_update_last_check, pn_update_latest, pn_update_dismissed | update-notify (8.1.44). Переехали из localStorage страницы: тот принадлежит сайту (недоверенный) и не виден попапу с кнопкой ручной проверки |
 | local | polemica:logs:{content-<session>,bg,popup,ext} | log.ts (CAP 600/контекст; content-сессии старше 24ч чистятся) |
+| local | polemica:wslog:{session} | ws-log.ts — полный лог кадров игрового сокета: ВЫКЛЮЧЕН по умолчанию, потолок 2 млн символов, TTL 24ч, медиа и секреты не пишутся |
 | local | obs_connection_state, obs_auto_scene_state | obs-client/obs-panel |
 | local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |

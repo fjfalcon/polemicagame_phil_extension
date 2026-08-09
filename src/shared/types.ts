@@ -71,6 +71,8 @@ export interface Settings {
   postgame_requeue_enabled: boolean;
   /** Показывать, кто поставил паузу (сайт этого не сообщает). */
   pause_initiator_enabled: boolean;
+  /** Писать полный лог кадров игрового сокета (без медиа и ключей сессии). */
+  ws_full_log_enabled: boolean;
   /** Свернуть ники игроков «гармошкой» — видна только цифра. */
   compact_nicknames_enabled: boolean;
   /** Угол плитки для плашки игрока: default | top-left | top-right | bottom-right. */

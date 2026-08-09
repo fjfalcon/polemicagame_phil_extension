@@ -30,103 +30,16 @@
  * нет ни browser.*, ни наших модулей).
  */
 
+import {
+  type PauseSignal,
+  PROBE_MARK_ATTR,
+  frameEventName,
+  isEnvelopeFrame,
+  readPauseFrame,
+} from "./room-probe-parse";
+
 interface ProbeWindow extends Window {
   __pnRoomProbeInstalled?: boolean;
-}
-
-/** События паузы: инициатор может прийти прямо в пейлоаде. */
-const PAUSE_EVENTS = ["on_start_pause", "on_update_pause_time"];
-/** Полное состояние игры: инициатор лежит в объекте `pause`. */
-const STATE_EVENT = "on_detailed_game_state";
-const END_EVENT = "on_finish_pause";
-
-export interface PauseSignal {
-  /** id инициатора; null — событие про паузу есть, а инициатора в нём нет. */
-  initiatorId: number | null;
-  /** Пауза закончилась — подпись пора убирать. */
-  finished: boolean;
-  /** Какое событие принесло сигнал — нужно для разбора жалоб по логу. */
-  event?: string;
-}
-
-/** Маркер «зонд на месте»: читается content-скриптом без гонок с postMessage. */
-export const PROBE_MARK_ATTR = "data-pn-room-probe-ready";
-
-/**
- * Имя события в кадре — ТОЛЬКО для диагностики: по логу «пауза была, а
- * подписи нет» иначе невозможно отличить «кадр не пришёл» от «пришёл, но
- * называется иначе» (разбор 09.08.2026). Имя события не секрет: тела и
- * поля кадра наружу по-прежнему не уходят.
- */
-export function frameEventName(raw: string): string | null {
-  const m = /\[\s*"([A-Za-z0-9_.:-]{1,40})"/.exec(raw);
-  return m ? m[1] : null;
-}
-
-/**
- * Разбор кадра socket.io (engine.io v4): `42["event",{…}]`, возможен
- * неймспейс — `42/room,["event",{…}]`, и вложения — `451-[…]`.
- *
- * Экспортируется ради тестов: живой сокет в юнитах не поднять, а именно
- * здесь легче всего молча начать понимать не то (например, спутать
- * `on_finish_pause` с `on_start_pause` по подстроке).
- *
- * Возвращает null для всего, что не про паузу, — включая кадры, которые
- * парсить незачем: разбор JSON только для «своих» событий, иначе каждый
- * кадр игры гонял бы JSON.parse впустую.
- */
-export function readPauseFrame(raw: unknown): PauseSignal | null {
-  if (typeof raw !== "string") return null;
-  // Дешёвый предфильтр: подавляющее большинство кадров — не про паузу.
-  if (raw.indexOf("pause") < 0) return null;
-  const at = raw.indexOf("[");
-  if (at < 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.slice(at));
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed) || typeof parsed[0] !== "string") return null;
-  const event = parsed[0] as string;
-  const payload = parsed[1] as Record<string, unknown> | undefined;
-
-  if (event === END_EVENT) return { initiatorId: null, finished: true, event };
-  if (PAUSE_EVENTS.includes(event)) {
-    return { initiatorId: playerIdOrNull(payload?.initiatorId), finished: false, event };
-  }
-  if (event === STATE_EVENT) {
-    const pause = payload?.pause as Record<string, unknown> | undefined;
-    // Нет объекта паузы — состояние без паузы; это не сигнал «паузу сняли»:
-    // такой кадр приходит и в обычной игре, и гасить им подпись нельзя.
-    if (!pause || !pauseStillRunning(pause)) return null;
-    return { initiatorId: playerIdOrNull(pause.initiatorId), finished: false, event };
-  }
-  return null;
-}
-
-/**
- * Пауза в состоянии игры ЕЩЁ идёт.
- *
- * Сайт гейтит ровно по остатку времени (`t.pause.time.total -
- * t.pause.time.current`), и это важно: после F5 сервер присылает состояние с
- * уже истёкшей паузой, а её инициатор в объекте остаётся. Без этой проверки
- * подпись воскресала бы на постороннем экране (ревью 08.08.2026).
- */
-function pauseStillRunning(pause: Record<string, unknown>): boolean {
-  const time = pause.time as Record<string, unknown> | undefined;
-  const total = typeof time?.total === "number" ? time.total : 0;
-  const current = typeof time?.current === "number" ? time.current : 0;
-  return total - current > 0;
-}
-
-/**
- * id игрока или null. Сентинел `-1` («никого») в этом протоколе штатный —
- * он живёт и в соседних полях (`prosecutor`, `blamed`), и принимать его за
- * игрока значит утверждать заведомую неправду.
- */
-function playerIdOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 (() => {
@@ -142,18 +55,59 @@ function playerIdOrNull(value: unknown): number | null {
     }
   };
 
+  /** Пауза уже объявлена наружу — чтобы «паузы нет» слать только переходом. */
+  let pauseReported = false;
+
+  /**
+   * Полный лог кадров — ВЫКЛЮЧЕН, пока расширение прямо не попросит.
+   *
+   * Команду шлёт content-скрипт: настройки живут в storage расширения, а он
+   * асинхронный, и читать его здесь, в мире страницы, нечем. Подделать
+   * команду может и сама страница — но это ничего ей не даёт: кадры её
+   * собственного сокета она и так видит, а наружу они не уходят.
+   */
+  let frameLogOn = false;
+  const LOG_CMD = "pn-ws-log-cmd";
+
+  window.addEventListener("message", (e: MessageEvent) => {
+    if (e.source !== window) return;
+    const d = e.data as { source?: string; on?: unknown };
+    if (d?.source !== LOG_CMD) return;
+    frameLogOn = d.on === true;
+  });
+
+  const sendFrame = (dir: "in" | "out", raw: unknown): void => {
+    if (!frameLogOn || typeof raw !== "string") return;
+    try {
+      window.postMessage({ source: "pn-room-probe", frame: { dir, raw } }, location.origin);
+    } catch {
+      /* страница уходит — сказать уже некому */
+    }
+  };
+
   /** Разбор в изоляции: наша ошибка не должна касаться игры. */
   const handle = (raw: unknown): void => {
     try {
+      sendFrame("in", raw);
       const signal = readPauseFrame(raw);
       if (signal) {
+        if (signal.finished) {
+          // Состояние без паузы приезжает с КАЖДЫМ кадром комнаты, то есть
+          // пачками на любое действие за столом. Без этого гейта мы будили
+          // бы подписчика и перерисовку впустую весь матч.
+          if (!pauseReported) return;
+          pauseReported = false;
+        } else {
+          pauseReported = true;
+        }
         send(signal);
         return;
       }
       // Кадр про паузу, который мы НЕ поняли: сообщаем одно лишь имя
-      // события. Без этого лог не отличает «сервер молчит» от «сервер
-      // назвал событие иначе» — тупик разбора 09.08.2026.
-      if (typeof raw === "string" && raw.indexOf("pause") >= 0) {
+      // события. Конверты сюда не попадают — они разобраны выше, а их общее
+      // имя «events» только глушило бы диагностику (разбор 09.08.2026:
+      // первый же кадр при входе съедал строку на весь матч).
+      if (typeof raw === "string" && !isEnvelopeFrame(raw) && raw.indexOf("pause") >= 0) {
         const name = frameEventName(raw);
         if (name) window.postMessage({ source: "pn-room-probe", unrecognized: name }, location.origin);
       }
@@ -194,6 +148,26 @@ function playerIdOrNull(value: unknown): number | null {
       return desc.set!.call(this, wrapped);
     },
   });
+
+  /**
+   * Исходящие кадры — для полного лога.
+   *
+   * Обёртка над `send` безопаснее, чем над addEventListener: она не подменяет
+   * ничьих ссылок и ничего не ломает при отписке (тот блокер 08.08.2026).
+   * Сначала отдаём кадр сокету и только потом копируем себе: наша ошибка не
+   * имеет права задержать отправку хода игрока. При выключенном логе
+   * обёртка стоит копейки — одна проверка флага.
+   */
+  const originalSend = proto.send;
+  proto.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
+    const result = originalSend.call(this, data);
+    try {
+      sendFrame("out", data);
+    } catch {
+      /* копия кадра не удалась — игре это безразлично */
+    }
+    return result;
+  };
 
   /**
    * Метка «зонд установлен» — атрибутом на <html>, а не сообщением: content

@@ -187,6 +187,29 @@ export const roomProbes: Record<string, Probe> = {
     "тернарник роллера: .new-stage рисуется ровно при voting_for_game_start",
   ),
   newStageClass: has('class:"new-stage"', "класс new-stage существует в шаблоне роллера"),
+  /**
+   * Состояние комнаты приезжает КОНВЕРТОМ `events` — на этом факте держится
+   * весь разбор паузы. Три захода подряд (07–09.08.2026) фича молчала
+   * именно потому, что зонд ждал события с собственным именем.
+   */
+  envelopeCarriesRoomState: re(
+    /socket\.on\("events",\(?function\(\w+\)\{"roomState"===\w+\.type&&\w+\.commit\("setGameView",\w+\.data\)/,
+    'события комнаты приходят конвертом events: {type:"roomState",data}',
+  ),
+  /**
+   * Пауза в этом протоколе — ЗАМОРОЖЕННЫЙ таймер, отдельного объекта паузы
+   * нет. Зонд судит ровно так же; разъедься правила — он снова начнёт
+   * молчать в живой игре, а тесты этого не заметят.
+   */
+  pauseIsFrozenTimer: re(
+    /=function\(\w+\)\{if\(\w+\.timer&&null!==\w+\.timer\.passed&&void 0!==\w+\.timer\.passed\)return \w+\.timer/,
+    "пауза ⇔ timer.passed определён (функция LA)",
+  ),
+  /** …и именно этот признак сайт превращает в gameIsPaused. */
+  pauseStatusFromTimer: re(
+    /=!!\w+;if\(\w+!==\w+\.state\.gameIsPaused&&\w+\.commit\("updatePauseStatus"/,
+    "gameIsPaused ⇔ найден замороженный таймер",
+  ),
   /** on_game_disbandment только запускает отсчёт (t.time) — больше ничего. */
   disbandmentStartsCountdown: re(
     /on\("on_game_disbandment",[\s\S]{0,220}?startDisbandmentCountdown\(\w+\.time\)/,

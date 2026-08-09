@@ -23,7 +23,7 @@
  */
 import { onDomChange } from "@core/dom";
 import { SITE } from "@core/selectors";
-import { PROBE_MARK_ATTR } from "../page/room-probe-page";
+import { PROBE_MARK_ATTR } from "../page/room-probe-parse";
 import { log } from "@core/log";
 import { isGameRoomPath } from "@shared/routes";
 import type { Feature, FeatureContext } from "@core/feature";
@@ -133,6 +133,8 @@ function onProbeMessage(e: MessageEvent): void {
     finished?: unknown;
     unrecognized?: unknown;
     event?: unknown;
+    raw?: unknown;
+    schema?: unknown;
   };
   if (data?.source !== PROBE_SOURCE) return;
   if (typeof data.unrecognized === "string") {
@@ -162,13 +164,19 @@ function onProbeMessage(e: MessageEvent): void {
     if (!unknownEventsSeen.has(`no-id:${name}`)) {
       unknownEventsSeen.add(`no-id:${name}`);
       log.info(SCOPE, "сигнал паузы получен, инициатора в нём нет:", name);
+      // Имена полей состояния — чтобы следующий шаг не стоил владельцу ещё
+      // одной игры с паузой: по ним видно, есть ли инициатор на проводе.
+      if (typeof data.schema === "string") log.info(SCOPE, "поля состояния:", data.schema);
     }
     return;
   }
   initiatorId = id;
   if (loggedFor !== id) {
     loggedFor = id;
-    log.info(SCOPE, "паузу поставил:", describeInitiator(id));
+    // Сырое значение — в лог обязательно: нумерация мест в двух протоколах
+    // разная, и промах на единицу иначе выглядит как «просто не тот игрок».
+    const source = typeof data.raw === "string" ? ` (в кадре ${data.raw})` : "";
+    log.info(SCOPE, "паузу поставил:", describeInitiator(id) + source);
   }
   renderLabel();
 }

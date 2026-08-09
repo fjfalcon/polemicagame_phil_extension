@@ -10,7 +10,8 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { PROBE_FLAG_KEY, injectProbe, probeAllowed } from "@content/page/room-probe-inject";
+import { PROBE_FLAG_KEY, WS_LOG_FLAG_KEY, injectProbe, probeAllowed } from "@content/page/room-probe-inject";
+import { findInitiator, isEnvelopeFrame, pausedTimer, readPauseFrame } from "@content/page/room-probe-parse";
 
 /** Оригинальный дескриптор — вернём после каждого теста. */
 const originalOnMessage = Object.getOwnPropertyDescriptor(WebSocket.prototype, "onmessage");
@@ -24,6 +25,39 @@ async function installProbe(): Promise<void> {
 
 /** Кадр socket.io с паузой (движок шлёт их с префиксом «42»). */
 const pauseFrame = `42${JSON.stringify(["on_start_pause", { time: 60, initiatorId: 3 }])}`;
+
+/**
+ * Конверт нового протокола — то, что реально приезжает в живой комнате
+ * (лог владельца 09.08.2026). Пауза здесь — замороженный таймер (`passed`),
+ * отдельного события паузы сервер не шлёт вовсе.
+ */
+function envelope(state: Record<string, unknown>, type = "roomState"): string {
+  return `42${JSON.stringify(["events", { type, data: state }])}`;
+}
+
+const runningState = {
+  stage: { type: "speech", day: 1, player: 3 },
+  timer: { duration: 60000, passed: null },
+  players: [{ position: 1, username: "СекретныйНик", timer: null, actions: ["vote"] }],
+  actions: ["pause"],
+};
+const pausedState = {
+  ...runningState,
+  timer: { duration: 60000, passed: 12000, tillEnd: 48000, initiatorId: 4 },
+};
+const runningFrame = envelope(runningState);
+const pausedFrame = envelope(pausedState);
+
+/**
+ * Команда «писать кадры», какую шлёт content-скрипт. Событие доставляем
+ * синхронно: postMessage в jsdom асинхронный, а слушатель зонда нам нужен
+ * прямо сейчас.
+ */
+function startFrameLog(): void {
+  window.dispatchEvent(
+    new MessageEvent("message", { data: { source: "pn-ws-log-cmd", on: true }, source: window }),
+  );
+}
 
 /**
  * Настоящий WebSocket: подделка объекта с подменённым прототипом не годится
@@ -104,12 +138,101 @@ describe("гейт раннего инжекта", () => {
     );
   });
 
+  test("полный лог поднимает зонд даже при выключенной подписи паузы", () => {
+    // У двух потребителей зонда разные дефолты. Выключив подпись, человек не
+    // должен незаметно лишиться лога, который сам только что включил.
+    const store = new Map([
+      [PROBE_FLAG_KEY, "0"],
+      [WS_LOG_FLAG_KEY, "1"],
+    ]);
+    expect(probeAllowed({ getItem: (k: string) => store.get(k) ?? null })).toBe(true);
+    store.set(WS_LOG_FLAG_KEY, "0");
+    expect(
+      probeAllowed({ getItem: (k: string) => store.get(k) ?? null }),
+      "обе настройки выключены — зонда быть не должно",
+    ).toBe(false);
+  });
+
   test("ключ зеркала совпадает с тем, что пишет content-скрипт", async () => {
     // Разъедься они — выключатель молча перестанет действовать.
     const fs = await import("node:fs");
     const src = fs.readFileSync("src/content/index.ts", "utf8");
     expect(src).toContain("PROBE_FLAG_KEY");
     expect(PROBE_FLAG_KEY).toBe("pn_room_probe");
+  });
+});
+
+describe("конверт нового протокола", () => {
+  test("пауза в состоянии комнаты распознаётся, место приводится к 0-based", () => {
+    // Сайт сам пишет `v.player - 1` — ссылки на игрока здесь единичные.
+    const signal = readPauseFrame(pausedFrame);
+    expect(signal).toMatchObject({ initiatorId: 3, finished: false, event: "events/roomState" });
+    expect(signal?.raw, "сырое значение — чтобы промах на единицу был виден в логе").toBe(
+      "initiatorId=4",
+    );
+  });
+
+  test("состояние без паузы — сигнал «паузу сняли»", () => {
+    expect(readPauseFrame(runningFrame)).toMatchObject({ finished: true, initiatorId: null });
+  });
+
+  test("чужой тип конверта без паузы подпись не гасит", () => {
+    // Иначе любой посторонний кадр стирал бы подпись посреди паузы.
+    expect(readPauseFrame(envelope(runningState, "chatMessage"))).toBeNull();
+  });
+
+  test("пауза есть, инициатора нет — отдаём ИМЕНА полей, без значений", () => {
+    const noInitiator = {
+      ...runningState,
+      timer: { duration: 60000, passed: 12000, tillEnd: 48000 },
+    };
+    const signal = readPauseFrame(envelope(noInitiator));
+    expect(signal).toMatchObject({ initiatorId: null, finished: false });
+    expect(signal?.schema).toContain("passed");
+    expect(signal?.schema, "ник игрока наружу уходить не должен").not.toContain("СекретныйНик");
+    expect(signal?.schema).toContain("username");
+  });
+
+  test("инициатор ищется по имени поля на любой глубине", () => {
+    // Жёсткий путь уже дважды промахнулся — сервер волен переложить поле.
+    expect(findInitiator({ a: { b: { pauseInitiator: 7 } } })).toEqual({
+      key: "pauseInitiator",
+      value: 7,
+    });
+    expect(findInitiator({ initiatorId: -1 }), "«никого» — не игрок").toBeNull();
+    expect(findInitiator({ initiatorId: "4" }), "строка — не место за столом").toBeNull();
+    expect(findInitiator({ playerId: 4 }), "чужое поле не подходит").toBeNull();
+  });
+
+  test("правило паузы повторяет сайт: замороженный таймер", () => {
+    expect(pausedTimer({ timer: { passed: 0 }, players: [] }), "passed=0 — тоже пауза").toEqual({
+      passed: 0,
+    });
+    expect(pausedTimer({ timer: { duration: 60000 }, players: [] })).toBeNull();
+    // Единственный игрок с таймером — тоже пауза (функция LA сайта).
+    expect(pausedTimer({ players: [{ timer: { passed: 5 } }, { timer: null }] })).toEqual({
+      passed: 5,
+    });
+    // …а двое одновременно — это уже не пауза, а обычный ход.
+    expect(pausedTimer({ players: [{ timer: { passed: 5 } }, { timer: { passed: 7 } }] })).toBeNull();
+  });
+
+  test("конверт узнаётся по началу кадра, а не по всему телу", () => {
+    // Массив, который НАЧИНАЕТСЯ со строки "events", в теле чужого кадра —
+    // совершенно законный JSON и никакого экранирования не получает. Ищи мы
+    // подстроку по всему кадру, такой кадр притворился бы конвертом; заодно
+    // поиск гонялся бы по десяткам килобайт на каждом сообщении сокета.
+    expect(isEnvelopeFrame(runningFrame)).toBe(true);
+    const foreign = `42["on_message",{"messageTags":["events","chat"]}]`;
+    expect(foreign.indexOf('["events"'), "подстрока в теле есть — важно, что не в начале").toBeGreaterThan(
+      24,
+    );
+    expect(isEnvelopeFrame(foreign)).toBe(false);
+  });
+
+  test("старый протокол по-прежнему понимается", () => {
+    // Обе ветки живут одновременно: какая работает — зависит от версии комнаты.
+    expect(readPauseFrame(pauseFrame)).toMatchObject({ initiatorId: 3, event: "on_start_pause" });
   });
 });
 
@@ -230,6 +353,102 @@ describe("перехват сокета", () => {
     target.removeEventListener("message", handler);
     target.dispatchEvent(new MessageEvent("message", { data: pauseFrame }));
     expect(handler, "снятый слушатель не должен вызываться").not.toHaveBeenCalled();
+  });
+
+  test("состояние без паузы молчит, пока паузы не было (иначе шум весь матч)", async () => {
+    // Кадр «паузы нет» приезжает с каждым действием за столом. Слать его
+    // всегда — значит будить перерисовку сотни раз за игру.
+    await installProbe();
+    const posted: Array<Record<string, unknown>> = [];
+    const postSpy = vi.spyOn(window, "postMessage").mockImplementation(((m: Record<string, unknown>) => {
+      posted.push(m);
+    }) as unknown as typeof window.postMessage);
+    const ws = makeSocket();
+    ws.onmessage = () => {};
+    const fire = (frame: string): void =>
+      (ws.onmessage as (e: MessageEvent) => void).call(ws, new MessageEvent("message", { data: frame }));
+
+    fire(runningFrame);
+    fire(runningFrame);
+    expect(posted, "паузы не было — говорить не о чем").toEqual([]);
+    fire(pausedFrame);
+    expect(posted).toHaveLength(1);
+    fire(runningFrame);
+    expect(posted[1], "переход «пауза кончилась» обязан дойти").toMatchObject({ finished: true });
+    fire(runningFrame);
+    expect(posted, "а повторы — уже нет").toHaveLength(2);
+    postSpy.mockRestore();
+  });
+
+  test("конверт не попадает в диагностику «незнакомого события»", async () => {
+    // Именно это и сгубило разбор 09.08.2026: у ВСЕХ кадров конверта одно
+    // имя — «events», строка про него пишется раз на имя, и первый же кадр
+    // при входе в комнату съедал диагностику на весь матч.
+    await installProbe();
+    const posted: Array<Record<string, unknown>> = [];
+    const postSpy = vi.spyOn(window, "postMessage").mockImplementation(((m: Record<string, unknown>) => {
+      posted.push(m);
+    }) as unknown as typeof window.postMessage);
+    const ws = makeSocket();
+    ws.onmessage = () => {};
+    // Кадр конверта, который мы намеренно не разбираем, — и слово «pause» в
+    // нём есть (список доступных действий стола).
+    const foreign = envelope(runningState, "chatMessage");
+    expect(foreign, "иначе тест ничего не проверяет").toContain("pause");
+    (ws.onmessage as (e: MessageEvent) => void).call(ws, new MessageEvent("message", { data: foreign }));
+    expect(posted).toEqual([]);
+    postSpy.mockRestore();
+  });
+
+  test("полный лог кадров молчит, пока расширение его не попросит", async () => {
+    // Настройка выключена по умолчанию: в кадрах комнаты роли и ночные ходы.
+    // Зонд не имеет права начать их пересылать «на всякий случай».
+    await installProbe();
+    const posted: Array<Record<string, unknown>> = [];
+    const postSpy = vi.spyOn(window, "postMessage").mockImplementation(((m: Record<string, unknown>) => {
+      posted.push(m);
+    }) as unknown as typeof window.postMessage);
+    const ws = makeSocket();
+    ws.onmessage = () => {};
+    (ws.onmessage as (e: MessageEvent) => void).call(
+      ws,
+      new MessageEvent("message", { data: pauseFrame }),
+    );
+    expect(posted.some(m => "frame" in m), "кадры наружу без команды не уходят").toBe(false);
+    postSpy.mockRestore();
+  });
+
+  test("по команде расширения кадры идут в обе стороны", async () => {
+    // Исходящие важны не меньше входящих: по ним видно, что именно сайт и
+    // расширение просят у сервера.
+    const nativeSend = WebSocket.prototype.send;
+    const sendStub = vi.fn();
+    // Подменяем ДО установки зонда: в jsdom настоящий send на неоткрытом
+    // сокете бросает, и обёртка до копии кадра просто не доходит.
+    WebSocket.prototype.send = sendStub as unknown as WebSocket["send"];
+    try {
+      await installProbe();
+      startFrameLog();
+      const posted: Array<Record<string, unknown>> = [];
+      const postSpy = vi.spyOn(window, "postMessage").mockImplementation(((m: Record<string, unknown>) => {
+        posted.push(m);
+      }) as unknown as typeof window.postMessage);
+      const ws = makeSocket();
+      ws.onmessage = () => {};
+      (ws.onmessage as (e: MessageEvent) => void).call(
+        ws,
+        new MessageEvent("message", { data: pauseFrame }),
+      );
+      ws.send('42["run_action",{"action":"pause"}]');
+
+      expect(sendStub, "кадр обязан дойти до сокета").toHaveBeenCalledTimes(1);
+      const frames = posted.filter(m => "frame" in m).map(m => m.frame as Record<string, unknown>);
+      expect(frames.map(f => f.dir)).toEqual(["in", "out"]);
+      expect(frames[1].raw).toContain("run_action");
+      postSpy.mockRestore();
+    } finally {
+      WebSocket.prototype.send = nativeSend;
+    }
   });
 
   test("повторный инжект не ставит второй слой обёрток", async () => {

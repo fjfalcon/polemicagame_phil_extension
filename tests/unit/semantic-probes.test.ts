@@ -86,6 +86,12 @@ describe("каждая проба умирает от своего дрифта"
     // room
     ["readyActiveBoundToVoted: active отвязан от voted", roomProbes, "readyActiveBoundToVoted", ROOM,
       (t) => t.replace(/\{active:(\w+(\.\$parent)?)\.votingForGameStart\.voted\}/, "{active:$1.votingForGameStart.inProgress}")],
+    ["envelopeCarriesRoomState: конверт перестал везти состояние", roomProbes, "envelopeCarriesRoomState", ROOM,
+      (t) => t.replace('"roomState"===', '"gameState"===')],
+    ["pauseIsFrozenTimer: признак паузы переименован", roomProbes, "pauseIsFrozenTimer", ROOM,
+      (t) => t.replaceAll(".timer.passed", ".timer.stopped")],
+    ["pauseStatusFromTimer: пауза отвязана от таймера", roomProbes, "pauseStatusFromTimer", ROOM,
+      (t) => t.replace('gameIsPaused&&Nd.commit("updatePauseStatus"', 'gameIsPaused&&Nd.commit("updateStage"')],
     ["rollerPregameTernary: стадия переименована", roomProbes, "rollerPregameTernary", ROOM,
       (t) => t.replace('"voting_for_game_start"===', '"lobby_gathering"===')],
     ["disbandmentStartsCountdown: роспуск делает больше", roomProbes, "disbandmentStartsCountdown", ROOM,

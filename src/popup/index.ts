@@ -11,6 +11,7 @@
  */
 import { browser, isStoreInstall } from "@core/env";
 import { log } from "@core/log";
+import * as wsLog from "@core/ws-log";
 import { installErrorCapture } from "@core/errors";
 import {
   getSetting,
@@ -148,6 +149,35 @@ document.addEventListener("DOMContentLoaded", () => {
   $("clear_logs")?.addEventListener("click", async () => {
     await log.clearAll();
     showPopupToast("Логи очищены");
+  });
+
+  // ─────────────── Полный лог общения с сервером: скачать / очистить ───────────────
+  // Отдельный файл, а не раздел обычного журнала: кадров за игру тысячи, и в
+  // общем логе они утопили бы записи о наших собственных решениях.
+  $("download_ws_log")?.addEventListener("click", async () => {
+    const frames = await wsLog.collectAll();
+    if (frames.length === 0) {
+      // Пустой файл только собьёт с толку: причина почти всегда одна —
+      // настройку не включили либо включили уже после игры.
+      showPopupToast(
+        "Полный лог пуст. Включи «Полный лог общения с сервером», обнови страницу игры и сыграй — записывается только после этого",
+        "error",
+        8000,
+      );
+      return;
+    }
+    const blob = new Blob([wsLog.formatFrames(frames)], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `polemica-ws-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showPopupToast(`Кадров: ${frames.length}`);
+  });
+  $("clear_ws_log")?.addEventListener("click", async () => {
+    await wsLog.clearAll();
+    showPopupToast("Полный лог очищен");
   });
 
   // ───────────────────────── Проверка обновления вручную ─────────────────────────
@@ -976,6 +1006,7 @@ document.addEventListener("DOMContentLoaded", () => {
         : "default";
     }
     set("pause_initiator_enabled", items.pause_initiator_enabled);
+    set("ws_full_log_enabled", items.ws_full_log_enabled);
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
     set("debug_logging_enabled", items.debug_logging_enabled);
@@ -1070,6 +1101,7 @@ document.addEventListener("DOMContentLoaded", () => {
       compact_nicknames_enabled: cb("compact_nicknames_enabled", false),
       nick_plate_position: $<HTMLSelectElement>("nick_plate_position")?.value || "default",
       pause_initiator_enabled: cb("pause_initiator_enabled", true),
+      ws_full_log_enabled: cb("ws_full_log_enabled", false),
       f5_refresh_fix_enabled: cb("f5_refresh_fix_enabled", true),
       update_check_enabled: cb("update_check_enabled", true),
       debug_logging_enabled: cb("debug_logging_enabled", true),
@@ -1183,6 +1215,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "compact_nicknames_enabled",
     "nick_plate_position",
     "pause_initiator_enabled",
+    "ws_full_log_enabled",
     "f5_refresh_fix_enabled",
     "update_check_enabled",
     "debug_logging_enabled",

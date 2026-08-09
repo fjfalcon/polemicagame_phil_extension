@@ -39,3 +39,9 @@ iew.user.mmr},null,8,["value"])):So("v-if",!0),vr(yo("div",{class:"player__info 
 ame:"PlayerNumber",props:{id:Number}};var vy=(0,Ff.A)(gy,[["render",function(e,t,i,n,r,o){return to(),ao("div",{class:d(["player-number","player-".concat(i.id)]),textContent:v(i.id+1)},null,10,xy)}],["__scopeId","data-v-e1cce3d0"]]),ky={class:"scores-details"},by={key:0,class:"scores-phase"},_y={class:"scores-title"},Sy={key:1,class:"scor
 /*—SNIPPET—*/
 age({type:t.stage,time:t.stageTime})}if(e.$store.state.gameDidStart&&e.$store.commit("updateOnlinePlayers",l),n){var m={agree:t.votingAgainstPause.agree,disagree:t.votingAgainstPause.disagree},f=null;t.pause&&t.pause.initiatorId&&(f=t.pause.initiatorId),e.on_start_pause({time:n,voted:t.votingAgainstPause.voted,votes:m,initiatorId:f}),e.votingForGameContinue.inProgress=!0,e.votingForGameContinue.voted=t.votingAgainstPause.voted,e.votingForGameContinue.agreeIds=t.votingAgainstPause.agreeIds}if(!e.mediaRoom.isConnecte
+
+
+/* --- конверт events + правило паузы (снято с живого бандла 09.08.2026) --- */
+this.socket.on("events",(function(e){"roomState"===e.type&&Nd.commit("setGameView",e.data)})),this.socket.on("on_error_c
+LA=function(e){if(e.timer&&null!==e.timer.passed&&void 0!==e.timer.passed)return e.timer;var t=e.players.filter((function(e){return null!==e.timer&&void 0!==e.timer}));if(1===t.length){var i=t[0];if(null!==i.timer.passed&&void 0!==i.timer.passed)return i.time
+e,d=!1,h={streams:[],states:[]},m=LA(u),f=!!m;if(f!==Nd.state.gameIsPaused&&Nd.commit("updatePauseStatus",f),Nd.state.pauseTimeoutId&&(clearTimeout(Nd.state.pauseTimeoutId),Nd.comm

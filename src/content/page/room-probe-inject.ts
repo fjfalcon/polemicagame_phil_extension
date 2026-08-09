@@ -20,12 +20,22 @@
 
 /** Зеркало настройки `pause_initiator_enabled` (пишет content.js). */
 export const PROBE_FLAG_KEY = "pn_room_probe";
+/** Зеркало настройки `ws_full_log_enabled` — по умолчанию ВЫКЛЮЧЕНА. */
+export const WS_LOG_FLAG_KEY = "pn_ws_log";
 
-/** Читать флаг без падений: приватный режим запрещает localStorage целиком. */
+/**
+ * Читать флаги без падений: приватный режим запрещает localStorage целиком.
+ *
+ * Зонд нужен двум потребителям сразу, и у них разные дефолты: подпись
+ * инициатора включена по умолчанию, полный лог кадров — нет. Поэтому «или»,
+ * а не общий выключатель: выключив подпись, человек не должен незаметно
+ * лишиться полного лога, который сам же только что включил.
+ */
 export function probeAllowed(store: Pick<Storage, "getItem"> | null): boolean {
   try {
     // Ключа нет — первый заход на этой машине: дефолт настройки (включено).
-    return store?.getItem(PROBE_FLAG_KEY) !== "0";
+    if (store?.getItem(PROBE_FLAG_KEY) !== "0") return true;
+    return store?.getItem(WS_LOG_FLAG_KEY) === "1";
   } catch {
     return true;
   }

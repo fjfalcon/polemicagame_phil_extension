@@ -26,7 +26,7 @@ vi.mock("@core/log", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { readPauseFrame } from "@content/page/room-probe-page";
+import { readPauseFrame } from "@content/page/room-probe-parse";
 import {
   LABEL_CLASS,
   PROBE_SOURCE,

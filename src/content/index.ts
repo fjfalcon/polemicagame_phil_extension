@@ -14,7 +14,7 @@ import { clearToasts } from "@core/toast";
 import { setupNicknameLengthsResponder } from "./nickname-lengths";
 import { setupDiagnostics } from "./diag";
 import { startOrphanWatch, stopOrphanWatch } from "./orphan-watch";
-import { PROBE_FLAG_KEY } from "./page/room-probe-inject";
+import { PROBE_FLAG_KEY, WS_LOG_FLAG_KEY } from "./page/room-probe-inject";
 
 import { searchFeature } from "./features/search";
 import { autoStartFeature } from "./features/auto-start";
@@ -33,6 +33,7 @@ import { queueRequeueFeature } from "./features/queue-requeue";
 import { postgameSearchFeature } from "./features/postgame-search";
 import { nickPlateFeature } from "./features/nick-plate";
 import { pauseInitiatorFeature } from "./features/pause-initiator";
+import { wsLogFeature } from "./features/ws-log";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -54,6 +55,7 @@ const manager = new FeatureManager().register(
   postgameSearchFeature,
   nickPlateFeature,
   pauseInitiatorFeature,
+  wsLogFeature,
   obsPanelFeature,
   twitchPanelFeature,
 );
@@ -173,6 +175,25 @@ void getSetting("pause_initiator_enabled")
   .then((on) => mirrorProbeFlag(on !== false));
 onSettingsChanged((patch) => {
   if ("pause_initiator_enabled" in patch) mirrorProbeFlag(patch.pause_initiator_enabled !== false);
+});
+
+/**
+ * Второе зеркало — для полного лога кадров. Своё, а не общее с подписью
+ * паузы: дефолты у настроек разные (лог выключен), и выключив подпись,
+ * человек не должен незаметно потерять лог, который сам только что включил.
+ */
+function mirrorWsLogFlag(on: boolean): void {
+  try {
+    localStorage.setItem(WS_LOG_FLAG_KEY, on ? "1" : "0");
+  } catch {
+    /* приватный режим: зонд останется на дефолте */
+  }
+}
+void getSetting("ws_full_log_enabled")
+  .catch(() => false)
+  .then((on) => mirrorWsLogFlag(on === true));
+onSettingsChanged((patch) => {
+  if ("ws_full_log_enabled" in patch) mirrorWsLogFlag(patch.ws_full_log_enabled === true);
 });
 
 // Сторож осиротевшей вкладки (F5-баннер). Гейт по мастер-выключателю:
