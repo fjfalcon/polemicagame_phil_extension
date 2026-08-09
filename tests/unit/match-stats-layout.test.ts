@@ -285,6 +285,22 @@ describe("ники в разборе ведут в профиль игрока",
     expect(links().map((a) => a.getAttribute("href"))).toEqual(["/profile/222", "/profile/222"]);
   });
 
+  test("значки сайта в ячейке не уничтожаются ссылкой", () => {
+    // Рядом с ником сайт рисует значки (подписка, prime, twitch). Прежняя
+    // версия делала cell.textContent = "" и сносила их молча.
+    buildSitePage(SCOPE_ATTR);
+    const cell = document.querySelector<HTMLElement>('.cell.username[data-player="1"]')!;
+    cell.innerHTML = 'a <img class="site-icon" src="x.svg">';
+    matchStatsFeature.enable(ctx as never);
+    fireGameData();
+    expect(cell.querySelector("img.site-icon"), "значок обязан уцелеть").not.toBeNull();
+    expect(cell.querySelector("a.pn-profile-link img.site-icon"), "и уехать внутрь ссылки").not.toBeNull();
+
+    matchStatsFeature.disable();
+    expect(cell.querySelector("img.site-icon"), "и вернуться при выключении").not.toBeNull();
+    expect(cell.querySelector("a.pn-profile-link")).toBeNull();
+  });
+
   test("выключение фичи возвращает ячейкам обычный текст", () => {
     buildSitePage(SCOPE_ATTR);
     matchStatsFeature.enable(ctx as never);

@@ -227,8 +227,14 @@ export async function fetchHistory(
   if (!first) return null;
   const rows = [...first.rows];
   let page = 1;
-  const reachedDepth = (): boolean =>
-    until !== undefined && rows.length > 0 && (rows[rows.length - 1].date ?? "") < until;
+  const reachedDepth = (): boolean => {
+    if (until === undefined) return false;
+    const last = rows[rows.length - 1]?.date;
+    // Строка БЕЗ даты не должна обрывать листание: пустая строка меньше
+    // любой даты, и один такой ответ и останавливал загрузку, и помечал
+    // историю полной — то есть недобор выдавался бы за точный итог.
+    return last !== undefined && last < until;
+  };
 
   while (rows.length < first.total && page < maxPages && !reachedDepth()) {
     page++;

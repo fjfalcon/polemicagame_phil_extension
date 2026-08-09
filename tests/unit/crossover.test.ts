@@ -223,6 +223,27 @@ describe("загрузка истории страницами", () => {
     vi.unstubAllGlobals();
   });
 
+  test("строка без даты не обрывает листание и не выдаётся за полноту", async () => {
+    // Пустая дата меньше любой границы: раньше один такой ответ и
+    // останавливал загрузку, и помечал историю ПОЛНОЙ — недобор выглядел бы
+    // точным итогом (находка самопроверки 09.08.2026).
+    const fetchMock = vi.fn(async (url: string) => {
+      const page = Number(new URL(url).searchParams.get("page") ?? 1);
+      const rows = Array.from({ length: PAGE_SIZE }, (_, i) => ({
+        id: page * 1000 + i,
+        role: { type: "civilian" },
+        result: { code: "success" },
+        // У последней строки страницы даты нет — так бывает у битой записи.
+        date_start: i === PAGE_SIZE - 1 ? null : "2026-12-01 10:00:00",
+      }));
+      return { ok: true, json: async () => ({ rows, totalCount: PAGE_SIZE * 3 }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const h = await fetchHistory(1, "2020-01-01 00:00:00");
+    expect(h?.rows, "листание продолжилось").toHaveLength(PAGE_SIZE * 3);
+    vi.unstubAllGlobals();
+  });
+
   test("упёрлись в предел страниц — говорим об этом честно", async () => {
     vi.stubGlobal("fetch", serve(PAGE_SIZE * (MAX_PAGES + 5)));
     const h = await fetchHistory(1);

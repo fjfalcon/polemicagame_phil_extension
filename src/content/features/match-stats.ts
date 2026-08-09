@@ -312,8 +312,11 @@ function linkPlayerNames(table: HTMLElement, players: any[]): void {
     link.target = "_blank";
     link.rel = "noopener";
     link.title = "Открыть профиль игрока";
-    link.textContent = shown || entry.name;
-    cell.textContent = "";
+    // ПЕРЕНОСИМ содержимое, а не переписываем текстом: в ячейке рядом с ником
+    // могут стоять значки сайта (подписка, prime, twitch), и `textContent = ""`
+    // снёс бы их молча. Заодно кликабельной становится вся ячейка.
+    while (cell.firstChild) link.appendChild(cell.firstChild);
+    if (!link.textContent?.trim()) link.textContent = entry.name;
     cell.appendChild(link);
   });
 }
@@ -321,7 +324,8 @@ function linkPlayerNames(table: HTMLElement, players: any[]): void {
 /** Снять наши ссылки, вернув ячейкам обычный текст. */
 function unlinkPlayerNames(root: ParentNode = document): void {
   root.querySelectorAll<HTMLAnchorElement>(`.${PROFILE_LINK_CLASS}`).forEach((link) => {
-    link.replaceWith(document.createTextNode(link.textContent ?? ""));
+    // Возвращаем ИМЕННО то, что забрали (включая значки сайта), а не текст.
+    link.replaceWith(...Array.from(link.childNodes));
   });
 }
 
