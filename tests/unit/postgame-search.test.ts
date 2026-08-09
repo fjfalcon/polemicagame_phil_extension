@@ -43,6 +43,7 @@ import {
   POSTGAME_PENDING_KEY,
   jamReload,
   noteTrustedInput,
+  QUEUES_ID,
   postgameSearchFeature,
 } from "@content/features/postgame-search";
 import { log } from "@core/log";
@@ -946,5 +947,87 @@ describe("поиск: машина «выйти из игры → Играть»
     vi.advanceTimersByTime(2000);
     domSubscriber?.();
     expect(clicked()).toHaveLength(0);
+  });
+});
+
+describe("панель очередей у кнопки", () => {
+  /** Ответ сервиса очередей — как на живом /api/search. */
+  function serveQueues(standard: number): ReturnType<typeof vi.fn> {
+    return vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ queues: { standard: { players: standard } } }),
+    }));
+  }
+
+  test("появляется и исчезает вместе с кнопкой", async () => {
+    vi.stubGlobal("fetch", serveQueues(3));
+    endedScreen("ended ended-mafia");
+    postgameSearchFeature.enable(ctx);
+    const panel = document.getElementById(QUEUES_ID);
+    expect(panel).not.toBeNull();
+    await vi.waitFor(() => expect(panel!.textContent).toContain("Обычный 3"));
+
+    document.body.innerHTML = "";
+    domSubscriber?.();
+    expect(document.getElementById(QUEUES_ID), "кнопки нет — и панели нет").toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  test("нажатие даёт отклик, а не тихо блокирует кнопку", async () => {
+    // Цифры при повторной загрузке те же, и без смены подписи человек не
+    // понимает, сработал ли клик.
+    let release: (() => void) | null = null;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await new Promise<void>((r) => (release = r));
+      return { ok: true, json: async () => ({ queues: { standard: { players: 5 } } }) };
+    }));
+    endedScreen("ended ended-mafia");
+    postgameSearchFeature.enable(ctx);
+    const refresh = document.querySelector<HTMLButtonElement>(`#${QUEUES_ID} button`)!;
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    expect(refresh.textContent, "во время запроса подпись меняется").toBe("Обновляю…");
+    expect(refresh.disabled).toBe(true);
+
+    release!();
+    await vi.waitFor(() => expect(refresh.disabled).toBe(false));
+    expect(refresh.textContent).toContain("Обновить");
+    vi.unstubAllGlobals();
+  });
+
+  test("панель сняли во время запроса — в неё уже не пишем", async () => {
+    // Игрок ушёл со страницы конца игры, пока летел ответ. Запись в снятый
+    // узел бесполезна, а следующий показ грузит заново.
+    let release: (() => void) | null = null;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await new Promise<void>((r) => (release = r));
+      return { ok: true, json: async () => ({ queues: { standard: { players: 7 } } }) };
+    }));
+    endedScreen("ended ended-mafia");
+    postgameSearchFeature.enable(ctx);
+    const panel = document.getElementById(QUEUES_ID)!;
+    await vi.waitFor(() => expect(release).not.toBeNull());
+
+    document.body.innerHTML = "";
+    domSubscriber?.();
+    release!();
+    // Ответ доезжает через несколько микрозадач (fetch → json → разбор):
+    // двух await не хватало, и тест проходил даже без защиты.
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(panel.textContent, "в снятую панель ничего не дописано").not.toContain("Обычный 7");
+    vi.unstubAllGlobals();
+  });
+
+  test("кнопка обновления подписана словом, а не одним значком", async () => {
+    // Глиф рисуется системным шрифтом и на части машин выходит квадратиком —
+    // промахнуться по единственной кнопке панели нельзя.
+    vi.stubGlobal("fetch", serveQueues(1));
+    endedScreen("ended ended-mafia");
+    postgameSearchFeature.enable(ctx);
+    const refresh = document.querySelector<HTMLButtonElement>(`#${QUEUES_ID} button`)!;
+    // В покое, а не во время первой загрузки: там подпись своя.
+    await vi.waitFor(() => expect(refresh.disabled).toBe(false));
+    expect(refresh.textContent).toMatch(/Обновить/);
+    vi.unstubAllGlobals();
   });
 });

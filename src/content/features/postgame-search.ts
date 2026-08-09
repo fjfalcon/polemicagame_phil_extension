@@ -73,6 +73,12 @@ export const POSTGAME_PENDING_KEY = "pn_postgame_pending";
 export const BUTTON_ID = "pn-postgame-search";
 /** Панелька с составом очередей — живёт и умирает вместе с кнопкой. */
 export const QUEUES_ID = "pn-postgame-queues";
+/**
+ * Подпись кнопки обновления — одной константой на оба места (покой и возврат
+ * из загрузки). Пока их было две, подпись можно было испортить в одном месте
+ * и не заметить: мутационная проверка это и вскрыла.
+ */
+const REFRESH_IDLE = "⟳ Обновить";
 
 /**
  * Дедлайн эпизода на странице поиска. Внутри должны уместиться: рендер
@@ -399,20 +405,33 @@ function syncQueuePanel(show: boolean): void {
 
   const refresh = document.createElement("button");
   refresh.type = "button";
-  refresh.textContent = "⟳";
+  // Со СЛОВОМ, а не одним значком: глиф «⟳» рисуется системным шрифтом и на
+  // части машин выходит тонким или подменяется квадратиком, а это
+  // единственная кнопка панели — промахнуться по ней нельзя.
+  refresh.textContent = REFRESH_IDLE;
   refresh.title = "Обновить состояние очередей";
   refresh.style.cssText = `
-    background: rgba(255,255,255,.12); color: inherit; border: 0;
-    border-radius: 6px; padding: 2px 7px; cursor: pointer; font-size: 13px;
+    background: rgba(255,255,255,.14); color: inherit; border: 0;
+    border-radius: 7px; padding: 5px 10px; cursor: pointer;
+    font: 12px/1.2 system-ui, sans-serif; white-space: nowrap;
   `;
 
   const load = async (): Promise<void> => {
+    if (refresh.disabled) return;
+    // Отклик на нажатие обязателен: цифры при повторной загрузке остаются
+    // прежними, и без этого человек не понимает, сработал ли клик.
     refresh.disabled = true;
+    refresh.textContent = "Обновляю…";
+    refresh.style.opacity = "0.6";
+    refresh.style.cursor = "default";
     const counts = await fetchQueueState();
     // Панель могли снять, пока шёл запрос: писать в отсоединённый узел
     // незачем, а следующий показ загрузит заново.
     if (!panel.isConnected) return;
     text.textContent = counts ? `Очереди: ${formatQueues(counts)}` : "Очереди: не удалось узнать";
+    refresh.textContent = REFRESH_IDLE;
+    refresh.style.opacity = "1";
+    refresh.style.cursor = "pointer";
     refresh.disabled = false;
   };
   refresh.addEventListener("click", () => void load());
