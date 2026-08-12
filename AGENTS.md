@@ -312,7 +312,7 @@ src/
 | local | pn_update_last_check, pn_update_latest, pn_update_dismissed | update-notify (8.1.44). Переехали из localStorage страницы: тот принадлежит сайту (недоверенный) и не виден попапу с кнопкой ручной проверки |
 | local | polemica:logs:{content-<session>,bg,popup,ext} | log.ts (CAP 600/контекст; content-сессии старше 24ч чистятся) |
 | local | pn_own_user_id | own-user.ts — свой userId, прочитанный из ссылки профиля в шапке; нужен статистике пересечений (в комнате шапки нет) |
-| local | polemica:wslog:{session} | ws-log.ts — полный лог кадров игрового сокета: ВЫКЛЮЧЕН по умолчанию, потолок 2 млн символов, TTL 24ч, медиа и секреты не пишутся |
+| local | polemica:wslog:{session}:{n} | ws-log.ts — полный лог кадров игрового сокета: ВЫКЛЮЧЕН по умолчанию, медиа и секреты не пишутся. Потолок 2 млн символов ОБЩИЙ (не на сессию) и держится `sweepStorage()` — она же удаляет протухшее и битое. Уборка зовётся при включении фичи, при выгрузке из попапа и при отказе записи; TTL сам по себе НИЧЕГО не удаляет (жалоба 10.08.2026: переполненное хранилище перестало сохранять заметки) |
 | local | obs_connection_state, obs_auto_scene_state | obs-client/obs-panel |
 | local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |

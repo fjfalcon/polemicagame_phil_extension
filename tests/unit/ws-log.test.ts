@@ -53,6 +53,7 @@ import {
   isGameFrame,
   record,
   resetBuffer,
+  sweepStorage,
   sanitizeFrame,
   size,
 } from "@core/ws-log";
@@ -201,5 +202,75 @@ describe("хранилище", () => {
   test("отказ хранилища не роняет выгрузку", async () => {
     storage.get.mockRejectedValueOnce(new Error("QuotaExceeded"));
     await expect(collectAll()).resolves.toEqual([]);
+  });
+});
+
+describe("уборка за собой (жалоба 10.08.2026)", () => {
+  const chunk = (at: number, chars: number) => ({
+    at,
+    frames: [{ t: at, d: "in", m: "x".repeat(chars) }],
+  });
+
+  test("куски ПРОШЛЫХ сессий удаляются, а не копятся вечно", async () => {
+    // Ключи именуются по сессии страницы: своё вытеснение чужие куски не
+    // трогало, а срок жизни применялся только при чтении и ничего не удалял.
+    // С включённым логом каждый заход оставлял мегабайты навсегда — и
+    // хранилище переполнялось вместе с заметками.
+    const old = Date.now() - WS_LOG_TTL_MS - 1000;
+    storage.data.set(`${WS_LOG_PREFIX}старая:0`, chunk(old, 10));
+    storage.data.set(`${WS_LOG_PREFIX}старая:1`, chunk(old, 10));
+    storage.data.set("notes", { "u:1": { text: "важное" } });
+    await sweepStorage();
+    expect([...storage.data.keys()], "чужое не трогаем").toEqual(["notes"]);
+  });
+
+  test("потолок объёма — ОБЩИЙ, а не на сессию", async () => {
+    const now = Date.now();
+    storage.data.set(`${WS_LOG_PREFIX}a:0`, chunk(now - 3000, 100));
+    storage.data.set(`${WS_LOG_PREFIX}b:0`, chunk(now - 2000, 100));
+    storage.data.set(`${WS_LOG_PREFIX}c:0`, chunk(now - 1000, 100));
+    const kept = await sweepStorage(150);
+    expect(kept, "оставляем в пределах бюджета").toBeLessThanOrEqual(150);
+    // Свежие дороже старых: остаться должен последний.
+    expect([...storage.data.keys()]).toContain(`${WS_LOG_PREFIX}c:0`);
+    expect([...storage.data.keys()]).not.toContain(`${WS_LOG_PREFIX}a:0`);
+  });
+
+  test("включение фичи прибирает чужое ДО первой записи", async () => {
+    // Уборка должна случаться сама, а не только по кнопке в попапе: иначе
+    // человек, который просто играет с включённым логом, копит мусор и
+    // однажды теряет возможность сохранить заметку.
+    const { wsLogFeature } = await import("@content/features/ws-log");
+    storage.data.set(`${WS_LOG_PREFIX}прошлая:0`, {
+      at: Date.now() - WS_LOG_TTL_MS - 1000,
+      frames: [{ t: 1, d: "in", m: "старьё" }],
+    });
+    const spy = vi.spyOn(window, "postMessage").mockImplementation((() => {}) as typeof window.postMessage);
+    wsLogFeature.enable({ settings: {} } as never);
+    await vi.waitFor(() => expect(storage.data.has(`${WS_LOG_PREFIX}прошлая:0`)).toBe(false));
+    wsLogFeature.disable();
+    spy.mockRestore();
+  });
+
+  test("битый кусок без кадров тоже убирается", async () => {
+    storage.data.set(`${WS_LOG_PREFIX}битый`, { at: Date.now() });
+    await sweepStorage();
+    expect([...storage.data.keys()]).toHaveLength(0);
+  });
+
+  test("отказ записи не мешает заметкам: прибираемся и замолкаем", async () => {
+    // В том же хранилище лежат заметки. Если места нет — наше дело уступить,
+    // а не долбиться в квоту всю игру.
+    resetBuffer();
+    storage.set.mockRejectedValue(new Error("QuotaExceededError"));
+    record("in", '42["x",{}]');
+    await flushNow();
+    expect(record("in", '42["y",{}]'), "после отказа больше не пишем").toBe(false);
+    storage.set.mockReset();
+    storage.set.mockImplementation(async (items: Record<string, unknown>) => {
+      for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
+    });
+    resetBuffer();
+    expect(record("in", '42["z",{}]'), "новая сессия снова пишет").toBe(true);
   });
 });

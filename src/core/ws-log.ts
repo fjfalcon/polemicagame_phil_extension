@@ -22,7 +22,9 @@
  * человек осознанно и ради разбора конкретной жалобы.
  */
 import { browser } from "./env";
-import { redactSecrets } from "./log";
+import { log, redactSecrets } from "./log";
+
+const SCOPE = "ws-log";
 
 export interface WsFrame {
   /** Время получения (мс). */
@@ -95,9 +97,12 @@ let seq = 0;
 let chunks: Array<{ key: string; chars: number }> = [];
 let storedChars = 0;
 let recorded = 0;
+/** Хранилище отказало даже после уборки — до конца сессии не пишем. */
+let stopped = false;
 
 /** Добавить кадр. Возвращает false, если кадр отброшен как чужой. */
 export function record(dir: "in" | "out", raw: unknown): boolean {
+  if (stopped) return false;
   if (!isGameFrame(raw)) return false;
   const m = sanitizeFrame(raw);
   pending.push({ t: Date.now(), d: dir, m });
@@ -154,10 +159,19 @@ async function writeChunk(frames: WsFrame[], chars: number): Promise<void> {
   const key = `${WS_LOG_PREFIX}${SESSION_ID}:${seq++}`;
   try {
     await browser.storage.local.set({ [key]: { at: Date.now(), frames } });
-  } catch {
-    // Квота кончилась или хранилище отказало — молча: сорвать игру ради
-    // диагностического файла нельзя. Кусок потерян, но следующие пойдут.
-    return;
+  } catch (e) {
+    // Скорее всего кончилась квота — а в том же хранилище лежат ЗАМЕТКИ.
+    // Сначала освобождаем своё, потом пробуем ещё раз; не вышло — молчим до
+    // конца сессии, чтобы не мешать заметкам сохраняться (жалоба 10.08.2026).
+    log.warn(SCOPE, "кусок полного лога не записался, прибираю своё", e);
+    await sweepStorage(Math.floor(MAX_TOTAL_CHARS / 2));
+    try {
+      await browser.storage.local.set({ [key]: { at: Date.now(), frames } });
+    } catch {
+      stopped = true;
+      log.warn(SCOPE, "полный лог остановлен: хранилище браузера не принимает записи");
+      return;
+    }
   }
   chunks.push({ key, chars });
   storedChars += chars;
@@ -169,13 +183,14 @@ async function writeChunk(frames: WsFrame[], chars: number): Promise<void> {
     try {
       await browser.storage.local.remove(oldest.key);
     } catch {
-      /* не удалилось — TTL уберёт */
+      /* не удалилось — уберёт следующая уборка (sweepStorage) */
     }
   }
 }
 
 /** Забыть накопленное в памяти (при выключении настройки). */
 export function resetBuffer(): void {
+  stopped = false;
   pending = [];
   pendingChars = 0;
   recorded = 0;
@@ -191,6 +206,61 @@ export function resetBuffer(): void {
 interface StoredChunk {
   at?: number;
   frames?: WsFrame[];
+}
+
+/** Размер куска в символах — по тем же телам кадров, что мы и считали. */
+function chunkChars(chunk: StoredChunk): number {
+  let n = 0;
+  for (const f of chunk.frames ?? []) n += typeof f?.m === "string" ? f.m.length : 0;
+  return n;
+}
+
+/**
+ * Прибрать ЧУЖИЕ куски: протухшие и лишние сверх общего потолка.
+ *
+ * Зачем отдельно от вытеснения внутри сессии: ключи именуются по сессии
+ * страницы, и каждая новая загрузка начинала копить с нуля — своё вытесняла,
+ * а куски прошлых заходов не трогал никто. Срок жизни применялся только при
+ * ЧТЕНИИ и ничего не удалял (комментарий «TTL уберёт» был неправдой). С
+ * включённым полным логом это оставляло на диске по паре мегабайт за заход, и
+ * у пользователя переполнялось хранилище — вместе с ним переставали
+ * сохраняться ЗАМЕТКИ и цвета (жалоба 10.08.2026).
+ *
+ * Возвращает, сколько символов осталось лежать.
+ */
+export async function sweepStorage(budget = MAX_TOTAL_CHARS): Promise<number> {
+  try {
+    const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
+    const now = Date.now();
+    const mine: Array<{ key: string; at: number; chars: number }> = [];
+    const doomed: string[] = [];
+    for (const [key, value] of Object.entries(all)) {
+      if (!key.startsWith(WS_LOG_PREFIX)) continue;
+      const chunk = value as StoredChunk;
+      const at = typeof chunk?.at === "number" ? chunk.at : 0;
+      // Протухшее и битое (без времени/кадров) убираем сразу.
+      if (!Array.isArray(chunk?.frames) || now - at > WS_LOG_TTL_MS) {
+        doomed.push(key);
+        continue;
+      }
+      mine.push({ key, at, chars: chunkChars(chunk) });
+    }
+    // Потолок общий, а не «на сессию»: свежие куски дороже старых.
+    mine.sort((a, b) => b.at - a.at);
+    let kept = 0;
+    for (const c of mine) {
+      if (kept + c.chars > budget && kept > 0) doomed.push(c.key);
+      else kept += c.chars;
+    }
+    if (doomed.length > 0) {
+      await browser.storage.local.remove(doomed);
+      log.info(SCOPE, `убрано кусков полного лога: ${doomed.length}`);
+    }
+    return kept;
+  } catch (e) {
+    log.warn(SCOPE, "уборка полного лога не удалась", e);
+    return 0;
+  }
 }
 
 /**

@@ -14,7 +14,7 @@
  * разбора; медиа и ключи сессии не попадают в файл никогда (см. core/ws-log).
  */
 import { log } from "@core/log";
-import { flushNow, record, resetBuffer, size } from "@core/ws-log";
+import { flushNow, record, resetBuffer, size, sweepStorage } from "@core/ws-log";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const SCOPE = "ws-log";
@@ -53,6 +53,11 @@ export const wsLogFeature: Feature = {
 
   enable(_ctx: FeatureContext) {
     skipped = 0;
+    // Прибрать ЧУЖИЕ куски до первой записи: ключи именуются по сессии
+    // страницы, и без этого каждый заход копил свои, а старые не удалял никто
+    // — хранилище переполнялось, и вместе с ним переставали сохраняться
+    // заметки (жалоба 10.08.2026).
+    void sweepStorage();
     listener = (e: MessageEvent) => onProbeMessage(e);
     window.addEventListener("message", listener);
     commandProbe(true);

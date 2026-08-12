@@ -156,6 +156,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // Отдельный файл, а не раздел обычного журнала: кадров за игру тысячи, и в
   // общем логе они утопили бы записи о наших собственных решениях.
   $("download_ws_log")?.addEventListener("click", async () => {
+    // Заодно уборка: попап — единственное место, куда человек приходит сам,
+    // и удобный момент вернуть браузеру место.
+    await wsLog.sweepStorage();
     const frames = await wsLog.collectAll();
     if (frames.length === 0) {
       // Пустой файл только собьёт с толку: причина почти всегда одна —
