@@ -68,3 +68,74 @@ describe("keyboard helpers and router gates", () => {
     off();
   });
 });
+
+describe("клавиша-«зажатие» (подсмотреть роли)", () => {
+  /** Нажатие/отпускание физической клавиши, как их шлёт браузер. */
+  const down = (code: string, init: KeyboardEventInit = {}) =>
+    window.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, ...init }));
+  const up = (code: string) =>
+    window.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true }));
+
+  test("держим — включено, отпустили — выключено", () => {
+    const on = vi.fn();
+    const off = vi.fn();
+    const unsub = keyboard.registerHold("KeyV", on, off);
+    down("KeyV");
+    expect(on).toHaveBeenCalledTimes(1);
+    up("KeyV");
+    expect(off).toHaveBeenCalledTimes(1);
+    unsub();
+  });
+
+  test("автоповтор не множит включения, а отпускание — одно", () => {
+    const on = vi.fn();
+    const off = vi.fn();
+    const unsub = keyboard.registerHold("KeyV", on, off);
+    down("KeyV");
+    down("KeyV", { repeat: true });
+    down("KeyV");
+    expect(on).toHaveBeenCalledTimes(1);
+    up("KeyV");
+    up("KeyV");
+    expect(off).toHaveBeenCalledTimes(1);
+    unsub();
+  });
+
+  test("потеря фокуса гасит режим: иначе роль уедет в эфир", () => {
+    // Alt-tab съедает keyup — без этой страховки роли остались бы на экране,
+    // то есть случилось бы ровно то, от чего скрытие и защищает.
+    const on = vi.fn();
+    const off = vi.fn();
+    const unsub = keyboard.registerHold("KeyV", on, off);
+    down("KeyV");
+    window.dispatchEvent(new Event("blur"));
+    expect(off).toHaveBeenCalledTimes(1);
+    // Повторный blur ничего не «отпускает» второй раз.
+    window.dispatchEvent(new Event("blur"));
+    expect(off).toHaveBeenCalledTimes(1);
+    unsub();
+  });
+
+  test("отписка отпускает зажатое: выключили фичу — роли скрылись", () => {
+    const on = vi.fn();
+    const off = vi.fn();
+    const unsub = keyboard.registerHold("KeyV", on, off);
+    down("KeyV");
+    unsub();
+    expect(off).toHaveBeenCalledTimes(1);
+    // После отписки клавиша больше не наша.
+    down("KeyV");
+    expect(on).toHaveBeenCalledTimes(1);
+  });
+
+  test("в поле ввода клавиша не срабатывает (KeyV — это «м» в русской раскладке)", () => {
+    const on = vi.fn();
+    const off = vi.fn();
+    const unsub = keyboard.registerHold("KeyV", on, off);
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyV", bubbles: true }));
+    expect(on).not.toHaveBeenCalled();
+    unsub();
+  });
+});

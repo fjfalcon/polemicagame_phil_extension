@@ -61,6 +61,8 @@ export interface Settings {
   hotkey_role_reset: string;
   /** Клавиша скрытия/показа своей роли (дефолт KeyD). */
   hotkey_role_hide: string;
+  /** Клавиша «показать роли, пока удерживается» (дефолт KeyV). */
+  hotkey_role_peek: string;
   /** Проверять наличие новой версии на GitHub и показывать баннер. */
   update_check_enabled: boolean;
   /** Вести логи в storage.local для диагностики (выгружаются из popup). */

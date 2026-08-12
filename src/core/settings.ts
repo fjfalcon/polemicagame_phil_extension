@@ -55,6 +55,8 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkey_role_fake: "KeyF",
   hotkey_role_reset: "KeyE",
   hotkey_role_hide: "KeyD",
+  // Отдельная от D: клавиши держат по-разному, и путать их нельзя.
+  hotkey_role_peek: "KeyV",
   update_check_enabled: true,
   debug_logging_enabled: true,
   connection_diag_enabled: false,

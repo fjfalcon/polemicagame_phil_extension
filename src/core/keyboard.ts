@@ -68,7 +68,60 @@ class KeyboardRouter {
     if (this.started) return;
     // capture=true: перехватываем раньше обработчиков сайта
     window.addEventListener("keydown", this.onKeyDown, true);
+    window.addEventListener("keyup", this.onKeyUp, true);
+    window.addEventListener("blur", this.onBlur);
+    document.addEventListener("visibilitychange", this.onVisibility);
     this.started = true;
+  }
+
+  /** Клавиши-«зажатия», которые сейчас нажаты: чтобы отпуск был ровно один. */
+  private held = new Set<string>();
+  private holds = new Map<string, { down: () => void; up: () => void }>();
+
+  private onKeyUp = (e: KeyboardEvent) => {
+    this.releaseHold(e.code);
+  };
+
+  /**
+   * Страховка от «залипшей» клавиши: alt-tab, потеря фокуса или сворачивание
+   * вкладки съедают keyup, и режим «подсмотреть» остался бы включённым — то
+   * есть роль уехала бы в эфир. Ровно то, от чего фича и защищает.
+   */
+  private onBlur = () => {
+    for (const code of Array.from(this.held)) this.releaseHold(code);
+  };
+
+  private onVisibility = () => {
+    if (document.visibilityState === "hidden") this.onBlur();
+  };
+
+  private releaseHold(code: string): void {
+    if (!this.held.delete(code)) return;
+    try {
+      this.holds.get(code)?.up();
+    } catch (err) {
+      log.error("keyboard", "hold release threw", code, err);
+    }
+  }
+
+  /**
+   * Клавиша-«зажатие»: `down` на нажатии, `up` на отпускании И на любой
+   * потере фокуса. Нужна там, где показ чего-либо на экране должен жить
+   * ровно столько, сколько человек держит палец (роли у стримера).
+   */
+  registerHold(code: string, down: () => void, up: () => void): () => void {
+    this.ensureStarted();
+    this.holds.set(code, { down, up });
+    const unregister = this.register(code, () => {
+      if (this.held.has(code)) return;
+      this.held.add(code);
+      down();
+    }, { preventDefault: true });
+    return () => {
+      this.releaseHold(code);
+      this.holds.delete(code);
+      unregister();
+    };
   }
 
   /**

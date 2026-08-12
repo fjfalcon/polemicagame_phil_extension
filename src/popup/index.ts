@@ -858,6 +858,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let roleFakeCode = "KeyF";
   let roleResetCode = "KeyE";
   let roleHideCode = "KeyD";
+  let rolePeekCode = "KeyV";
   const roleKeyRenders: Array<() => void> = [];
   const setupRoleKey = (id: string, get: () => string, set: (c: string) => void) => {
     const btn = $<HTMLButtonElement>(id);
@@ -882,6 +883,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupRoleKey("hotkey_role_fake", () => roleFakeCode, (c) => (roleFakeCode = c));
   setupRoleKey("hotkey_role_reset", () => roleResetCode, (c) => (roleResetCode = c));
   setupRoleKey("hotkey_role_hide", () => roleHideCode, (c) => (roleHideCode = c));
+  setupRoleKey("hotkey_role_peek", () => rolePeekCode, (c) => (rolePeekCode = c));
 
   // ───────────────────────── Загрузка настроек в контролы ─────────────────────────
   /**
@@ -929,7 +931,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (typeof patch.hotkey_role_fake === "string") roleFakeCode = patch.hotkey_role_fake;
     if (typeof patch.hotkey_role_reset === "string") roleResetCode = patch.hotkey_role_reset;
     if (typeof patch.hotkey_role_hide === "string") roleHideCode = patch.hotkey_role_hide;
-    if (patch.hotkey_role_fake || patch.hotkey_role_reset || patch.hotkey_role_hide) {
+    if (typeof patch.hotkey_role_peek === "string") rolePeekCode = patch.hotkey_role_peek;
+    if (
+      patch.hotkey_role_fake ||
+      patch.hotkey_role_reset ||
+      patch.hotkey_role_hide ||
+      patch.hotkey_role_peek
+    ) {
       roleKeyRenders.forEach((r) => r());
     }
   };
@@ -954,6 +962,7 @@ document.addEventListener("DOMContentLoaded", () => {
     roleFakeCode = items.hotkey_role_fake || "KeyF";
     roleResetCode = items.hotkey_role_reset || "KeyE";
     roleHideCode = items.hotkey_role_hide || "KeyD";
+    rolePeekCode = items.hotkey_role_peek || "KeyV";
     roleKeyRenders.forEach((r) => r());
     const set = (id: string, val: boolean) => {
       const el = $<HTMLInputElement>(id);
@@ -1145,6 +1154,7 @@ document.addEventListener("DOMContentLoaded", () => {
       hotkey_role_fake: roleFakeCode,
       hotkey_role_reset: roleResetCode,
       hotkey_role_hide: roleHideCode,
+      hotkey_role_peek: rolePeekCode,
       statistics_enabled: cb("statistics_enabled", true),
       match_page_stats_enabled: cb("match_page_stats_enabled", true),
       match_stats_view: $<HTMLSelectElement>("match_stats_view")?.value || "hints",

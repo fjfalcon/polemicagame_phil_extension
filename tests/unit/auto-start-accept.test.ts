@@ -33,7 +33,9 @@ vi.mock("@core/messaging", () => ({
   sendToActiveTabStrict: vi.fn(),
 }));
 vi.mock("@core/toast", () => ({ showToast: vi.fn(), clearToasts: vi.fn() }));
-vi.mock("@core/keyboard", () => ({ keyboard: { register: vi.fn(() => () => {}) } }));
+vi.mock("@core/keyboard", () => ({
+  keyboard: { register: vi.fn(() => () => {}), registerHold: vi.fn(() => () => {}) },
+}));
 
 import { autoStartFeature } from "@content/features/auto-start";
 import { safeClick } from "@core/dom";

@@ -618,6 +618,49 @@ function isRolesHiddenByCSS(): boolean {
   return !!document.getElementById(ROLE_HIDE_ID);
 }
 
+// ─────────────────────── «подсмотреть роли, пока держу» ───────────────────────
+
+/**
+ * Скрытие ролей прячет ВСЁ знание игрока, а не только его собственную роль:
+ * сайт рисует роль одним и тем же элементом у любого игрока, поэтому под
+ * раздачу попадают напарники чёрного и результаты проверок шерифа (жалоба
+ * стримера 12.08.2026 — «дон и шериф играют вслепую»).
+ *
+ * Прятать чужие роли ПРАВИЛЬНО: на стриме состав мафии утечёт так же, как своя
+ * роль. Поэтому не ослабляем скрытие, а даём подсмотреть — и именно
+ * УДЕРЖАНИЕМ, а не переключателем: переключатель однажды забудут вернуть, и
+ * роль уедет в эфир, то есть случится ровно то, от чего фича защищает.
+ */
+let roleePeekKey = "";
+let unsubPeek: (() => void) | null = null;
+/** Скрытие, снятое на время подсматривания: вернуть ровно то, что было. */
+let peekRestoreHidden = false;
+
+function startPeek(): void {
+  peekRestoreHidden = isRolesHiddenByCSS();
+  if (!peekRestoreHidden) return;
+  showAllRolesCSS();
+  log.info(SCOPE, "роли показаны, пока удерживается клавиша");
+}
+
+function stopPeek(): void {
+  if (!peekRestoreHidden) return;
+  peekRestoreHidden = false;
+  // Возвращаем СОСТОЯНИЕ, а не «прячем всегда»: за время удержания фаза
+  // могла смениться на ночь, и там роли показывает уже не человек.
+  if (cfg.autoHideRoles && !trackedRolesVisible) hideAllRolesCSS();
+}
+
+function bindPeekKey(code: string): void {
+  if (unsubPeek) {
+    unsubPeek();
+    unsubPeek = null;
+  }
+  roleePeekKey = code;
+  if (!code) return;
+  unsubPeek = keyboard.registerHold(code, startPeek, stopPeek);
+}
+
 function autoHideRole(): boolean {
   if (!cfg.autoHideRoles) return false;
   // Всегда прячем CSS. Ночью scheduleNightRoleAutoShow уберёт CSS через 3 сек.
@@ -1248,6 +1291,12 @@ function disableGamePage() {
   unsubGameDom = null;
   unsubKeyboard?.();
   unsubKeyboard = null;
+  // Подсматривание снимаем ПЕРВЫМ делом: если фичу выключили с зажатой
+  // клавишей, роли остались бы на экране — на стриме это утечка.
+  stopPeek();
+  unsubPeek?.();
+  unsubPeek = null;
+  roleePeekKey = "";
   if (onRoleMenuClick) document.removeEventListener("click", onRoleMenuClick, true);
   onRoleMenuClick = null;
   if (onUserClick) {
@@ -1283,6 +1332,11 @@ function applyConfig(ctx: FeatureContext) {
       unsubKeyboard = keyboard.register(roleHideKey, handleRoleKey, { preventDefault: false });
     }
   }
+
+  // Клавиша «подсмотреть» — отдельная от скрытия роли: их держат нажатыми
+  // по-разному, и путать их в одной кнопке нельзя (решение владельца).
+  const newPeekKey = s.hotkey_role_peek || "KeyV";
+  if (newPeekKey !== roleePeekKey) bindPeekKey(newPeekKey);
 
   const prevPhaseSwitch = cfg.rolePhaseSwitch;
   cfg = {
