@@ -635,10 +635,45 @@ let roleePeekKey = "";
 let unsubPeek: (() => void) | null = null;
 /** Скрытие, снятое на время подсматривания: вернуть ровно то, что было. */
 let peekRestoreHidden = false;
+/** Клавиша сейчас зажата. Пока да — состояние видимости НЕ учитываем. */
+let peeking = false;
+
+/** Идёт ли подсматривание (тестовый шов и гейт для учёта состояния). */
+export function isPeeking(): boolean {
+  return peeking;
+}
+
+/**
+ * Прячем ли роли днём. Днём это делают ОБЕ настройки: авто-скрытие (оно же
+ * держит скрытие вне игры и при входе) и автосмена, которой днём положено
+ * прятать, а ночью показывать.
+ */
+export function hidesRolesByDay(opts: { autoHideRoles: boolean; rolePhaseSwitch: boolean }): boolean {
+  return opts.autoHideRoles || opts.rolePhaseSwitch;
+}
+
+/**
+ * Вернуть ли скрытие после отпускания клавиши.
+ *
+ * Считаем ПО НАСТРОЙКАМ И ФАЗЕ, а не по «роли сейчас видны»: во время
+ * подсматривания роли видны по определению, периодическая сверка с DOM
+ * записывала «видны» в общее состояние, и отпускание решало, что прятать
+ * нечего — роль оставалась на экране и уезжала в эфир (найдено самопроверкой
+ * 12.08.2026, до релиза).
+ */
+export function shouldRehideAfterPeek(
+  opts: { autoHideRoles: boolean; rolePhaseSwitch: boolean },
+  phase: "day" | "night" | null,
+): boolean {
+  if (!hidesRolesByDay(opts)) return false;
+  // Ночью роли показывает фазовая логика — её решение перебивать нельзя.
+  return !(opts.rolePhaseSwitch && phase === "night");
+}
 
 function startPeek(): void {
   peekRestoreHidden = isRolesHiddenByCSS();
   if (!peekRestoreHidden) return;
+  peeking = true;
   showAllRolesCSS();
   log.info(SCOPE, "роли показаны, пока удерживается клавиша");
 }
@@ -646,9 +681,13 @@ function startPeek(): void {
 function stopPeek(): void {
   if (!peekRestoreHidden) return;
   peekRestoreHidden = false;
-  // Возвращаем СОСТОЯНИЕ, а не «прячем всегда»: за время удержания фаза
-  // могла смениться на ночь, и там роли показывает уже не человек.
-  if (cfg.autoHideRoles && !trackedRolesVisible) hideAllRolesCSS();
+  peeking = false;
+  if (shouldRehideAfterPeek(cfg, lastDetectedRolePhase)) {
+    hideAllRolesCSS();
+    // Состояние могло «испортиться» за время удержания (сверка с DOM видела
+    // показанные роли) — возвращаем его вместе со скрытием.
+    trackedRolesVisible = false;
+  }
 }
 
 function bindPeekKey(code: string): void {
@@ -863,7 +902,7 @@ function applyRolePhase(phase: "day" | "night") {
     } else {
       nightAutoShowAttempts = 0;
       nightAutoShowStartedAt = 0;
-      if (cfg.autoHideRoles) {
+      if (hidesRolesByDay(cfg)) {
         hideAllRolesCSS();
         trackedRolesVisible = false;
       }
@@ -884,7 +923,7 @@ function applyRolePhase(phase: "day" | "night") {
 
   nightAutoShowAttempts = 0;
   nightAutoShowStartedAt = 0;
-  if (cfg.autoHideRoles) {
+  if (hidesRolesByDay(cfg)) {
     hideAllRolesCSS();
     trackedRolesVisible = false;
   }
@@ -1189,6 +1228,14 @@ function disableWebcams() {
 
 function handleRoleKey(e?: KeyboardEvent) {
   if (Date.now() < suppressRoleKeyHandlingUntil) return;
+  // Пока подсматриваем, CSS снят — обычная ветка сочла бы роли показанными
+  // игроком и перевернула бы учёт. Клавиша скрытия в этот момент не
+  // действует, и человек должен понимать почему: нажал — ничего не
+  // произошло — в логе есть строка.
+  if (peeking) {
+    log.info(SCOPE, "клавиша скрытия роли не действует, пока удерживается «подсмотреть»");
+    return;
+  }
 
   lastManualRoleActionAt = Date.now();
 
@@ -1344,8 +1391,12 @@ function applyConfig(ctx: FeatureContext) {
     skipStartScreen: s.skip_start_screen_enabled !== false,
     disableWebcam: s.disable_webcam_clicks === true,
     autoHideRoles: s.auto_hide_roles_enabled === true,
-    // Фазовое переключение работает только при включённом авто-скрытии
-    rolePhaseSwitch: s.auto_hide_roles_enabled === true && s.role_phase_auto_switch_enabled === true,
+    // Автосмена САМОСТОЯТЕЛЬНА (просьба Ильи 12.08.2026). Раньше она гейтилась
+    // авто-скрытием, то есть включённый в одиночку тумблер не делал ничего —
+    // молчаливый обман, а не замысел. Смысл у неё свой и понятный: днём роли
+    // скрыты, ночью показаны; авто-скрытие добавляет к этому «скрыть сразу при
+    // входе и держать скрытым вне ночи».
+    rolePhaseSwitch: s.role_phase_auto_switch_enabled === true,
   };
 
   // Выключили фазовое переключение — гасим уже взведённый ночной таймер:

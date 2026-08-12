@@ -37,7 +37,12 @@ vi.mock("@core/keyboard", () => ({
   keyboard: { register: vi.fn(() => () => {}), registerHold: vi.fn(() => () => {}) },
 }));
 
-import { autoStartFeature } from "@content/features/auto-start";
+import {
+  autoStartFeature,
+  hidesRolesByDay,
+  shouldRehideAfterPeek,
+} from "@content/features/auto-start";
+import { keyboard } from "@core/keyboard";
 import { safeClick } from "@core/dom";
 import { log } from "@core/log";
 import type { Settings } from "@shared/types";
@@ -184,5 +189,100 @@ describe("стартовое окно: один клик на попытку", (
     vi.advanceTimersByTime(1_100);
     expect(infoCount("клик по тексту")).toBe(1);
     expect(vi.mocked(safeClick)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("подсматривание ролей: возврат скрытия (самопроверка 12.08.2026)", () => {
+  test("клавиша скрытия не действует во время подсматривания — и говорит об этом", () => {
+    // Обе клавиши трогают одно и то же скрытие. Нажатие D под зажатым V
+    // ушло бы в ветку «игрок сам показал роли» и перевернуло бы учёт.
+    const kb = vi.mocked(keyboard);
+    autoStartFeature.enable({ settings: { auto_hide_roles_enabled: true } } as never);
+    const holdCall = kb.registerHold.mock.calls.at(-1);
+    const roleKeyCall = kb.register.mock.calls.find((c) => c[0] === "KeyD");
+    expect(holdCall, "клавиша подсматривания зарегистрирована").toBeTruthy();
+    expect(roleKeyCall, "клавиша скрытия зарегистрирована").toBeTruthy();
+
+    // Скрытие ставится не мгновенно, а первым тиком интервала — без него
+    // подсматривать нечего, и гейт не сработал бы по другой причине.
+    vi.advanceTimersByTime(1_100);
+    expect(document.getElementById("polemica-role-hide"), "роли скрыты").not.toBeNull();
+
+    (holdCall![1] as () => void)();
+    vi.mocked(log.info).mockClear();
+    (roleKeyCall![1] as (e?: KeyboardEvent) => void)();
+    expect(
+      vi.mocked(log.info).mock.calls.some((args) =>
+        args.some((a) => String(a).includes("не действует, пока удерживается")),
+      ),
+      "молчаливое бездействие человек читает как поломку",
+    ).toBe(true);
+    (holdCall![2] as () => void)();
+    autoStartFeature.disable();
+  });
+
+  test("после отпускания прячем ВСЕГДА, когда авто-скрытие включено", () => {
+    // Решение считается по настройкам и фазе, а не по «роли сейчас видны»:
+    // во время удержания они видны по определению, и сверка с DOM успевала
+    // записать «показаны» — отпускание тогда ничего не прятало, и роль
+    // оставалась на экране (то есть уезжала в эфир).
+    expect(shouldRehideAfterPeek({ autoHideRoles: true, rolePhaseSwitch: false }, "day")).toBe(true);
+    expect(shouldRehideAfterPeek({ autoHideRoles: true, rolePhaseSwitch: false }, "night")).toBe(true);
+    expect(shouldRehideAfterPeek({ autoHideRoles: true, rolePhaseSwitch: false }, null)).toBe(true);
+  });
+
+  test("ночью с автосменой решение остаётся за фазовой логикой", () => {
+    expect(shouldRehideAfterPeek({ autoHideRoles: true, rolePhaseSwitch: true }, "night")).toBe(false);
+    expect(shouldRehideAfterPeek({ autoHideRoles: true, rolePhaseSwitch: true }, "day")).toBe(true);
+  });
+
+  test("когда не прячем вовсе — возвращать нечего", () => {
+    expect(shouldRehideAfterPeek({ autoHideRoles: false, rolePhaseSwitch: false }, "night")).toBe(false);
+    expect(shouldRehideAfterPeek({ autoHideRoles: false, rolePhaseSwitch: false }, "day")).toBe(false);
+  });
+
+  test("автосмена работает САМА, без авто-скрытия (просьба Ильи 12.08.2026)", () => {
+    // Раньше тумблер автосмены в одиночку не делал ничего: код гейтил его
+    // авто-скрытием. Днём прячем, ночью показываем — и с одной настройкой.
+    expect(hidesRolesByDay({ autoHideRoles: false, rolePhaseSwitch: true })).toBe(true);
+    expect(hidesRolesByDay({ autoHideRoles: true, rolePhaseSwitch: false })).toBe(true);
+    expect(hidesRolesByDay({ autoHideRoles: false, rolePhaseSwitch: false })).toBe(false);
+
+    expect(shouldRehideAfterPeek({ autoHideRoles: false, rolePhaseSwitch: true }, "day")).toBe(true);
+    expect(shouldRehideAfterPeek({ autoHideRoles: false, rolePhaseSwitch: true }, "night")).toBe(false);
+  });
+});
+
+describe("автосмена ролей без авто-скрытия (просьба Ильи 12.08.2026)", () => {
+  /** Комната с явной фазой: сайт вешает класс на body. */
+  function roomWithPhase(phase: "day" | "night"): void {
+    document.body.className = phase;
+    document.body.innerHTML = `
+      <div class="player my-player">
+        <span class="player__role role my-role red"><svg><use href="#sheriff"></use></svg></span>
+      </div>`;
+  }
+
+  test("днём роли прячутся, хотя авто-скрытие выключено", () => {
+    // Раньше тумблер автосмены в одиночку не делал НИЧЕГО: код гейтил его
+    // авто-скрытием, и человек считал настройку сломанной.
+    roomWithPhase("day");
+    autoStartFeature.enable({
+      settings: { auto_hide_roles_enabled: false, role_phase_auto_switch_enabled: true },
+    } as never);
+    // Фазовая проверка идёт через интервал + отложенный разбор — даём обоим.
+    vi.advanceTimersByTime(2_500);
+    expect(document.getElementById("polemica-role-hide"), "днём скрыто").not.toBeNull();
+    autoStartFeature.disable();
+  });
+
+  test("обе выключены — не трогаем роли вовсе", () => {
+    roomWithPhase("day");
+    autoStartFeature.enable({
+      settings: { auto_hide_roles_enabled: false, role_phase_auto_switch_enabled: false },
+    } as never);
+    vi.advanceTimersByTime(2_500);
+    expect(document.getElementById("polemica-role-hide")).toBeNull();
+    autoStartFeature.disable();
   });
 });
