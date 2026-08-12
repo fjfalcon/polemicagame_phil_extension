@@ -43,6 +43,7 @@ import {
   POSTGAME_PENDING_KEY,
   jamReload,
   noteTrustedInput,
+  BAR_ID,
   QUEUES_ID,
   postgameSearchFeature,
 } from "@content/features/postgame-search";
@@ -1028,6 +1029,48 @@ describe("панель очередей у кнопки", () => {
     // В покое, а не во время первой загрузки: там подпись своя.
     await vi.waitFor(() => expect(refresh.disabled).toBe(false));
     expect(refresh.textContent).toMatch(/Обновить/);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("плашки не лезут на камеры (скриншот 12.08.2026)", () => {
+  test("очереди и кнопка стоят В ОДНОЙ строке, а не друг над другом", async () => {
+    // Отдельная панель висела на 62px выше кнопки и на экранах пониже
+    // садилась прямо на плитки игроков. Одна строка занимает ту же свободную
+    // полосу, что и сама кнопка.
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ queues: { standard: { players: 1 } } }),
+    })));
+    endedScreen("ended ended-mafia");
+    postgameSearchFeature.enable(ctx);
+
+    const bar = document.getElementById(BAR_ID)!;
+    expect(bar, "общая полоса существует").not.toBeNull();
+    expect(document.getElementById(QUEUES_ID)?.parentElement).toBe(bar);
+    expect(document.getElementById(BUTTON_ID)?.parentElement).toBe(bar);
+    // Ни у панели, ни у кнопки своего позиционирования быть не должно —
+    // иначе они снова разъедутся по высоте.
+    expect(document.getElementById(QUEUES_ID)!.style.position).toBe("");
+    expect(document.getElementById(BUTTON_ID)!.style.position).toBe("");
+    vi.unstubAllGlobals();
+  });
+
+  test("полоса исчезает вместе с содержимым", async () => {
+    // Пустой fixed-контейнер невидим, но перехватывал бы клики по игре.
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ queues: { standard: { players: 1 } } }),
+    })));
+    const screen = endedScreen("ended ended-mafia");
+    postgameSearchFeature.enable(ctx);
+    expect(document.getElementById(BAR_ID)).not.toBeNull();
+
+    // Убираем ТОЛЬКО экран конца игры: стирать весь DOM нельзя — полоса
+    // исчезала бы заодно, и тест проходил бы без всякой уборки.
+    screen.remove();
+    domSubscriber?.();
+    expect(document.getElementById(BAR_ID), "пустой полосы на экране не остаётся").toBeNull();
     vi.unstubAllGlobals();
   });
 });

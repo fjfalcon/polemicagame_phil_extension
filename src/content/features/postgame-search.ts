@@ -74,6 +74,33 @@ export const POSTGAME_PENDING_KEY = "pn_postgame_pending";
 export const BUTTON_ID = "pn-postgame-search";
 /** Панелька с составом очередей — живёт и умирает вместе с кнопкой. */
 export const QUEUES_ID = "pn-postgame-queues";
+/** Общая полоса: очереди и кнопка стоят В ОДНУ СТРОКУ (см. barElement). */
+export const BAR_ID = "pn-postgame-bar";
+
+/**
+ * Полоса внизу экрана, в которой живут и состав очередей, и кнопка «В поиск».
+ *
+ * Раньше панель очередей висела ОТДЕЛЬНО, на 62px выше кнопки, и на экранах
+ * пониже садилась прямо на плитки игроков (скриншот пользователя 12.08.2026:
+ * у владельца всё в порядке, у него — поверх камер). Одна строка занимает ту
+ * же свободную полосу, что и сама кнопка, и лишней высоты не добавляет.
+ *
+ * `max-width` и перенос — на случай узкого окна: строка сожмётся, а не
+ * уедет за край экрана.
+ */
+function barElement(): HTMLElement {
+  const existing = document.getElementById(BAR_ID);
+  if (existing) return existing;
+  const bar = document.createElement("div");
+  bar.id = BAR_ID;
+  bar.style.cssText = `
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    z-index: 2147483600; display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 24px);
+  `;
+  (document.body || document.documentElement).appendChild(bar);
+  return bar;
+}
 /**
  * Подпись кнопки обновления — одной константой на оба места (покой и возврат
  * из загрузки). Пока их было две, подпись можно было испортить в одном месте
@@ -387,6 +414,10 @@ function syncQueuePanel(show: boolean): void {
   const existing = document.getElementById(QUEUES_ID);
   if (!show) {
     existing?.remove();
+    // Пустая полоса на экране не нужна: она невидима, но перехватывала бы
+    // клики по своей области (fixed-контейнер поверх игры).
+    const bar = document.getElementById(BAR_ID);
+    if (bar && bar.childElementCount === 0) bar.remove();
     return;
   }
   if (existing) return;
@@ -394,8 +425,7 @@ function syncQueuePanel(show: boolean): void {
   const panel = document.createElement("div");
   panel.id = QUEUES_ID;
   panel.style.cssText = `
-    position: fixed; bottom: 62px; left: 50%; transform: translateX(-50%);
-    z-index: 2147483600; display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 8px;
     background: rgba(30,31,38,.92); color: #e6e9f0; border-radius: 10px;
     padding: 6px 10px; font: 12px/1.2 system-ui, sans-serif;
     box-shadow: 0 8px 30px rgba(0,0,0,.45);
@@ -438,7 +468,7 @@ function syncQueuePanel(show: boolean): void {
   refresh.addEventListener("click", () => void load());
 
   panel.append(text, refresh);
-  (document.body || document.documentElement).appendChild(panel);
+  barElement().appendChild(panel);
   void load();
 }
 
@@ -448,6 +478,9 @@ function syncButton(show: boolean): void {
   const existing = document.getElementById(BUTTON_ID);
   if (!show) {
     existing?.remove();
+    // Полоса живёт ровно пока в ней что-то есть — см. barElement.
+    const bar = document.getElementById(BAR_ID);
+    if (bar && bar.childElementCount === 0) bar.remove();
     return;
   }
   if (existing) return;
@@ -460,13 +493,12 @@ function syncButton(show: boolean): void {
   // Низ по центру: верх занят шапкой и уведомлениями сайта, а футер модалки
   // статистики заканчивается выше нижнего края экрана.
   btn.style.cssText = `
-    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
-    z-index: 2147483600; background: #2c5cff; color: #fff; border: 0;
+    background: #2c5cff; color: #fff; border: 0;
     border-radius: 10px; padding: 10px 18px; cursor: pointer;
     font: 14px/1.2 system-ui, sans-serif; box-shadow: 0 8px 30px rgba(0,0,0,.45);
   `;
   btn.addEventListener("click", onButtonClick);
-  (document.body || document.documentElement).appendChild(btn);
+  barElement().appendChild(btn);
   log.info(
     SCOPE,
     "кнопка «В поиск» показана:",
@@ -1005,6 +1037,7 @@ export const postgameSearchFeature: Feature = {
     clickStorageWarned = false;
     document.getElementById(BUTTON_ID)?.remove();
     document.getElementById(QUEUES_ID)?.remove();
+    document.getElementById(BAR_ID)?.remove();
     settings = null;
   },
 };
