@@ -344,6 +344,41 @@ export function shouldRunMutationPass(
   return now - lastPassAt >= minIntervalMs;
 }
 
+/** Состояние счётчика пересборок одной плитки. */
+export interface RebuildState {
+  since: number;
+  count: number;
+  until: number;
+}
+
+/** Столько пересборок ряда в секунду уже считается штормом. */
+export const REBUILD_LIMIT = 8;
+/** Пауза после шторма: столько плитку не трогаем. */
+export const REBUILD_COOLDOWN_MS = 5000;
+
+/**
+ * Пропускать ли очередную пересборку ряда кнопок.
+ *
+ * Чистая функция — тестовый шов: пересборка пишет в DOM, наблюдатель на
+ * запись просыпается, и при мигающей подписи состава это самоподдерживающийся
+ * цикл. Считаем частоту в скользящей секунде и при превышении молчим паузу.
+ */
+export function throttleRebuild(
+  prev: RebuildState | undefined,
+  now: number,
+): { allowed: boolean; state: RebuildState; stormed: boolean } {
+  const state: RebuildState = prev ?? { since: now, count: 0, until: 0 };
+  if (now < state.until) return { allowed: false, state, stormed: false };
+  if (now - state.since > 1000) {
+    state.since = now;
+    state.count = 0;
+  }
+  state.count++;
+  if (state.count <= REBUILD_LIMIT) return { allowed: true, state, stormed: false };
+  state.until = now + REBUILD_COOLDOWN_MS;
+  return { allowed: false, state, stormed: true };
+}
+
 class PlayerNotesManager {
   private settings: Settings;
   /**
@@ -393,6 +428,18 @@ class PlayerNotesManager {
   /** Пересечения: своя история весит 200 строк, дважды её не тянем. */
   private crossoverCache = new Map<string, { at: number; data: Crossover | null }>();
   private crossoverInFlight = new Map<string, Promise<Crossover | null>>();
+  /**
+   * Счётчик пересборок ряда кнопок на плитку — сторож против «шторма».
+   *
+   * Пересборка сама пишет в DOM, а наблюдатель на запись просыпается. Если
+   * подпись состава мигает (например, у плитки то появляется, то исчезает
+   * видео-обёртка — так бывает при перестроении раскладки и открытии окон
+   * настроек в договорке), получается самоподдерживающийся цикл: запись →
+   * наблюдатель → пересборка → запись. Вкладка встаёт колом, и в журнал
+   * ничего не попадает, потому что он сбрасывается раз в три секунды —
+   * ровно та жалоба, которую не удавалось разобрать (12.08.2026).
+   */
+  private rebuildCounts = new Map<string, { since: number; count: number; until: number }>();
   /** Своя история игр — одна на сессию, общая для всех соперников за столом. */
   private myHistory: History | null = null;
   private myHistoryAt = 0;
@@ -3640,6 +3687,25 @@ class PlayerNotesManager {
    * остальном работает быстрый путь синхронизации без пересоздания (иначе
    * мерцание тултипов и лишние API-запросы на каждом тике DOM).
    */
+  /**
+   * Разрешить пересборку ряда кнопок. При шторме — запретить на паузу, один
+   * раз пожаловаться в журнал и НЕМЕДЛЕННО его сбросить: если вкладка сейчас
+   * встанет, обычный отложенный сброс до диска не доедет, и разбирать снова
+   * будет нечего.
+   */
+  private allowRebuild(username: string, sig: string): boolean {
+    const key = username.toLowerCase();
+    const { allowed, state, stormed } = throttleRebuild(this.rebuildCounts.get(key), Date.now());
+    this.rebuildCounts.set(key, state);
+    if (stormed) {
+      log.warn("player-notes", "шторм пересборки кнопок игрока — пауза; состав ряда:", sig);
+      // Сброс НЕМЕДЛЕННО: если вкладка сейчас встанет, отложенный сброс до
+      // диска не доедет, и разбирать снова будет нечего.
+      log.flushNow();
+    }
+    return allowed;
+  }
+
   private buttonsSignature(username: string, hasMedia: boolean): string {
     const s = this.settings;
     return [
@@ -3693,6 +3759,9 @@ class PlayerNotesManager {
     let iconsGroup = iconsHost.querySelector<HTMLElement>(`.${OWN.playerIcons}`);
 
     if (!iconsGroup || iconsGroup.dataset.pnSig !== sig) {
+      // Сторож шторма: пересобирать ряд десятки раз в секунду бессмысленно в
+      // любом сценарии, а вот подвесить вкладку — запросто.
+      if (!this.allowRebuild(username, sig)) return;
       // Чистим кнопки этого ника ТОЛЬКО в своей плитке и пересобираем её.
       this.removeOldButtons(username, container as HTMLElement);
       // Ищем по всей плитке: после смены хоста старая группа могла остаться

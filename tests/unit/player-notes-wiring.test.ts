@@ -45,7 +45,11 @@ vi.mock("@core/messaging", () => ({
 }));
 vi.mock("@core/toast", () => ({ showToast: vi.fn(), clearToasts: vi.fn() }));
 
-import { playerNotesFeature } from "@content/features/player-notes";
+import { playerNotesFeature,
+  REBUILD_COOLDOWN_MS,
+  REBUILD_LIMIT,
+  throttleRebuild,
+} from "@content/features/player-notes";
 import type { Settings } from "@shared/types";
 
 const ctx = {
@@ -163,5 +167,47 @@ describe("проводка PERF-1", () => {
     for (let i = 0; i < 20; i++) fire([rec({ target: foreign })]);
     expect(spy.mock.calls.length).toBe(0);
     spy.mockRestore();
+  });
+});
+
+describe("сторож шторма пересборки кнопок (жалоба 12.08.2026)", () => {
+  test("обычный темп проходит целиком", () => {
+    let state;
+    for (let i = 0; i < REBUILD_LIMIT; i++) {
+      const r = throttleRebuild(state, 1000 + i);
+      expect(r.allowed, `пересборка ${i + 1} в пределах порога`).toBe(true);
+      state = r.state;
+    }
+  });
+
+  test("превышение порога включает паузу и сообщает о шторме", () => {
+    let state;
+    for (let i = 0; i < REBUILD_LIMIT; i++) state = throttleRebuild(state, 1000).state;
+    const storm = throttleRebuild(state, 1000);
+    expect(storm.allowed).toBe(false);
+    expect(storm.stormed, "о шторме сообщаем — иначе в журнале снова тишина").toBe(true);
+
+    // Пока пауза — молчим и больше НЕ жалуемся (одна строка на шторм).
+    const during = throttleRebuild(storm.state, 1000 + REBUILD_COOLDOWN_MS - 1);
+    expect(during.allowed).toBe(false);
+    expect(during.stormed).toBe(false);
+  });
+
+  test("после паузы работа возобновляется", () => {
+    let state;
+    for (let i = 0; i < REBUILD_LIMIT; i++) state = throttleRebuild(state, 1000).state;
+    const storm = throttleRebuild(state, 1000);
+    const after = throttleRebuild(storm.state, 1000 + REBUILD_COOLDOWN_MS + 1);
+    expect(after.allowed, "плитка не должна остаться без кнопок навсегда").toBe(true);
+  });
+
+  test("счётчик скользящий: редкие пересборки не копятся в шторм", () => {
+    // Иначе за длинную игру любая плитка однажды упёрлась бы в порог и замерла.
+    let state;
+    for (let i = 0; i < REBUILD_LIMIT * 3; i++) {
+      const r = throttleRebuild(state, 1000 + i * 1500);
+      expect(r.allowed).toBe(true);
+      state = r.state;
+    }
   });
 });
