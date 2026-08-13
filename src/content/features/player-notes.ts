@@ -30,7 +30,9 @@ import {
   type Crossover,
   type History,
 } from "@core/crossover";
+import { fetchFirstKilled } from "@core/match-brief";
 import { getOwnUserId, ownNameFromTable, rememberOwnUserId } from "@core/own-user";
+import { lastGamesLimit } from "@shared/last-games";
 import { showToast } from "@core/toast";
 import { onDomChange, paintNickEl } from "@core/dom";
 import { onMessage, sendRuntime } from "@core/messaging";
@@ -90,9 +92,17 @@ interface RatingPlayer {
 }
 
 interface LastGameEntry {
+  /** Номер матча: по нему добирается признак «первый убитый». */
+  id: number;
   role: string;
   isWin: boolean;
   mmrChange: number;
+  /**
+   * Игрок был первым убитым. `undefined` — НЕ ЗНАЕМ (разбор матча не
+   * загрузился или признак выключен настройкой): молчать в этом случае
+   * обязательно, «не ПУ» было бы выдумкой.
+   */
+  firstKilled?: boolean;
 }
 
 /* NoteRecord / NotesMap живут в @core/notes-store — их делят content и popup. */
@@ -759,7 +769,16 @@ class PlayerNotesManager {
 
   update(ctx: FeatureContext): void {
     const cameraWasEnabled = this.settings.camera_rotate_enabled;
+    const gamesViewChanged =
+      this.settings.last_games_count !== ctx.settings.last_games_count ||
+      this.settings.last_games_first_killed !== ctx.settings.last_games_first_killed;
     this.settings = ctx.settings;
+    // В кэше лежат СТАРЫЕ списки: без сброса «показывать 8» и «показывать ПУ»
+    // включались бы только через пять минут, когда кэш протухнет сам.
+    if (gamesViewChanged) {
+      this.lastGamesCache.clear();
+      this.gamesFetchedAt.clear();
+    }
     if (cameraWasEnabled && !this.settings.camera_rotate_enabled) unflipAll();
     if (this.settings.statistics_enabled === false) {
       this.removeStatisticsElements();
@@ -3605,12 +3624,13 @@ class PlayerNotesManager {
     try {
       const dataPromise = (async (): Promise<LastGameEntry[]> => {
         const userId = await this.resolveUserId(username, key);
+        const limit = lastGamesLimit(this.settings.last_games_count);
 
         try {
           // Настоящий таймаут через AbortSignal вместо Promise.race: race не
           // отменял сам запрос, и он висел в сети после «таймаута».
           const gamesResponse = await fetch(
-            `https://polemicagame.com/profile/default/get-games?userId=${userId}&page=1&limit=4`,
+            `https://polemicagame.com/profile/default/get-games?userId=${userId}&page=1&limit=${limit}`,
             { signal: AbortSignal.timeout(15_000) },
           );
           if (!gamesResponse.ok) {
@@ -3626,11 +3646,16 @@ class PlayerNotesManager {
             log.warn("player-notes", "games API: unexpected shape");
             throw new Error("games API: unexpected shape");
           }
-          return (data.rows as any[]).map((game): LastGameEntry => ({
-            role: game.role?.type === "don" ? "godfather" : game.role?.type || "civilian",
-            isWin: game.result?.code === "success",
-            mmrChange: parseInt(game.mmr?.mmr_diff, 10) || 0,
-          }));
+          const entries = (data.rows as any[]).map(
+            (game): LastGameEntry => ({
+              id: Number(game.id) || 0,
+              role: game.role?.type === "don" ? "godfather" : game.role?.type || "civilian",
+              isWin: game.result?.code === "success",
+              mmrChange: parseInt(game.mmr?.mmr_diff, 10) || 0,
+            }),
+          );
+          await this.markFirstKilled(entries, userId);
+          return entries;
         } catch (err) {
           log.warn("player-notes", "fetching games history failed", err);
           throw err;
@@ -3655,6 +3680,30 @@ class PlayerNotesManager {
     }
   }
 
+  /**
+   * Проставить «ПУ» в списке игр.
+   *
+   * Разборы матчей едут ОДНОВРЕМЕННО: восемь по полсекунды подряд — это
+   * четыре секунды на наведение, а разом — те же полсекунды. Матч, который не
+   * разобрался, остаётся без пометки вовсе: «не ПУ» по неудаче было бы
+   * утверждением, которого мы не проверяли.
+   */
+  private async markFirstKilled(
+    entries: LastGameEntry[],
+    userId: number | string,
+  ): Promise<void> {
+    if (this.settings.last_games_first_killed === false) return;
+    const mine = Number(userId);
+    if (!Number.isSafeInteger(mine) || mine <= 0) return;
+    const marks = await Promise.all(
+      entries.map((entry) => (entry.id > 0 ? fetchFirstKilled(entry.id) : undefined)),
+    );
+    entries.forEach((entry, i) => {
+      const first = marks[i];
+      if (first !== undefined) entry.firstKilled = first === mine;
+    });
+  }
+
   private formatGamesHistory(games: LastGameEntry[]): string {
     if (!games || games.length === 0) return "Нет данных о последних играх";
     return games
@@ -3668,6 +3717,11 @@ class PlayerNotesManager {
           <span style="color: ${game.mmrChange >= 0 ? "#4CAF50" : "#f44336"}">${
             game.mmrChange >= 0 ? "+" : ""
           }${escapeHtml(String(game.mmrChange))}</span>
+          ${
+            game.firstKilled === true
+              ? '<span title="Первый убитый" style="color:#ffd54f;font-weight:600">ПУ</span>'
+              : ""
+          }
         </div>
       `,
       )

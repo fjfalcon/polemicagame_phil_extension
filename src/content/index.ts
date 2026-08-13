@@ -19,6 +19,8 @@ import { getOwnUserId } from "@core/own-user";
 
 import { searchFeature } from "./features/search";
 import { autoStartFeature } from "./features/auto-start";
+import { hotkeyHintsFeature } from "./features/hotkey-hints";
+import { outcryHotkeyFeature } from "./features/outcry-hotkey";
 import { playerNotesFeature, syncPlayerNotesRoute } from "./features/player-notes";
 import { matchStatsFeature, syncMatchStatsRoute } from "./features/match-stats";
 import { tooltipFeature } from "./features/tooltip";
@@ -46,6 +48,8 @@ const manager = new FeatureManager().register(
   tooltipFeature,
   roleFakerFeature,
   pauseHotkeyFeature,
+  outcryHotkeyFeature,
+  hotkeyHintsFeature,
   f5RefreshFeature,
   roleMarkerFeature,
   updateNotifyFeature,

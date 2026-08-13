@@ -24,6 +24,7 @@ import { formatKeyCode, isModifierCode } from "@core/keyboard";
 // Список углов — общий с content-скриптом (см. shared/nick-plate).
 import { PLATE_POSITIONS } from "@shared/nick-plate";
 import { readControlPosition } from "@shared/controls-layout";
+import { readLastGamesCount } from "@shared/last-games";
 import { escapeHtml } from "@core/escape";
 import {
   loadNotes,
@@ -859,6 +860,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let roleResetCode = "KeyE";
   let roleHideCode = "KeyD";
   let rolePeekCode = "KeyV";
+  let outcryCode = "KeyC";
   const roleKeyRenders: Array<() => void> = [];
   const setupRoleKey = (id: string, get: () => string, set: (c: string) => void) => {
     const btn = $<HTMLButtonElement>(id);
@@ -884,6 +886,9 @@ document.addEventListener("DOMContentLoaded", () => {
   setupRoleKey("hotkey_role_reset", () => roleResetCode, (c) => (roleResetCode = c));
   setupRoleKey("hotkey_role_hide", () => roleHideCode, (c) => (roleHideCode = c));
   setupRoleKey("hotkey_role_peek", () => rolePeekCode, (c) => (rolePeekCode = c));
+  // Тот же механизм захвата клавиши, что и у ролевых: живёт в замыкании, а не
+  // в input.value, иначе чужое изменение откатывалось бы первым же тумблером.
+  setupRoleKey("outcry_hotkey_code", () => outcryCode, (c) => (outcryCode = c));
 
   // ───────────────────────── Загрузка настроек в контролы ─────────────────────────
   /**
@@ -932,11 +937,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (typeof patch.hotkey_role_reset === "string") roleResetCode = patch.hotkey_role_reset;
     if (typeof patch.hotkey_role_hide === "string") roleHideCode = patch.hotkey_role_hide;
     if (typeof patch.hotkey_role_peek === "string") rolePeekCode = patch.hotkey_role_peek;
+    if (typeof patch.outcry_hotkey_code === "string") outcryCode = patch.outcry_hotkey_code;
     if (
       patch.hotkey_role_fake ||
       patch.hotkey_role_reset ||
       patch.hotkey_role_hide ||
-      patch.hotkey_role_peek
+      patch.hotkey_role_peek ||
+      patch.outcry_hotkey_code
     ) {
       roleKeyRenders.forEach((r) => r());
     }
@@ -963,6 +970,7 @@ document.addEventListener("DOMContentLoaded", () => {
     roleResetCode = items.hotkey_role_reset || "KeyE";
     roleHideCode = items.hotkey_role_hide || "KeyD";
     rolePeekCode = items.hotkey_role_peek || "KeyV";
+    outcryCode = items.outcry_hotkey_code || "KeyC";
     roleKeyRenders.forEach((r) => r());
     const set = (id: string, val: boolean) => {
       const el = $<HTMLInputElement>(id);
@@ -1020,6 +1028,10 @@ document.addEventListener("DOMContentLoaded", () => {
     set("btn_last_games_enabled", items.btn_last_games_enabled);
     set("btn_crossover_enabled", items.btn_crossover_enabled);
     set("btn_hide_video_enabled", items.btn_hide_video_enabled);
+    const lgc = $<HTMLSelectElement>("last_games_count");
+    // Нормализация: мусор в storage иначе оставил бы селект пустым.
+    if (lgc) lgc.value = readLastGamesCount(items.last_games_count);
+    set("last_games_first_killed", items.last_games_first_killed);
     set("role_marker_enabled", items.role_marker_enabled);
     set("compact_nicknames_enabled", items.compact_nicknames_enabled);
     const npp = $<HTMLSelectElement>("nick_plate_position");
@@ -1036,6 +1048,8 @@ document.addEventListener("DOMContentLoaded", () => {
       // Мусор из storage не должен оставлять селект пустым — нормализуем.
       if (sel) sel.value = readControlPosition(kind, (items as unknown as Record<string, unknown>)[`ctl_pos_${kind}`]);
     }
+    set("outcry_hotkey_enabled", items.outcry_hotkey_enabled);
+    set("hotkey_hints_enabled", items.hotkey_hints_enabled);
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
     set("debug_logging_enabled", items.debug_logging_enabled);
@@ -1127,6 +1141,8 @@ document.addEventListener("DOMContentLoaded", () => {
       btn_last_games_enabled: cb("btn_last_games_enabled", true),
       btn_crossover_enabled: cb("btn_crossover_enabled", true),
       btn_hide_video_enabled: cb("btn_hide_video_enabled", true),
+      last_games_count: readLastGamesCount($<HTMLSelectElement>("last_games_count")?.value),
+      last_games_first_killed: cb("last_games_first_killed", true),
       role_marker_enabled: cb("role_marker_enabled", false),
       compact_nicknames_enabled: cb("compact_nicknames_enabled", false),
       nick_plate_position: $<HTMLSelectElement>("nick_plate_position")?.value || "default",
@@ -1155,6 +1171,9 @@ document.addEventListener("DOMContentLoaded", () => {
       hotkey_role_reset: roleResetCode,
       hotkey_role_hide: roleHideCode,
       hotkey_role_peek: rolePeekCode,
+      outcry_hotkey_enabled: cb("outcry_hotkey_enabled", false),
+      outcry_hotkey_code: outcryCode,
+      hotkey_hints_enabled: cb("hotkey_hints_enabled", true),
       statistics_enabled: cb("statistics_enabled", true),
       match_page_stats_enabled: cb("match_page_stats_enabled", true),
       match_stats_view: $<HTMLSelectElement>("match_stats_view")?.value || "hints",
@@ -1246,6 +1265,8 @@ document.addEventListener("DOMContentLoaded", () => {
     "btn_last_games_enabled",
     "btn_crossover_enabled",
     "btn_hide_video_enabled",
+    "last_games_count",
+    "last_games_first_killed",
     "role_marker_enabled",
     "compact_nicknames_enabled",
     "nick_plate_position",
@@ -1254,6 +1275,9 @@ document.addEventListener("DOMContentLoaded", () => {
     "ctl_pos_finish",
     "ctl_pos_outcry",
     "ctl_pos_guess",
+    "outcry_hotkey_enabled",
+    "outcry_hotkey_code",
+    "hotkey_hints_enabled",
     "f5_refresh_fix_enabled",
     "update_check_enabled",
     "debug_logging_enabled",

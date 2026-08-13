@@ -4,7 +4,7 @@
  */
 import { keyboard } from "@core/keyboard";
 import { isVisible } from "@core/dom";
-import { SITE } from "@core/selectors";
+import { SITE, TEXT as SITE_TEXT } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const TEXT = {
@@ -15,16 +15,8 @@ const TEXT = {
 };
 
 const norm = (v: unknown) => (v ?? "").toString().toLowerCase().replace(/\s+/g, " ").trim();
-const PAUSE_EXACT = new Set([
-  "пауза",
-  "пауза игры",
-  "поставить на паузу",
-  "снять с паузы",
-  "перерыв",
-  "pause",
-  "pause game",
-  "break",
-]);
+// Подписи живут в selectors.TEXT (их читает и подсказка клавиши на кнопке).
+const PAUSE_EXACT = new Set(SITE_TEXT.pauseExact);
 /**
  * Слова снятия паузы. ОТДЕЛЬНО от паузы и под гейтом (resumeAllowedFor):
  * «Продолжить» — типовая кнопка любого диалога сайта (реконнект, туториал,

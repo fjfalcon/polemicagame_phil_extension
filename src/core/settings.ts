@@ -7,6 +7,7 @@
  */
 import { browser } from "./env";
 import { log } from "./log";
+import { DEFAULT_LAST_GAMES_COUNT } from "@shared/last-games";
 import type { Settings, SettingKey } from "@shared/types";
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -39,6 +40,12 @@ export const DEFAULT_SETTINGS: Settings = {
   btn_last_games_enabled: true,
   btn_crossover_enabled: true,
   btn_hide_video_enabled: true,
+  // Восемь игр вместо прежних зашитых четырёх (просьба владельца 13.08.2026):
+  // список приходит одним запросом, и его длина серверу ничего не стоит.
+  last_games_count: DEFAULT_LAST_GAMES_COUNT,
+  // ПУ включён: ради него и затевалось. Стоит он дороже остального в окне —
+  // по запросу на игру, — поэтому отключаемый.
+  last_games_first_killed: true,
   // Выключено по умолчанию (8.1.43, решение владельца): метка «мой read» —
   // нишевая фича, новичку она мешает. Уже включившим её пользователям
   // значение из storage сохранит прежнее поведение.
@@ -57,6 +64,13 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkey_role_hide: "KeyD",
   // Отдельная от D: клавиши держат по-разному, и путать их нельзя.
   hotkey_role_peek: "KeyV",
+  // ВЫКЛЮЧЕНО по умолчанию: клавиша тратит выкрик, а лишний выкрик — фол.
+  // Тот же принцип, что у остальных «действий за игрока»: включает сам игрок.
+  outcry_hotkey_enabled: false,
+  outcry_hotkey_code: "KeyC",
+  // Включено: подсказка ничего не делает за игрока и появляется только там,
+  // где клавиша реально сработает.
+  hotkey_hints_enabled: true,
   update_check_enabled: true,
   debug_logging_enabled: true,
   connection_diag_enabled: false,

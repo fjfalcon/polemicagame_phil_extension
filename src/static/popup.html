@@ -271,6 +271,15 @@
             <div class="row"><span>— Лучший ход</span>
                 <select id="ctl_pos_guess" class="sel"><option value="left" selected>слева</option><option value="center">по центру</option><option value="right">справа</option></select>
             </div>
+            <div class="row"><span>Выкрик с клавиши<span class="hint">нажал — выкрикнул. Работает только в игре и только когда кнопка выкрика доступна. Выключено по умолчанию: выкрик расходуемый, лишний стоит фола</span></span>
+                <label class="switch"><input type="checkbox" id="outcry_hotkey_enabled"><span class="slider"></span></label>
+            </div>
+            <div class="row"><span>— Клавиша выкрика</span>
+                <button id="outcry_hotkey_code" class="btn-key">C</button>
+            </div>
+            <div class="row"><span>Писать клавиши на кнопках<span class="hint">«Выкрикнуть (C)», «Пауза (F8)» — подпись появляется там, где клавиша сейчас сработает</span></span>
+                <label class="switch"><input type="checkbox" id="hotkey_hints_enabled" checked><span class="slider"></span></label>
+            </div>
             <div class="row"><span>F5 обновляет страницу<span class="hint">а не открывает настройки игры</span></span>
                 <label class="switch"><input type="checkbox" id="f5_refresh_fix_enabled" checked><span class="slider"></span></label>
             </div>
@@ -295,6 +304,15 @@
                 <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="btn_last_games_enabled" checked> Последние игры</label>
                 <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="btn_crossover_enabled" checked> Пересечения</label>
                 <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="btn_hide_video_enabled" checked> Скрыть камеру</label>
+            </div>
+            <div class="row"><span>Игр в окне «последние игры»<span class="hint">список приходит одним запросом — длина ничего не стоит</span></span>
+                <select id="last_games_count" class="sel">
+                    <option value="4">4</option>
+                    <option value="8" selected>8</option>
+                </select>
+            </div>
+            <div class="row"><span>Отмечать «ПУ» в последних играх<span class="hint">первый убитый в той игре. Считается по разбору каждого матча — это отдельный запрос на игру, поэтому окно открывается чуть дольше</span></span>
+                <label class="switch"><input type="checkbox" id="last_games_first_killed" checked><span class="slider"></span></label>
             </div>
             <div class="row"><span>Кнопка поворота камеры<span class="hint">добавляет к игроку кнопку переворота видео на 180°</span></span>
                 <label class="switch"><input type="checkbox" id="camera_rotate_enabled" checked><span class="slider"></span></label>

@@ -45,6 +45,10 @@ export interface Settings {
   /** Кнопка «пересечения»: сколько игр сыграно с этим игроком и кем он был. */
   btn_crossover_enabled: boolean;
   btn_hide_video_enabled: boolean;
+  /** Сколько последних игр показывать в окне истории: "4" или "8". */
+  last_games_count: string;
+  /** Отмечать в этом окне игры, где игрок был первым убитым («ПУ»). */
+  last_games_first_killed: boolean;
   /** Квадратик-метка роли у игрока (мой read, сбрасывается за игру). */
   role_marker_enabled: boolean;
   /** Управлять раскладкой кнопок действий в игре. */
@@ -63,6 +67,12 @@ export interface Settings {
   hotkey_role_hide: string;
   /** Клавиша «показать роли, пока удерживается» (дефолт KeyV). */
   hotkey_role_peek: string;
+  /** Выкрикнуть с клавиши. Выключено по умолчанию: действие расходуемое. */
+  outcry_hotkey_enabled: boolean;
+  /** Клавиша выкрика (дефолт KeyC). */
+  outcry_hotkey_code: string;
+  /** Писать клавишу прямо на кнопке: «Выкрикнуть (C)», «Пауза (F8)». */
+  hotkey_hints_enabled: boolean;
   /** Проверять наличие новой версии на GitHub и показывать баннер. */
   update_check_enabled: boolean;
   /** Вести логи в storage.local для диагностики (выгружаются из popup). */

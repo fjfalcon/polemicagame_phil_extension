@@ -67,6 +67,7 @@ import { playerNotesFeature,
   isNightNow,
   throttleRebuild,
 } from "@content/features/player-notes";
+import { resetMatchBriefCache } from "@core/match-brief";
 import type { Settings } from "@shared/types";
 
 const ctx = {
@@ -399,5 +400,135 @@ describe("прогрев пересечений", () => {
     expect(isNightNow()).toBe(false);
     document.body.classList.add("night");
     expect(isNightNow()).toBe(true);
+  });
+});
+
+/**
+ * Окно «последние игры»: длина списка и пометка «ПУ» (просьба владельца
+ * 13.08.2026, скриншот с пометками от руки).
+ *
+ * Пометка — это УТВЕРЖДЕНИЕ про человека, поэтому сторожим границу «знаем /
+ * не знаем» и то, что настройка действительно управляет запросами: разбор
+ * каждого матча стоит отдельного запроса.
+ */
+describe("окно последних игр", () => {
+  let urls: string[] = [];
+
+  /** Сайт: рейтинг, список игр и разборы матчей (id → кто первый убитый). */
+  function serveGames(rows: unknown[], firstKilled: Record<string, string>): void {
+    urls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        if (url.includes("/ratings/default/get-list")) {
+          return {
+            ok: true,
+            json: async () => [
+              { user_id: 7, username: "fj" },
+              { user_id: 11, username: "Alpha" },
+            ],
+          };
+        }
+        if (url.includes("/profile/default/get-games")) {
+          return { ok: true, json: async () => ({ rows, totalCount: rows.length }) };
+        }
+        const match = /\/match\/(\d+)/.exec(url);
+        if (match) {
+          const who = firstKilled[match[1]];
+          if (who === undefined) return { ok: false, status: 500 };
+          return {
+            ok: true,
+            text: async () =>
+              `<Gamestats :game-data='{"id": ${match[1]}, "firstKilled": ${who}}'></Gamestats>`,
+          };
+        }
+        return { ok: false, status: 404 };
+      }) as unknown as typeof fetch,
+    );
+  }
+
+  const game = (id: number) => ({
+    id,
+    role: { type: "civilian" },
+    result: { code: "fail" },
+    mmr: { mmr_diff: -28 },
+  });
+
+  function board(): void {
+    document.body.className = "";
+    document.body.innerHTML = `
+      <div class="p-header__userCont"><a href="/profile/7">fj</a></div>
+      <div class="players">
+        <div class="player" id="p0">
+          <div class="player__info info"><span class="info__name">Alpha</span></div>
+        </div>
+      </div>`;
+  }
+
+  /** Навести курсор на «последние игры» и дождаться содержимого тултипа. */
+  async function hover(): Promise<string> {
+    fire([rec({ target: document.body, added: [document.querySelector(".player") as Node] })]);
+    await vi.advanceTimersByTimeAsync(1);
+    const button = document.querySelector("#p0 .last-games-button") as HTMLElement;
+    // Ссылку на тултип берём ДО наведения: показ уносит его порталом в body.
+    const tip = button.querySelector(".pn-tooltip") as HTMLElement;
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(1);
+    return tip.innerHTML;
+  }
+
+  async function start(settings: Record<string, unknown>): Promise<void> {
+    // Разборы матчей кэшируются на уровне модуля и переживают тест: без
+    // сброса соседний тест видел бы чужую пометку.
+    resetMatchBriefCache();
+    playerNotesFeature.disable();
+    seam.subs = [];
+    seam.ownIdGate = null;
+    await playerNotesFeature.enable({
+      settings: { statistics_enabled: true, btn_last_games_enabled: true, ...settings } as never,
+    });
+    board();
+  }
+
+  test("«ПУ» стоит ровно там, где первым убили именно его", async () => {
+    serveGames([game(101), game(102)], { "101": "11", "102": "99" });
+    await start({ last_games_count: "8", last_games_first_killed: true });
+    const html = await hover();
+    expect(html.match(/ПУ/g) ?? [], "одна игра из двух — его").toHaveLength(1);
+  });
+
+  test("матч не разобрался — пометки нет ВОВСЕ", async () => {
+    // «Не ПУ» по неудаче было бы утверждением, которого мы не проверяли:
+    // разбор не пришёл — значит мы просто не знаем.
+    serveGames([game(101)], {});
+    await start({ last_games_count: "8", last_games_first_killed: true });
+    expect(await hover()).not.toContain("ПУ");
+  });
+
+  test("выключённая настройка не ходит за разборами матчей", async () => {
+    // Это её единственный смысл: восемь игр — восемь лишних запросов.
+    serveGames([game(101)], { "101": "11" });
+    await start({ last_games_count: "8", last_games_first_killed: false });
+    const html = await hover();
+    expect(html).not.toContain("ПУ");
+    expect(urls.filter((u) => u.includes("/match/")), "матчи не запрашивались").toEqual([]);
+  });
+
+  test("сколько игр просить — из настройки, а не из кода", async () => {
+    // Проверяем ОБА значения: тест только на «4» проходил бы и с прежним
+    // зашитым четырём (поймано мутантом при самопроверке).
+    const limitAsked = () =>
+      new URL(urls.find((u) => u.includes("get-games"))!).searchParams.get("limit");
+
+    serveGames([game(101)], {});
+    await start({ last_games_count: "8", last_games_first_killed: false });
+    await hover();
+    expect(limitAsked()).toBe("8");
+
+    serveGames([game(101)], {});
+    await start({ last_games_count: "4", last_games_first_killed: false });
+    await hover();
+    expect(limitAsked()).toBe("4");
   });
 });
