@@ -474,6 +474,9 @@ describe("окно последних игр", () => {
     // Ссылку на тултип берём ДО наведения: показ уносит его порталом в body.
     const tip = button.querySelector(".pn-tooltip") as HTMLElement;
     button.dispatchEvent(new MouseEvent("mouseenter"));
+    // С «ПУ» окно ждёт задержку намерения: мазок курсором по столу не должен
+    // поднимать разбор каждой игры у каждого игрока.
+    await vi.advanceTimersByTimeAsync(400);
     for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(1);
     return tip.innerHTML;
   }
@@ -530,5 +533,35 @@ describe("окно последних игр", () => {
     await start({ last_games_count: "4", last_games_first_killed: false });
     await hover();
     expect(limitAsked()).toBe("4");
+  });
+
+  test("мазок курсором по столу не поднимает разборы матчей", async () => {
+    // С «ПУ» окно стоит запроса на каждую игру: без задержки намерения
+    // проход мышью по десяти плиткам стоил бы под сотню запросов.
+    serveGames([game(101)], { "101": "11" });
+    await start({ last_games_count: "8", last_games_first_killed: true });
+    fire([rec({ target: document.body, added: [document.querySelector(".player") as Node] })]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const button = document.querySelector("#p0 .last-games-button") as HTMLElement;
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(100);
+    button.dispatchEvent(new MouseEvent("mouseleave"));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(urls.filter((u) => u.includes("get-games")), "курсор ушёл — грузить нечего").toEqual([]);
+  });
+
+  test("без «ПУ» окно открывается сразу, как раньше", async () => {
+    // Дешёвое окно (один запрос) ждать не должно — задержка тут была бы
+    // регрессом вида «стало медленнее, чем было».
+    serveGames([game(101)], {});
+    await start({ last_games_count: "4", last_games_first_killed: false });
+    fire([rec({ target: document.body, added: [document.querySelector(".player") as Node] })]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const button = document.querySelector("#p0 .last-games-button") as HTMLElement;
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(1);
+    expect(urls.some((u) => u.includes("get-games")), "запрос ушёл без ожидания").toBe(true);
   });
 });

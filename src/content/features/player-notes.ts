@@ -135,11 +135,12 @@ const VERSION = NOTES_VERSION;
 /** TTL кэшей статистики: за игровой вечер MMR меняется каждой игрой. */
 const STATS_TTL_MS = 5 * 60 * 1000;
 /**
- * Задержка намерения для кнопки пересечений: сводка стоит двух историй, и
- * курсор, мазнувший по столу, не должен поднимать десяток пар запросов.
- * Соседние кнопки дешевле и грузятся сразу.
+ * Задержка намерения для ДОРОГИХ окон: сводка пересечений стоит двух историй,
+ * а окно последних игр с «ПУ» — разбора каждой игры. Курсор, мазнувший по
+ * столу, не должен поднимать десяток таких пачек. Дешёвые окна (и те же
+ * последние игры без «ПУ») открываются сразу.
  */
-const CROSSOVER_INTENT_MS = 350;
+const HOVER_INTENT_MS = 350;
 /**
  * TTL готовой сводки пересечений. Дольше обычной статистики намеренно: она
  * меняется, только когда доигран ОБЩИЙ матч, а текущий доиграться посреди
@@ -2245,9 +2246,8 @@ class PlayerNotesManager {
     tooltip.className = OWN.tooltip;
     tooltip.style.cssText = TOOLTIP_CSS;
 
-    button.addEventListener("mouseenter", async () => {
-      tooltip.innerHTML = "Загрузка...";
-      this.showTooltip(tooltip, button);
+    let intent: ReturnType<typeof setTimeout> | null = null;
+    const load = async (): Promise<void> => {
       const games = await this.getLastGames(username);
       // Курсор мог уйти до ответа — скрытый тултип не трогаем (запись DOM
       // будила бы наблюдатель вхолостую); следующий hover перерисует сам.
@@ -2260,8 +2260,29 @@ class PlayerNotesManager {
             : "Нет данных о последних играх";
       // Содержимое сменилось — размер тоже, пересчитываем позицию.
       this.showTooltip(tooltip, button);
+    };
+
+    button.addEventListener("mouseenter", () => {
+      tooltip.innerHTML = "Загрузка...";
+      this.showTooltip(tooltip, button);
+      // Задержка намерения — ТОЛЬКО когда включён «ПУ»: с ним окно стоит
+      // разбора каждого матча, и курсор, мазнувший по столу, поднимал бы
+      // девять запросов на игрока. Без «ПУ» окно дешёвое (один запрос), и
+      // ждать незачем — оно открывается сразу, как раньше.
+      if (this.settings.last_games_first_killed === false) {
+        void load();
+        return;
+      }
+      intent = setTimeout(() => {
+        intent = null;
+        void load();
+      }, HOVER_INTENT_MS);
     });
     button.addEventListener("mouseleave", () => {
+      if (intent) {
+        clearTimeout(intent);
+        intent = null;
+      }
       this.hideTooltip(tooltip);
     });
 
@@ -3576,7 +3597,7 @@ class PlayerNotesManager {
                 : this.formatCrossover(data);
           this.showTooltip(tooltip, button);
         })();
-      }, CROSSOVER_INTENT_MS);
+      }, HOVER_INTENT_MS);
     });
     button.addEventListener("mouseleave", () => {
       if (intent) {
