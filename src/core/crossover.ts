@@ -172,15 +172,29 @@ export function parseGameRows(payload: unknown): { rows: GameRow[]; total: numbe
   return { rows, total };
 }
 
-/** Игр за один запрос (потолок выдачи сайта, проверено живьём). */
-export const PAGE_SIZE = 200;
 /**
- * Сколько страниц готовы взять на одного игрока. Восемь — это 1600 игр:
- * полная история почти для всех, а для завсегдатаев с тремя тысячами партий
- * честная оговорка в сводке лучше двадцати запросов на одно наведение.
+ * Игр за один запрос.
+ *
+ * Двести стояло здесь как «потолок выдачи сайта» — и это была ОШИБКА
+ * измерения: сайт сам просит по 200, но сервер отдаёт столько, сколько
+ * попросишь. Замер 13.08.2026 (аккаунт на 6196 игр):
+ *   limit=200  → 1.98 с, 65 КБ
+ *   limit=2000 → 2.17 с, 660 КБ
+ *   limit=6000 → 2.38 с, 2 МБ
+ * То есть время ответа почти целиком серверное и от размера страницы не
+ * зависит. Платили мы не за объём, а за КОЛИЧЕСТВО запросов: восемь страниц
+ * подряд — это восемь таких ожиданий, шестнадцать секунд на одну историю и
+ * до полуминуты на первую сводку (жалоба владельца 13.08.2026).
  */
-export const MAX_PAGES = 8;
-const REQUEST_TIMEOUT_MS = 15_000;
+export const PAGE_SIZE = 2000;
+/**
+ * Сколько страниц готовы взять на одного игрока. Четыре по две тысячи — это
+ * 8000 игр: больше, чем у самого играющего аккаунта сайта (6196 на 13.08.2026),
+ * так что оговорка про «доступный отрезок» теперь почти никому не достанется.
+ */
+export const MAX_PAGES = 4;
+/** Страница теперь тяжелее (сотни КБ), и на медленной связи нужен запас. */
+const REQUEST_TIMEOUT_MS = 20_000;
 
 async function fetchPage(
   userId: number | string,
@@ -212,6 +226,65 @@ export interface History {
 }
 
 /**
+ * Докуда хватит: последняя строка старше границы — глубже пересекаться не с
+ * чем. Строка БЕЗ даты не обрывает листание: пустая строка меньше любой даты,
+ * и один такой ответ и останавливал загрузку, и помечал историю полной — то
+ * есть недобор выдавался бы за точный итог.
+ */
+function reachedDepth(rows: GameRow[], until?: string): boolean {
+  if (until === undefined) return false;
+  const last = rows[rows.length - 1]?.date;
+  return last !== undefined && last < until;
+}
+
+/** Первая страница истории. null — не удалось (это НЕ «игр нет»). */
+export function fetchFirstPage(
+  userId: number | string,
+): Promise<{ rows: GameRow[]; total: number } | null> {
+  return fetchPage(userId, 1);
+}
+
+/**
+ * Дотянуть историю до конца, если первой страницы не хватило.
+ *
+ * Остальные страницы берутся ОДНОВРЕМЕННО, а не одна за другой: их число
+ * известно из totalCount с первой же страницы, а ждать по два секунды за
+ * страницу — ровно то, из-за чего первая сводка загружалась полминуты.
+ *
+ * Плата за это — возможная лишняя страница: последовательное листание могло
+ * бы упереться в `until` на второй, а мы к тому моменту уже запросили третью.
+ * Обмен осознанный: лишняя страница едет ПАРАЛЛЕЛЬНО и ожидания не удлиняет,
+ * а страниц всего до четырёх.
+ */
+export async function completeHistory(
+  userId: number | string,
+  first: { rows: GameRow[]; total: number },
+  until?: string,
+  maxPages = MAX_PAGES,
+): Promise<History> {
+  const rows = [...first.rows];
+  const done = (truncated: boolean): History => ({ rows, total: first.total, truncated });
+  // Пустая первая страница при ненулевом счётчике — сервер темнит; листать
+  // такое бессмысленно, но и полнотой называть нельзя.
+  if (rows.length === 0 || rows.length >= first.total) return done(rows.length < first.total);
+  if (reachedDepth(rows, until)) return done(false);
+
+  const pages = Math.min(maxPages, Math.ceil(first.total / PAGE_SIZE));
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) => fetchPage(userId, i + 2)),
+  );
+  for (const page of rest) {
+    // Обрыв посреди листания — не выдумываем. Останавливаемся на ПЕРВОМ же:
+    // дыра в середине сделала бы «самую старую игру» ложной границей для
+    // второй истории, а число общих игр — молчаливым недобором.
+    if (!page || page.rows.length === 0) return done(true);
+    rows.push(...page.rows);
+    if (reachedDepth(rows, until)) return done(false);
+  }
+  return done(rows.length < first.total);
+}
+
+/**
  * Скачать историю игр.
  *
  * `until` — дата самой старой игры второго участника: глубже лезть незачем,
@@ -223,33 +296,9 @@ export async function fetchHistory(
   until?: string,
   maxPages = MAX_PAGES,
 ): Promise<History | null> {
-  const first = await fetchPage(userId, 1);
+  const first = await fetchFirstPage(userId);
   if (!first) return null;
-  const rows = [...first.rows];
-  let page = 1;
-  const reachedDepth = (): boolean => {
-    if (until === undefined) return false;
-    const last = rows[rows.length - 1]?.date;
-    // Строка БЕЗ даты не должна обрывать листание: пустая строка меньше
-    // любой даты, и один такой ответ и останавливал загрузку, и помечал
-    // историю полной — то есть недобор выдавался бы за точный итог.
-    return last !== undefined && last < until;
-  };
-
-  while (rows.length < first.total && page < maxPages && !reachedDepth()) {
-    page++;
-    const next = await fetchPage(userId, page);
-    // Обрыв посреди листания — не выдумываем: считаем историю неполной.
-    if (!next || next.rows.length === 0) {
-      return { rows, total: first.total, truncated: true };
-    }
-    rows.push(...next.rows);
-  }
-  return {
-    rows,
-    total: first.total,
-    truncated: rows.length < first.total && !reachedDepth(),
-  };
+  return completeHistory(userId, first, until, maxPages);
 }
 
 /** Самая старая дата в истории — граница, глубже которой искать нечего. */
@@ -262,19 +311,8 @@ export function oldestDate(rows: GameRow[]): string | undefined {
   return oldest;
 }
 
-/**
- * Пересечение с игроком. null — не удалось получить хотя бы одну историю:
- * пустая сводка выглядела бы как «вы никогда не играли вместе», а это другое
- * утверждение.
- *
- * Свою историю загружает вызывающий и переиспользует для всех игроков — она
- * одна на сессию, и тянуть её заново на каждого соседа по столу незачем.
- */
-export async function crossoverWith(
-  myHistory: History,
-  theirUserId: number | string,
-): Promise<Crossover | null> {
-  const theirs = await fetchHistory(theirUserId, oldestDate(myHistory.rows));
-  if (!theirs) return null;
-  return crossGames(myHistory.rows, theirs.rows, myHistory.truncated || theirs.truncated);
-}
+// Готовой «пересеки меня с ним» здесь больше нет намеренно: свою историю и
+// первую страницу чужой надо запускать ОДНОВРЕМЕННО, а знает об обеих только
+// вызывающий (свой id, ник соседа и кэш — всё у него). Порядок сборки:
+//   fetchFirstPage(их) ‖ своя история → completeHistory(их, ..., oldestDate)
+//     → crossGames.

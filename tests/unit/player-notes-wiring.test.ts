@@ -11,6 +11,22 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
  */
 const seam = vi.hoisted(() => ({
   subs: [] as Array<(muts: MutationRecord[]) => void>,
+  /** Ворота на «узнать свой id»: тест держит их, чтобы поймать окно гонки. */
+  ownIdGate: null as Promise<void> | null,
+}));
+
+// Свой id — через шов, а не через модуль own-user: у того есть кэш на уровне
+// модуля, общий для всех тестов файла, и «медленный резолв» в нём не
+// воспроизвести (из-за этого первая версия теста ничего не сторожила).
+vi.mock("@core/own-user", () => ({
+  OWN_ID_KEY: "pn_own_user_id",
+  getOwnUserId: async () => {
+    if (seam.ownIdGate) await seam.ownIdGate;
+    return 7;
+  },
+  ownNameFromTable: () =>
+    document.querySelector(".player.my-player .info__name")?.textContent?.trim() || null,
+  rememberOwnUserId: async () => {},
 }));
 
 vi.mock("@core/dom", () => ({
@@ -48,6 +64,7 @@ vi.mock("@core/toast", () => ({ showToast: vi.fn(), clearToasts: vi.fn() }));
 import { playerNotesFeature,
   REBUILD_COOLDOWN_MS,
   REBUILD_LIMIT,
+  isNightNow,
   throttleRebuild,
 } from "@content/features/player-notes";
 import type { Settings } from "@shared/types";
@@ -209,5 +226,178 @@ describe("сторож шторма пересборки кнопок (жало�
       expect(r.allowed).toBe(true);
       state = r.state;
     }
+  });
+});
+
+/**
+ * Прогрев пересечений (просьба владельца 13.08.2026: «чтоб для пользователя
+ * было моментально»).
+ *
+ * Сторожим здесь не «данные посчитались» — это дело crossover.test.ts, — а
+ * ЦЕНУ: когда прогрев начинается, сколько историй тянет за один проход и
+ * отпускает ли свою, когда стол уже посчитан. Ошибка в любом из трёх
+ * превращает тихий фон в поток запросов.
+ */
+describe("прогрев пересечений", () => {
+  /** Кого спрашивали в /profile/default/get-games (userId по порядку). */
+  let asked: string[] = [];
+
+  /** Стол: своя плитка + соперники, свой id известен из шапки сайта. */
+  function table(...opponents: string[]): void {
+    // Класс фазы живёт на body и переживает смену разметки — сбрасываем явно,
+    // иначе «ночь» предыдущего теста включила бы прогрев в следующем.
+    document.body.className = "";
+    document.body.innerHTML = `
+      <div class="p-header__userCont"><a href="/profile/7">fj</a></div>
+      <div class="players">
+        <div class="player my-player" id="me">
+          <div class="player__info info"><span class="info__name">fj</span></div>
+        </div>
+        ${opponents
+          .map(
+            (name, i) => `
+          <div class="player" id="p${i}">
+            <div class="player__info info"><span class="info__name">${name}</span></div>
+          </div>`,
+          )
+          .join("")}
+      </div>`;
+  }
+
+  function serveSite(): void {
+    asked = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/ratings/default/get-list")) {
+          return {
+            ok: true,
+            json: async () => [
+              { user_id: 7, username: "fj" },
+              { user_id: 11, username: "Alpha" },
+              { user_id: 12, username: "Beta" },
+              { user_id: 13, username: "Gamma" },
+            ],
+          };
+        }
+        if (url.includes("/profile/default/get-games")) {
+          asked.push(new URL(url).searchParams.get("userId") ?? "");
+          return { ok: true, json: async () => ({ rows: [], totalCount: 0 }) };
+        }
+        return { ok: false, status: 404 };
+      }) as unknown as typeof fetch,
+    );
+  }
+
+  /** Прогнать проход по плиткам и дать асинхронным хвостам доехать. */
+  async function pass(): Promise<void> {
+    const tile = document.querySelector(".player") as HTMLElement;
+    fire([rec({ target: document.body, added: [tile] })]);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1);
+  }
+
+  beforeEach(async () => {
+    playerNotesFeature.disable();
+    seam.subs = [];
+    seam.ownIdGate = null;
+    serveSite();
+    await playerNotesFeature.enable({
+      settings: { statistics_enabled: true, btn_crossover_enabled: true } as unknown as Settings,
+    });
+  });
+
+  test("днём прогрев молчит", async () => {
+    // Днём игрок говорит и смотрит на стол — фоновые истории ему ни к чему,
+    // да и ночь ещё придёт.
+    document.body.classList.remove("night");
+    table("Alpha", "Beta");
+    await pass();
+    expect(asked, "ни одной истории до первой ночи").toEqual([]);
+  });
+
+  test("ночью считает по ОДНОМУ игроку за проход", async () => {
+    // Залп из десяти историй разом — это и грубо к серверу, и медленнее для
+    // того единственного, на кого сейчас навели курсор.
+    table("Alpha", "Beta", "Gamma");
+    document.body.classList.add("night");
+
+    await pass();
+    // Своя история (id 7) + ровно один соперник.
+    expect(asked.filter((id) => id !== "7"), "за проход — один соперник").toHaveLength(1);
+
+    await pass();
+    expect(asked.filter((id) => id !== "7"), "следующий проход берёт следующего").toHaveLength(2);
+  });
+
+  test("себя не прогреваем", async () => {
+    // «Пересечения с собой» — это просто все свои игры; лишний запрос ни о чём.
+    table();
+    document.body.classList.add("night");
+    await pass();
+    expect(asked, "за столом только я — тянуть нечего").toEqual([]);
+  });
+
+  test("стол посчитан — своя история отпущена", async () => {
+    // Просьба владельца: держать в памяти сводку (полтора десятка чисел), а
+    // не тысячи строк истории. Наблюдаемо: подсевший позже игрок заставляет
+    // загрузить свою историю ЗАНОВО.
+    table("Alpha");
+    document.body.classList.add("night");
+    await pass();
+    expect(asked.filter((id) => id === "7"), "своя история загружена").toHaveLength(1);
+
+    // Стол прогрет целиком — проход обязан отпустить историю.
+    await pass();
+
+    const late = document.createElement("div");
+    late.className = "player";
+    late.innerHTML = `<div class="player__info info"><span class="info__name">Beta</span></div>`;
+    document.querySelector(".players")!.appendChild(late);
+    await pass();
+    expect(
+      asked.filter((id) => id === "7").length,
+      "историю отпустили — для нового игрока её пришлось взять снова",
+    ).toBe(2);
+  });
+
+  test("второе наведение ЖДЁТ первый запрос, а не заводит свой", async () => {
+    // Замечание владельца 13.08.2026. Реестр «в полёте» был, но между
+    // проверкой реестра и записью в него стоял await (свой id) — и два
+    // наведения подряд успевали проскочить оба, подняв по паре историй
+    // каждое. Держим ворота на резолве ника: пока он висит, оба наведения
+    // как раз и оказываются «внутри окна».
+    let open = () => {};
+    // В комнате шапки сайта нет, и свой id добывается запросом — вот оно,
+    // окно между «проверил реестр» и «записал в реестр».
+    seam.ownIdGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    table("Alpha");
+    await pass();
+
+    // Именно на плитке СОПЕРНИКА: на своей кнопка тоже есть, и наведение на
+    // неё ничего бы не проверило (первая версия теста так и промахнулась).
+    const button = document.querySelector("#p0 .pn-crossover-button") as HTMLElement;
+    expect(button, "кнопка пересечений обязана быть на плитке соперника").not.toBeNull();
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(400);
+    button.dispatchEvent(new MouseEvent("mouseleave"));
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(400);
+
+    open();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(asked.filter((id) => id === "11"), "история соперника запрошена один раз").toHaveLength(
+      1,
+    );
+  });
+
+  test("ночь определяется по классу фазы у body", () => {
+    document.body.classList.remove("night");
+    expect(isNightNow()).toBe(false);
+    document.body.classList.add("night");
+    expect(isNightNow()).toBe(true);
   });
 });

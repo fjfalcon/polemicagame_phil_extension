@@ -183,19 +183,24 @@ describe("свой id", () => {
 });
 
 describe("загрузка истории страницами", () => {
-  /** Сервер с заданным числом игр: страница отдаёт 200, даты убывают. */
+  /** Дата n-й по свежести игры: строго убывает, сравнивается как строка. */
+  const day = (n: number): string =>
+    `${new Date(Date.UTC(2026, 11, 31) - n * 86_400_000).toISOString().slice(0, 10)} 10:00:00`;
+
+  /** Сервер с заданным числом игр: страница отдаёт PAGE_SIZE, даты убывают. */
   function serve(total: number): ReturnType<typeof vi.fn> {
     return vi.fn(async (url: string) => {
       const page = Number(new URL(url).searchParams.get("page") ?? 1);
-      const from = (page - 1) * PAGE_SIZE;
-      const rows = Array.from({ length: Math.max(0, Math.min(PAGE_SIZE, total - from)) }, (_, i) => {
+      const size = Number(new URL(url).searchParams.get("limit") ?? PAGE_SIZE);
+      const from = (page - 1) * size;
+      const rows = Array.from({ length: Math.max(0, Math.min(size, total - from)) }, (_, i) => {
         const n = from + i;
         return {
           id: total - n,
           role: { type: "civilian" },
           result: { code: "success" },
           // Свежие первыми: чем дальше по списку, тем старше дата.
-          date_start: `2026-${String(12 - Math.floor(n / 100)).padStart(2, "0")}-01 10:00:00`,
+          date_start: day(n),
         };
       });
       return { ok: true, json: async () => ({ rows, totalCount: total }) };
@@ -205,21 +210,61 @@ describe("загрузка истории страницами", () => {
   test("забирает ВСЮ историю, а не первую страницу", async () => {
     // Потолок в 200 игр недосчитывал общие игры до полутора раз на живых
     // данных 09.08.2026 — ради этого страницы и появились.
-    vi.stubGlobal("fetch", serve(450));
+    vi.stubGlobal("fetch", serve(PAGE_SIZE + 450));
     const h = await fetchHistory(1);
-    expect(h?.rows).toHaveLength(450);
+    expect(h?.rows).toHaveLength(PAGE_SIZE + 450);
     expect(h?.truncated).toBe(false);
     vi.unstubAllGlobals();
   });
 
-  test("чужую историю не копает глубже своей самой старой игры", async () => {
-    // Раньше мая пересекаться нечему по определению: лишние страницы — это
-    // лишние запросы на одно наведение мыши.
-    const fetchMock = serve(2000);
+  test("обычная история — ОДИН запрос, а не восемь (жалоба 13.08.2026)", async () => {
+    // Сервер отдаёт столько строк, сколько попросишь, и тратит на это одно и
+    // то же время: 200 строк — 1.98 с, 6000 строк — 2.38 с (замер 13.08.2026).
+    // Значит цена сводки — это ЧИСЛО запросов, и просить по 200 было платой
+    // ни за что: восемь ожиданий вместо одного.
+    const fetchMock = serve(1500);
     vi.stubGlobal("fetch", fetchMock);
-    const h = await fetchHistory(1, "2026-11-15 00:00:00");
-    expect(fetchMock.mock.calls.length, "хватило пары страниц").toBeLessThan(4);
-    expect(h?.rows.length).toBeLessThan(2000);
+    const h = await fetchHistory(1);
+    expect(fetchMock.mock.calls.length, "полторы тысячи игр обязаны уместиться в один запрос").toBe(
+      1,
+    );
+    expect(new URL(fetchMock.mock.calls[0][0] as string).searchParams.get("limit")).toBe(
+      String(PAGE_SIZE),
+    );
+    expect(h?.rows).toHaveLength(1500);
+    vi.unstubAllGlobals();
+  });
+
+  test("остальные страницы едут ОДНОВРЕМЕННО, а не одна за другой", async () => {
+    // Число страниц известно из totalCount уже с первой — ждать каждую по
+    // очереди незачем. Именно эта очередь и делала первую сводку получасовой
+    // на глазок: две истории по восемь ожиданий.
+    let live = 0;
+    let peak = 0;
+    const inner = serve(PAGE_SIZE * 3);
+    const fetchMock = vi.fn(async (url: string) => {
+      live++;
+      peak = Math.max(peak, live);
+      await Promise.resolve();
+      live--;
+      return inner(url);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const h = await fetchHistory(1);
+    expect(h?.rows).toHaveLength(PAGE_SIZE * 3);
+    expect(peak, "вторая и третья страницы обязаны лететь вместе").toBeGreaterThan(1);
+    vi.unstubAllGlobals();
+  });
+
+  test("чужую историю не копает глубже своей самой старой игры", async () => {
+    // Раньше самой старой своей игры пересекаться нечему по определению:
+    // лишние страницы — это лишние запросы на одно наведение мыши.
+    const fetchMock = serve(PAGE_SIZE * 3);
+    vi.stubGlobal("fetch", fetchMock);
+    const h = await fetchHistory(1, day(PAGE_SIZE - 100));
+    expect(fetchMock.mock.calls.length, "первой страницы уже хватило").toBe(1);
+    expect(h?.rows).toHaveLength(PAGE_SIZE);
+    expect(h?.truncated, "это не обрыв: глубже просто нечего искать").toBe(false);
     vi.unstubAllGlobals();
   });
 
@@ -253,22 +298,31 @@ describe("загрузка истории страницами", () => {
   });
 
   test("обрыв посреди листания не выдаёт огрызок за полную историю", async () => {
-    let call = 0;
-    vi.stubGlobal("fetch", vi.fn(async () => {
-      call++;
-      if (call === 1) {
-        return {
-          ok: true,
-          json: async () => ({
-            rows: [{ id: 1, role: { type: "civilian" }, result: { code: "success" } }],
-            totalCount: 500,
-          }),
-        };
-      }
-      return { ok: false, status: 500 };
+    const full = serve(PAGE_SIZE * 2);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const page = Number(new URL(url).searchParams.get("page") ?? 1);
+      return page === 1 ? full(url) : { ok: false, status: 500 };
     }));
     const h = await fetchHistory(1);
-    expect(h?.rows).toHaveLength(1);
+    expect(h?.rows).toHaveLength(PAGE_SIZE);
+    expect(h?.truncated).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  test("выпавшая страница не сшивается через дыру", async () => {
+    // Страницы теперь едут разом, и уцелевшая четвёртая соблазнительно
+    // «дополняет» историю без третьей. Так делать нельзя: самая старая игра
+    // такой истории — ложная граница для ЧУЖОЙ (её копали бы вглубь зря), а
+    // число совместных игр молча недобирает середину.
+    const full = serve(PAGE_SIZE * 4);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const page = Number(new URL(url).searchParams.get("page") ?? 1);
+      return page === 3 ? { ok: false, status: 500 } : full(url);
+    }));
+    const h = await fetchHistory(1);
+    expect(h?.rows, "остановились на дыре, а не сшили четвёртую со второй").toHaveLength(
+      PAGE_SIZE * 2,
+    );
     expect(h?.truncated).toBe(true);
     vi.unstubAllGlobals();
   });

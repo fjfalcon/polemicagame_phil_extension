@@ -21,8 +21,11 @@
 import { browser } from "@core/env";
 import { log } from "@core/log";
 import {
-  crossoverWith,
+  completeHistory,
+  crossGames,
+  fetchFirstPage,
   fetchHistory,
+  oldestDate,
   type Bucket,
   type Crossover,
   type History,
@@ -122,11 +125,17 @@ const VERSION = NOTES_VERSION;
 /** TTL кэшей статистики: за игровой вечер MMR меняется каждой игрой. */
 const STATS_TTL_MS = 5 * 60 * 1000;
 /**
- * Задержка намерения для кнопки пересечений: сводка стоит двух историй по
- * 200 игр, и курсор, мазнувший по столу, не должен поднимать десяток пар
- * запросов. Соседние кнопки дешевле и грузятся сразу.
+ * Задержка намерения для кнопки пересечений: сводка стоит двух историй, и
+ * курсор, мазнувший по столу, не должен поднимать десяток пар запросов.
+ * Соседние кнопки дешевле и грузятся сразу.
  */
 const CROSSOVER_INTENT_MS = 350;
+/**
+ * TTL готовой сводки пересечений. Дольше обычной статистики намеренно: она
+ * меняется, только когда доигран ОБЩИЙ матч, а текущий доиграться посреди
+ * себя не может. MMR за вечер скачет, число совместных игр — нет.
+ */
+const CROSSOVER_TTL_MS = 30 * 60 * 1000;
 /** Пауза перед повторной попыткой после ошибки статистики (не долбим API). */
 const STATS_ERROR_BACKOFF_MS = 30 * 1000;
 /** TTL пустой истории игр: короче обычного, чтобы новые игры подтянулись. */
@@ -379,6 +388,15 @@ export function throttleRebuild(
   return { allowed: false, state, stormed: true };
 }
 
+/**
+ * Идёт ли ночь. Тот же признак, с которого начинает detectRolePhase в
+ * auto-start: сайт вешает класс фазы на body. Разбирать ради прогрева тексты
+ * стадий незачем — цена ошибки здесь всего лишь «прогреемся на минуту позже».
+ */
+export function isNightNow(): boolean {
+  return document.body?.classList.contains("night") === true;
+}
+
 class PlayerNotesManager {
   private settings: Settings;
   /**
@@ -425,9 +443,24 @@ class PlayerNotesManager {
   private statsErrorAt = new Map<string, number>();
   /** Запросы истории игр в полёте (дедупликация одновременных hover'ов). */
   private lastGamesInFlight = new Map<string, Promise<LastGameEntry[]>>();
-  /** Пересечения: своя история весит 200 строк, дважды её не тянем. */
-  private crossoverCache = new Map<string, { at: number; data: Crossover | null }>();
-  private crossoverInFlight = new Map<string, Promise<Crossover | null>>();
+  /**
+   * Готовые сводки пересечений. Хранится ТОЛЬКО итог (полтора десятка чисел),
+   * а истории, из которых он посчитан, отпускаются — просьба владельца
+   * 13.08.2026 «не занимать буфер».
+   *
+   * `ttl` у записи свой: удачу держим долго (см. CROSSOVER_TTL_MS), а неудачу
+   * — коротко, иначе сетевая икота замораживала бы «не удалось» на полчаса.
+   */
+  private crossoverCache = new Map<string, { at: number; ttl: number; data: Crossover | null }>();
+  private crossoverInFlight = new Map<string, Promise<Crossover | null | undefined>>();
+  /** Прогрев занят одним игроком — по одному за проход, без залпа. */
+  private warmBusy = false;
+  /**
+   * Прогрев выключен до конца сессии: свой профиль не определился. Без этого
+   * латча каждый проход (раз в 2с) заново дёргал бы рейтинг ради того же
+   * ответа.
+   */
+  private warmStopped = false;
   /**
    * Счётчик пересборок ряда кнопок на плитку — сторож против «шторма».
    *
@@ -440,9 +473,15 @@ class PlayerNotesManager {
    * ровно та жалоба, которую не удавалось разобрать (12.08.2026).
    */
   private rebuildCounts = new Map<string, { since: number; count: number; until: number }>();
-  /** Своя история игр — одна на сессию, общая для всех соперников за столом. */
+  /**
+   * Своя история игр — одна на всех соперников за столом. Держится ровно
+   * столько, сколько нужно: как только сводки по всем плиткам готовы,
+   * releaseMyHistory() отпускает её (у завсегдатая это тысячи строк).
+   */
   private myHistory: History | null = null;
   private myHistoryAt = 0;
+  /** Своя история в полёте: прогрев и наведение мыши не тянут её дважды. */
+  private myHistoryInFlight: Promise<History | null> | null = null;
   /** Тултипы, живущие порталом в body (для уборки осиротевших). */
   private portaledTooltips = new Set<HTMLElement>();
   /** Снятые в этой вкладке мьюты — не воскрешаем их при слиянии с диском. */
@@ -692,6 +731,9 @@ class PlayerNotesManager {
     this.crossoverInFlight.clear();
     this.myHistory = null;
     this.myHistoryAt = 0;
+    this.myHistoryInFlight = null;
+    this.warmBusy = false;
+    this.warmStopped = false;
     this.statsErrorAt.clear();
     this.portaledTooltips.clear();
     for (const t of this.toasts) t.remove();
@@ -3276,14 +3318,78 @@ class PlayerNotesManager {
    * Своя история игр. Тянется целиком (страницами) и переиспользуется всеми
    * кнопками за столом: она одна и та же, а весит несколько сотен строк.
    */
-  private async getMyHistory(myId: number | string): Promise<History | null> {
-    if (this.myHistory && Date.now() - this.myHistoryAt < STATS_TTL_MS) return this.myHistory;
-    const history = await fetchHistory(myId);
-    if (history) {
-      this.myHistory = history;
-      this.myHistoryAt = Date.now();
+  private getMyHistory(myId: number | string): Promise<History | null> {
+    if (this.myHistory && Date.now() - this.myHistoryAt < STATS_TTL_MS) {
+      return Promise.resolve(this.myHistory);
     }
-    return history;
+    // Дедупликация: прогрев и наведение мыши стартуют одновременно, а история
+    // у завсегдатая — мегабайты. Второй такой запрос не нужен никому.
+    if (this.myHistoryInFlight) return this.myHistoryInFlight;
+    const inFlight = fetchHistory(myId)
+      .then((history) => {
+        if (history) {
+          this.myHistory = history;
+          this.myHistoryAt = Date.now();
+        }
+        return history;
+      })
+      .finally(() => {
+        this.myHistoryInFlight = null;
+      });
+    this.myHistoryInFlight = inFlight;
+    return inFlight;
+  }
+
+  /**
+   * Отпустить свою историю: сводки посчитаны, строки больше не нужны.
+   * Пересечения переживают её в кэше — там уже готовые числа.
+   */
+  private releaseMyHistory(): void {
+    if (!this.myHistory || this.myHistoryInFlight) return;
+    this.myHistory = null;
+    this.myHistoryAt = 0;
+  }
+
+  /**
+   * Прогрев пересечений — по ОДНОМУ игроку за проход.
+   *
+   * Зачем: первая сводка стоит двух историй, и ждать их, уже наведя курсор, —
+   * это те самые «очень долго в первый раз». Ночью игроку не до кнопок, зато
+   * у расширения есть время: к утру сводки готовы и открываются мгновенно
+   * (идея владельца 13.08.2026).
+   *
+   * Почему по одному и без своего таймера: страховочный проход уже тикает раз
+   * в две секунды, и этого ритма хватает, чтобы прогреть стол за ночь. Залп из
+   * десяти историй разом был бы и грубее к серверу, и медленнее для того
+   * единственного игрока, на которого сейчас смотрят.
+   */
+  private pumpCrossoverWarm(names: string[]): void {
+    if (this.settings.btn_crossover_enabled === false) return;
+    const mine = ownNameFromTable()?.toLowerCase();
+    const pending = names.filter((name) => {
+      const key = name.toLowerCase();
+      // Себя пропускаем: «пересечения с собой» — это просто все свои игры.
+      return key !== "" && key !== mine && !this.crossoverCache.has(key);
+    });
+    if (pending.length === 0) {
+      // Стол прогрет целиком — держать историю больше незачем.
+      if (names.length > 0) this.releaseMyHistory();
+      return;
+    }
+    // Прогрев начинается с первой НОЧИ: днём игрок говорит и смотрит на стол,
+    // и фоновые запросы ему ни к чему.
+    if (this.warmStopped || this.warmBusy || !isNightNow()) return;
+    this.warmBusy = true;
+    void this.getCrossover(pending[0])
+      .then((data) => {
+        if (data === undefined) {
+          this.warmStopped = true;
+          log.info("player-notes", "прогрев пересечений отключён: свой профиль не определился");
+        }
+      })
+      .finally(() => {
+        this.warmBusy = false;
+      });
   }
 
   /**
@@ -3294,37 +3400,62 @@ class PlayerNotesManager {
    * иначе. `null` — не удалось загрузить историю; пустая сводка читалась бы
    * как «вы никогда не играли вместе», а это другое утверждение.
    */
-  private async getCrossover(username: string): Promise<Crossover | null | undefined> {
+  private getCrossover(username: string): Promise<Crossover | null | undefined> {
     const key = username.toLowerCase();
     const hit = this.crossoverCache.get(key);
-    if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
+    if (hit && Date.now() - hit.at < hit.ttl) return Promise.resolve(hit.data);
     const inFlight = this.crossoverInFlight.get(key);
-    if (inFlight) return inFlight.catch(() => null);
+    if (inFlight) return inFlight;
+    // Промис кладётся в реестр СИНХРОННО, до первого await. Раньше метод
+    // успевал сходить за своим id между проверкой реестра и записью в него, и
+    // два наведения подряд заводили каждое свою пару историй (замечание
+    // владельца 13.08.2026). Повторное наведение обязано ЖДАТЬ первый запрос,
+    // а новый запускать только если тот провалился — за это отвечает кэш
+    // неудачи с коротким TTL.
+    const promise = this.loadCrossover(username, key).finally(() => {
+      this.crossoverInFlight.delete(key);
+    });
+    this.crossoverInFlight.set(key, promise);
+    return promise;
+  }
 
+  /** Собственно загрузка сводки. Не бросает: ждущие не должны получить reject. */
+  private async loadCrossover(
+    username: string,
+    key: string,
+  ): Promise<Crossover | null | undefined> {
     const myId = await this.myUserId();
+    // Свой профиль неизвестен — это не результат, кэшировать нечего.
     if (myId === null) return undefined;
 
-    const promise = (async (): Promise<Crossover | null> => {
-      const [theirId, mine] = await Promise.all([
-        this.resolveUserId(username, key),
-        this.getMyHistory(myId),
-      ]);
-      if (!mine) return null;
-      return crossoverWith(mine, theirId);
-    })();
-    this.crossoverInFlight.set(key, promise);
     try {
-      const data = await promise;
+      // Своя история и первая страница чужой едут ОДНОВРЕМЕННО. Раньше чужая
+      // ждала свою целиком, потому что глубина зависит от моей самой старой
+      // игры, — но от неё зависит только вопрос «нужны ли ещё страницы», а
+      // первая нужна всегда. Ожидание было ровно вдвое длиннее необходимого.
+      const theirs = (async () => {
+        const id = await this.resolveUserId(username, key);
+        return { id, first: await fetchFirstPage(id) };
+      })();
+      const [mine, start] = await Promise.all([this.getMyHistory(myId), theirs]);
+      let data: Crossover | null = null;
+      if (mine && start.first) {
+        const full = await completeHistory(start.id, start.first, oldestDate(mine.rows));
+        data = crossGames(mine.rows, full.rows, mine.truncated || full.truncated);
+      }
       // Кэшируем и неудачу: иначе каждый повторный наведённый курсор гнал бы
-      // два запроса по 200 строк (урок кэша последних игр, находка 7).
-      this.crossoverCache.set(key, { at: Date.now(), data });
+      // пару историй заново (урок кэша последних игр, находка 7). Но держим
+      // её коротко — сеть чинится, а сводка на полчаса «не удалось» нет.
+      this.crossoverCache.set(key, {
+        at: Date.now(),
+        ttl: data ? CROSSOVER_TTL_MS : STATS_TTL_MS,
+        data,
+      });
       return data;
     } catch (e) {
       log.warn("player-notes", "пересечения не сложились", e);
-      this.crossoverCache.set(key, { at: Date.now(), data: null });
+      this.crossoverCache.set(key, { at: Date.now(), ttl: STATS_TTL_MS, data: null });
       return null;
-    } finally {
-      this.crossoverInFlight.delete(key);
     }
   }
 
@@ -3635,11 +3766,12 @@ class PlayerNotesManager {
       // Сначала сторож (снимает чужое), потом обычный проход (вешает своё).
       this.sweepStaleDecorations();
       const tiles = Array.from(document.querySelectorAll<HTMLElement>(SITE.player));
+      const names = tiles.map((el) => el.querySelector(SITE.playerName)?.textContent?.trim() || "");
       // id игроков за столом — ЗАРАНЕЕ, не по наведению: см.
       // ensurePlayerIdsResolved. Один общий запрос на всех, дальше кэш.
-      this.ensurePlayerIdsResolved(
-        tiles.map((el) => el.querySelector(SITE.playerName)?.textContent?.trim() || ""),
-      );
+      this.ensurePlayerIdsResolved(names);
+      // Пересечения — тем же принципом «заранее», но ночью и по одному.
+      this.pumpCrossoverWarm(names);
       tiles.forEach((el) => this.processElement(el));
       // Сайтовый список «Участники» — не плитки, обходится отдельно.
       this.applyParticipantColors();
