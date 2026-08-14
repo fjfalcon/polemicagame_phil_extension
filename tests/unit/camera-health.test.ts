@@ -65,7 +65,7 @@ const ctx = (over: Record<string, unknown> = {}) =>
 /** Стол: чужая плитка с видео + (опц.) контролы. */
 function room(opts: { center?: string; my?: boolean } = {}): HTMLVideoElement {
   document.body.innerHTML = `
-    <div class="controls"><div class="left"></div><div class="center">${opts.center ?? ""}</div></div>
+    <div class="controls"><div class="left"></div><div class="center">${opts.center ?? ""}</div><div class="right"><div class="button preset-1 small">⚙</div></div></div>
     <div class="players">
       <div class="player${opts.my ? " my-player" : ""}" id="p0">
         <div class="player__video-wrapper" style="position:relative">
@@ -224,6 +224,43 @@ describe("кнопка «Перезагрузить камеры»", () => {
     expect(button(), "вне комнаты кнопке не место").toBeNull();
   });
 
+  test("живёт в ряду контролов сайта, а не поверх логотипа", () => {
+    // Жалоба владельца 14.08.2026: плавающая кнопка легла на логотип комнаты
+    // и выглядела чужой. В ряду .controls .right она в родных классах сайта.
+    room();
+    cameraHealthFeature.enable(ctx());
+    const b = button()!;
+    expect(b.parentElement?.classList.contains("right"), "дом — правый ряд контролов").toBe(true);
+    // НЕ классы сайта: они scoped и не работают на чужом узле — с ними
+    // <button> показывала браузерный светлый фон (второй заход жалобы).
+    // Свой инлайн-фон обязателен, иначе снова белое пятно.
+    expect(b.className, "чужие классы не надеваем").not.toContain("button");
+    expect(b.style.background, "тёмный фон задан явно").not.toBe("");
+    expect(b.style.borderRadius, "скругление как у соседей").not.toBe("");
+    expect(b.style.position, "никакого фиксированного позиционирования в ряду").not.toBe("fixed");
+    // Перерисовка Vue ВЫНЕСЛА кнопку из ряда (узел жив, но не там) — проход
+    // наблюдателя обязан вернуть её. Именно перенос, а не удаление: с
+    // удалением справился бы и путь «создать заново», и тест ничего не
+    // сторожил (мутант «existing не переставляется» его пережил).
+    document.body.appendChild(b);
+    domSubscriber?.();
+    expect(button()?.parentElement?.classList.contains("right")).toBe(true);
+    // И удаление тоже: кнопка пересоздаётся.
+    button()!.remove();
+    domSubscriber?.();
+    expect(button()?.parentElement?.classList.contains("right")).toBe(true);
+  });
+
+  test("ряда контролов нет — плавающий фолбэк НАД логотипом", () => {
+    // Фолбэк не имеет права повторить исходную жалобу: bottom:70px, не 18.
+    document.body.innerHTML = `<div class="players"></div>`;
+    cameraHealthFeature.enable(ctx());
+    const b = button()!;
+    expect(b.parentElement).toBe(document.body);
+    expect(b.style.position).toBe("fixed");
+    expect(b.style.bottom).toBe("70px");
+  });
+
   test("настройка выключена — кнопки нет", () => {
     room();
     cameraHealthFeature.enable(ctx({ camera_reload_enabled: false }));
@@ -351,4 +388,21 @@ describe("кнопка «Перезагрузить камеры»", () => {
     expect(button()).toBeNull();
     expect(overlay()).toBeNull();
   });
+});
+
+test("непрошеный «результат» от страницы игнорируется", () => {
+  // postMessage умеет слать и сама страница: без гейта поддельный ответ в
+  // простое запускал бы наши таймеры и тосты без единого клика.
+  document.body.innerHTML = `<div class="controls"><div class="center"></div><div class="right"></div></div>`;
+  cameraHealthFeature.enable(
+    { settings: { camera_reload_enabled: true, stream_lost_icon_enabled: true } } as never,
+  );
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      data: { source: MEDIA_RESULT_SOURCE, ok: true, action: "reconnect" },
+      source: window as never,
+    }),
+  );
+  vi.advanceTimersByTime(10_000);
+  expect(toasts, "ни одного тоста без нашего клика").toHaveLength(0);
 });

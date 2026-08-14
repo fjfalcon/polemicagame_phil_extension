@@ -120,4 +120,52 @@ describe("честные отказы вместо поломки страниц
     appWithProxy(proxy);
     expect(findRoomProxy(document)).toBe(proxy);
   });
+
+  test("compat-сборка Vue: _instance пуст, маршрут — через _vnode контейнера", () => {
+    // Реальный отказ 14.08.2026: у compat-сборки mount не пишет _instance
+    // (только _container и __vue_app__), и путь через него давал
+    // vue_root_not_found на живой игре при работающем сайте.
+    const { proxy } = workingProxy();
+    document.body.innerHTML = `<div id="app"></div>`;
+    const app = document.querySelector("#app") as Element & Record<string, unknown>;
+    app.__vue_app__ = { _instance: null };
+    app._vnode = { component: { proxy } };
+    expect(findRoomProxy(document)).toBe(proxy);
+    expect(reconnectMedia(document), "и весь путь кнопки с ним работает").toBeNull();
+  });
+
+  test("комната — не корень, а ВНУК корня: обход дерева находит её", () => {
+    // Реальный отказ 14.08.2026 (второй): корневой компонент — обёртка без
+    // mediaRoom, и «взять корень» давало media_room_not_found при живом сайте.
+    const { proxy } = workingProxy();
+    document.body.innerHTML = `<div id="app"></div>`;
+    const app = document.querySelector("#app") as Element & Record<string, unknown>;
+    const roomInst = { proxy, subTree: null };
+    const middle = { proxy: { какойто: 1 }, subTree: { component: roomInst } };
+    app.__vue_app__ = {
+      _instance: {
+        proxy: { тоже: "не комната" },
+        // Корень рисует фрагмент: компонент комнаты — среди детей vnode'ов.
+        subTree: { children: [{ children: [] }, { component: middle }] },
+      },
+    };
+    expect(findRoomProxy(document)).toBe(proxy);
+    expect(reconnectMedia(document)).toBeNull();
+  });
+
+  test("комнаты в дереве нет — честный vue_root_not_found, а не вечный обход", () => {
+    document.body.innerHTML = `<div id="app"></div>`;
+    const app = document.querySelector("#app") as Element & Record<string, unknown>;
+    app.__vue_app__ = { _instance: { proxy: {}, subTree: { children: [] } } };
+    expect(reconnectMedia(document)).toBe("vue_root_not_found");
+  });
+
+  test("маршрут через _container._vnode тоже живой", () => {
+    const { proxy } = workingProxy();
+    document.body.innerHTML = `<div id="app"></div>`;
+    const app = document.querySelector("#app") as Element & Record<string, unknown>;
+    const container = { _vnode: { component: { proxy } } };
+    app.__vue_app__ = { _instance: null, _container: container };
+    expect(findRoomProxy(document)).toBe(proxy);
+  });
 });

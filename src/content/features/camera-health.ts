@@ -265,11 +265,13 @@ class CameraHealth {
       return;
     }
     const button = existing ?? this.createButton();
+    this.placeButton(button);
     // Блок на время своей речи — обновляется каждым проходом наблюдателя.
     const speaking = ownSpeechInProgress();
     const disabled = speaking || this.reconnecting;
     if (button.disabled !== disabled) {
       button.disabled = disabled;
+      button.classList.toggle("disabled", disabled);
       button.style.opacity = disabled ? "0.5" : "1";
       button.title = speaking
         ? "Идёт твоя речь — переподключение спрячет твою камеру у всех"
@@ -282,14 +284,64 @@ class CameraHealth {
   private createButton(): HTMLButtonElement {
     const button = document.createElement("button");
     button.id = BUTTON_ID;
-    button.textContent = "⟳ Камеры";
-    button.style.cssText =
-      "position:fixed;bottom:18px;left:12px;z-index:2147483000;padding:6px 10px;" +
-      "border-radius:8px;border:1px solid rgba(255,255,255,.25);cursor:pointer;" +
-      "background:rgba(11,27,57,.85);color:#e6e9f0;font:600 12px system-ui,sans-serif";
+    // Иконка «камера + стрелка обновления», без текста: кнопка живёт в ряду
+    // РОДНЫХ иконок сайта и обязана выглядеть их роднёй, а не чужой плашкой
+    // (жалоба владельца 14.08.2026: первая версия висела поверх логотипа).
+    button.innerHTML =
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>' +
+      '<path d="M9.5 13a2.5 2.5 0 0 1 4.62-1.33"/>' +
+      '<path d="M14.5 13a2.5 2.5 0 0 1-4.62 1.33"/>' +
+      '<path d="M14.2 10.2v1.6h-1.6"/><path d="M9.8 15.8v-1.6h1.6"/></svg>';
     button.addEventListener("click", () => this.reconnect());
-    document.body.appendChild(button);
     return button;
+  }
+
+  /**
+   * Куда встаёт кнопка. Дом — правый ряд контролов сайта (там живут его
+   * камера/микрофон/настройки). Ряд перерисовывается Vue — проверка на
+   * каждом проходе наблюдателя возвращает кнопку на место. Фолбэк без ряда —
+   * плавающая НАД логотипом комнаты (bottom:70px), а не поверх него.
+   *
+   * Вид копируется с СОСЕДНЕЙ живой кнопки ряда (getComputedStyle), а не
+   * классами сайта: его стили scoped (data-v-*) и на чужой узел не действуют
+   * — с классами наша <button> показывала БРАУЗЕРНЫЙ светлый фон и торчала
+   * белым пятном (жалоба владельца 14.08.2026, второй заход). Фолбэк-цвета —
+   * из room/bundle/style.css (#464952, скругление 1rem).
+   */
+  private placeButton(button: HTMLButtonElement): void {
+    const host = document.querySelector<HTMLElement>(".controls .right");
+    if (host) {
+      if (button.parentElement !== host) {
+        button.className = "";
+        const sibling = Array.from(host.children).find(
+          (el): el is HTMLElement =>
+            el !== button && el instanceof HTMLElement && el.classList.contains("button"),
+        );
+        const cs = sibling ? getComputedStyle(sibling) : null;
+        const bg =
+          cs?.backgroundColor && cs.backgroundColor !== "rgba(0, 0, 0, 0)"
+            ? cs.backgroundColor
+            : "#464952";
+        const radius = cs?.borderRadius && cs.borderRadius !== "0px" ? cs.borderRadius : "1rem";
+        const height = sibling && sibling.offsetHeight > 0 ? `height:${sibling.offsetHeight}px;` : "";
+        button.style.cssText =
+          "display:flex;align-items:center;justify-content:center;border:none;cursor:pointer;" +
+          `color:#fff;min-width:3.833rem;padding:0 .9375rem;${height}` +
+          `background:${bg};border-radius:${radius}`;
+        host.prepend(button);
+      }
+      return;
+    }
+    if (button.parentElement !== document.body) {
+      button.className = "";
+      button.style.cssText =
+        "position:fixed;bottom:70px;left:12px;z-index:2147483000;display:flex;align-items:center;" +
+        "justify-content:center;width:36px;height:36px;border-radius:8px;cursor:pointer;" +
+        "border:1px solid rgba(255,255,255,.25);background:rgba(11,27,57,.85);color:#e6e9f0";
+      document.body.appendChild(button);
+    }
   }
 
   /** Ленивый инжект зонда: тег появляется только после первого клика. */
@@ -368,6 +420,10 @@ class CameraHealth {
     if (e.source !== window) return;
     const d = e.data as { source?: string; ok?: unknown; reason?: unknown };
     if (d?.source !== MEDIA_RESULT_SOURCE) return;
+    // Ответ принимается ТОЛЬКО пока мы его ждём. postMessage доступен и самой
+    // странице: без гейта поддельный «результат» в простое запускал бы наши
+    // таймеры и тосты без единого клика (находка adversarial 14.08.2026).
+    if (!this.reconnecting) return;
     if (this.verdictTimer !== null) {
       clearTimeout(this.verdictTimer);
       this.verdictTimer = null;

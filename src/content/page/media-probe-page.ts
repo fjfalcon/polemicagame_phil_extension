@@ -42,12 +42,80 @@ interface RoomProxy {
   $store?: { state?: { gameId?: unknown } };
 }
 
-/** Корневой компонент комнаты. Экспорт — тестовый шов. */
+/**
+ * Корневой компонент комнаты. Экспорт — тестовый шов.
+ *
+ * МАРШРУТОВ НЕСКОЛЬКО, и это не перестраховка: сайт собран на compat-сборке
+ * Vue, чей mount НЕ заполняет `_instance` (сверено по живому бандлу: mount
+ * пишет только `_container` и `__vue_app__`) — на реальной игре 14.08.2026
+ * путь через `_instance` дал vue_root_not_found. Рабочий маршрут — через
+ * `_vnode.component` контейнера (его пишет сам рендер Vue). `__vue__` —
+ * страховка на случай, если компат-слой вернёт Vue2-поведение.
+ */
+interface VueContainer extends Element {
+  __vue_app__?: {
+    _instance?: { proxy?: RoomProxy } | null;
+    _container?: { _vnode?: { component?: { proxy?: RoomProxy } | null } | null } | null;
+  };
+  _vnode?: { component?: { proxy?: RoomProxy } | null } | null;
+  __vue__?: RoomProxy;
+}
+
+interface VueInstance {
+  proxy?: RoomProxy | null;
+  subTree?: VueVNode | null;
+}
+interface VueVNode {
+  component?: VueInstance | null;
+  children?: unknown;
+}
+
+/**
+ * Похож ли компонент на комнату: у неё в data есть mediaRoom (пусть даже
+ * null до подключения), а в methods — createMediaRoom. Проверка по `in`, а
+ * не по значению: до старта медиа mediaRoom === null, и это НАША цель тоже.
+ */
+function looksLikeRoom(p: RoomProxy | null | undefined): p is RoomProxy {
+  return !!p && typeof p === "object" && "mediaRoom" in p && "createMediaRoom" in p;
+}
+
+/** Потолок обхода: страховка от патологического дерева, не тонкая настройка. */
+const WALK_LIMIT = 3000;
+
 export function findRoomProxy(doc: Document): RoomProxy | null {
-  const app = doc.querySelector("#app") as
-    | (Element & { __vue_app__?: { _instance?: { proxy?: RoomProxy } } })
-    | null;
-  return app?.__vue_app__?._instance?.proxy ?? null;
+  const app = doc.querySelector("#app") as VueContainer | null;
+  if (!app) return null;
+  const root: VueInstance | null =
+    app.__vue_app__?._instance ??
+    app._vnode?.component ??
+    app.__vue_app__?._container?._vnode?.component ??
+    null;
+  if (!root) return looksLikeRoom(app.__vue__) ? app.__vue__ : null;
+
+  // ОБХОД ДЕРЕВА обязателен: на живой игре 14.08.2026 корневой компонент
+  // оказался обёрткой без mediaRoom (media_room_not_found) — комната лежит
+  // где-то под ним. Свойства subTree/component/proxy — рантайм-объекты Vue,
+  // минификатор их не переименовывает (сверено по бандлу).
+  const queue: VueInstance[] = [root];
+  let visited = 0;
+  const pushVNode = (vnode: VueVNode | null | undefined): void => {
+    if (!vnode || typeof vnode !== "object") return;
+    if (vnode.component) {
+      queue.push(vnode.component);
+      return;
+    }
+    if (Array.isArray(vnode.children)) {
+      for (const child of vnode.children) pushVNode(child as VueVNode);
+    }
+  };
+  while (queue.length > 0 && visited < WALK_LIMIT) {
+    const inst = queue.shift();
+    visited++;
+    if (!inst) continue;
+    if (looksLikeRoom(inst.proxy)) return inst.proxy;
+    pushVNode(inst.subTree);
+  }
+  return null;
 }
 
 /**
