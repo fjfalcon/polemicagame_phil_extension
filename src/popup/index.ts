@@ -910,6 +910,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const el = $<HTMLInputElement>(key);
       if (!el) continue;
       if (el.type === "checkbox") el.checked = value === true;
+      // <input type="color"> молча превращает НЕцвет в чёрный, а следующий же
+      // клик по любому тумблеру записал бы этот чёрный в настройки. При
+      // загрузке мы такое значение нормализуем — здесь обязаны так же.
+      else if (el.type === "color") el.value = readButtonColor(value);
       else if (typeof value === "string") el.value = value;
     }
     // Зависимые блоки видимости.
