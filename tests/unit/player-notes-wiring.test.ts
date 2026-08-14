@@ -40,16 +40,15 @@ vi.mock("@core/dom", () => ({
   safeClick: vi.fn(),
   isVisible: vi.fn(() => true),
 }));
-vi.mock("@core/env", () => ({
-  browser: {
-    storage: {
-      local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
-      sync: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
-      onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
-    },
-    runtime: { id: "x", getManifest: () => ({ version: "9.5.0" }) },
+const browserMock = vi.hoisted(() => ({
+  storage: {
+    local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
+    sync: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
+    onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
   },
+  runtime: { id: "x", getManifest: () => ({ version: "9.5.0" }) },
 }));
+vi.mock("@core/env", () => ({ browser: browserMock }));
 vi.mock("@core/log", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -608,5 +607,74 @@ describe("цвет кнопок игрока", () => {
       settings: { statistics_enabled: true, btn_stats_enabled: true, stats_button_theme: "classic" },
     } as never);
     expect(button.style.color).toBe("rgb(66, 103, 178)");
+  });
+});
+
+/**
+ * Точка «есть заметка» (просьба владельца 15.08.2026: дать выключить тем,
+ * кому она не нужна).
+ */
+describe("тумблер точки «есть заметка»", () => {
+  async function boardWithNote(enabled: boolean): Promise<void> {
+    playerNotesFeature.disable();
+    seam.subs = [];
+    (browserMock.storage.local.get as ReturnType<typeof vi.fn>).mockImplementation(
+      async (q: unknown) => {
+        // Карта заметок: у Alpha заметка есть. pn_migrated обязателен, иначе
+        // enable уйдёт в путь миграции из sync и карта потеряется в моках.
+        if (q && typeof q === "object" && "playerNotes" in (q as object)) {
+          return {
+            playerNotes: { Alpha: { text: "чекает в нуля" } },
+            tagCustomColors: [],
+            pn_notes_migrated_v1: true,
+          };
+        }
+        return {};
+      },
+    );
+    await playerNotesFeature.enable({
+      settings: {
+        statistics_enabled: true,
+        btn_note_enabled: true,
+        note_indicator_enabled: enabled,
+      } as never,
+    });
+    document.body.className = "";
+    document.body.innerHTML = `
+      <div class="players"><div class="player" id="p0">
+        <div class="player__info info"><span class="info__name">Alpha</span></div>
+      </div></div>`;
+    fire([rec({ target: document.body, added: [document.querySelector(".player") as Node] })]);
+    await vi.advanceTimersByTimeAsync(1);
+  }
+
+  test("включено — точка стоит у игрока с заметкой", async () => {
+    await boardWithNote(true);
+    expect(document.querySelector(".pn-note-dot"), "заметка есть — точка есть").not.toBeNull();
+  });
+
+  test("выключено — точки нет, а при выключении на лету снимается", async () => {
+    await boardWithNote(false);
+    expect(document.querySelector(".pn-note-dot")).toBeNull();
+
+    // Включили в попапе → точка появляется без пересборки.
+    playerNotesFeature.update?.({
+      settings: {
+        statistics_enabled: true,
+        btn_note_enabled: true,
+        note_indicator_enabled: true,
+      } as never,
+    } as never);
+    expect(document.querySelector(".pn-note-dot"), "включение вернуло точку").not.toBeNull();
+
+    // И обратно: выключение обязано снять УЖЕ стоящую.
+    playerNotesFeature.update?.({
+      settings: {
+        statistics_enabled: true,
+        btn_note_enabled: true,
+        note_indicator_enabled: false,
+      } as never,
+    } as never);
+    expect(document.querySelector(".pn-note-dot"), "выключение сняло точку").toBeNull();
   });
 });

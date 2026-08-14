@@ -51,6 +51,8 @@ export interface Settings {
   last_games_count: string;
   /** Отмечать в этом окне игры, где игрок был первым убитым («ПУ»). */
   last_games_first_killed: boolean;
+  /** Жёлтая точка на кнопке заметки: «у этого игрока есть заметка». */
+  note_indicator_enabled: boolean;
   /** Квадратик-метка роли у игрока (мой read, сбрасывается за игру). */
   role_marker_enabled: boolean;
   /** Управлять раскладкой кнопок действий в игре. */

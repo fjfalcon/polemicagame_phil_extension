@@ -761,6 +761,7 @@ class PlayerNotesManager {
 
   update(ctx: FeatureContext): void {
     const cameraWasEnabled = this.settings.camera_rotate_enabled;
+    const indicatorWas = this.settings.note_indicator_enabled;
     const gamesViewChanged =
       this.settings.last_games_count !== ctx.settings.last_games_count ||
       this.settings.last_games_first_killed !== ctx.settings.last_games_first_killed;
@@ -776,6 +777,8 @@ class PlayerNotesManager {
       this.removeStatisticsElements();
       return;
     }
+    // Тумблер точки применяется сразу: и снятие, и возврат.
+    if (indicatorWas !== this.settings.note_indicator_enabled) this.refreshNoteIndicators();
     this.applyStatsButtonTheme();
     this.processExistingElements();
     this.updateAllTooltips();
@@ -2022,7 +2025,12 @@ class PlayerNotesManager {
 
   /** Жёлтая точка на кнопке заметки, если у игрока есть заметка. */
   private updateNoteIndicator(button: HTMLElement, username: string): void {
-    const has = !!this.getNoteText(username);
+    // Гейт настройкой ЗДЕСЬ, а не у вызывающих: путей к точке несколько
+    // (проход DOM, live-обновление заметок, профиль), и гейт в одном месте
+    // гарантирует, что выключение снимает УЖЕ стоящие точки первым же
+    // обновлением (has=false ведёт в ветку удаления).
+    const has =
+      this.settings.note_indicator_enabled !== false && !!this.getNoteText(username);
     button.style.position = "relative";
     let dot = button.querySelector<HTMLElement>(".pn-note-dot");
     if (has && !dot) {

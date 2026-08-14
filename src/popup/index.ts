@@ -1047,6 +1047,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Нормализация: мусор в storage иначе оставил бы селект пустым.
     if (lgc) lgc.value = readLastGamesCount(items.last_games_count);
     set("last_games_first_killed", items.last_games_first_killed);
+    set("note_indicator_enabled", items.note_indicator_enabled);
     set("role_marker_enabled", items.role_marker_enabled);
     set("compact_nicknames_enabled", items.compact_nicknames_enabled);
     const npp = $<HTMLSelectElement>("nick_plate_position");
@@ -1160,6 +1161,7 @@ document.addEventListener("DOMContentLoaded", () => {
       btn_hide_video_enabled: cb("btn_hide_video_enabled", true),
       last_games_count: readLastGamesCount($<HTMLSelectElement>("last_games_count")?.value),
       last_games_first_killed: cb("last_games_first_killed", true),
+      note_indicator_enabled: cb("note_indicator_enabled", true),
       role_marker_enabled: cb("role_marker_enabled", false),
       compact_nicknames_enabled: cb("compact_nicknames_enabled", false),
       nick_plate_position: $<HTMLSelectElement>("nick_plate_position")?.value || "default",
@@ -1287,6 +1289,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "btn_hide_video_enabled",
     "last_games_count",
     "last_games_first_killed",
+    "note_indicator_enabled",
     "role_marker_enabled",
     "compact_nicknames_enabled",
     "nick_plate_position",
