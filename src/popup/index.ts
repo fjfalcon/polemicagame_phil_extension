@@ -1340,21 +1340,22 @@ document.addEventListener("DOMContentLoaded", () => {
       if (colorSaveTimer !== null) window.clearTimeout(colorSaveTimer);
       colorSaveTimer = window.setTimeout(() => {
         colorSaveTimer = null;
+        log.info("popup", "цвет сохраняется", colorInput?.value);
         saveSettings();
       }, 250);
     };
     colorInput?.addEventListener("input", () => {
-      log.debug("popup", "цвет из палитры", colorInput.value);
+      log.info("popup", "цвет из палитры", colorInput.value);
       if (hexInput) hexInput.value = colorInput.value;
       scheduleSave();
     });
     colorInput?.addEventListener("change", () => {
-      log.debug("popup", "палитра закрыта", colorInput.value);
+      log.info("popup", "палитра закрыта", colorInput.value);
     });
     hexInput?.addEventListener("input", () => {
       const v = hexInput.value.trim().toLowerCase();
       if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(v)) return; // ждём, пока допишет
-      log.debug("popup", "цвет из поля", v);
+      log.info("popup", "цвет из поля", v);
       if (colorInput) colorInput.value = v.length === 4
         ? `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`
         : v;
