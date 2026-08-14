@@ -862,6 +862,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let roleHideCode = "KeyD";
   let rolePeekCode = "KeyV";
   let outcryCode = "KeyC";
+  // Свой цвет кнопок: живёт в замыкании, как хоткеи — <input type=color>
+  // больше нет, а source of truth для сохранения нужен один.
+  let currentButtonColor = "#ffd54f";
+  let reflectButtonColor: (hex: string) => void = () => {};
   const roleKeyRenders: Array<() => void> = [];
   const setupRoleKey = (id: string, get: () => string, set: (c: string) => void) => {
     const btn = $<HTMLButtonElement>(id);
@@ -910,10 +914,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const el = $<HTMLInputElement>(key);
       if (!el) continue;
       if (el.type === "checkbox") el.checked = value === true;
-      // <input type="color"> молча превращает НЕцвет в чёрный, а следующий же
-      // клик по любому тумблеру записал бы этот чёрный в настройки. При
-      // загрузке мы такое значение нормализуем — здесь обязаны так же.
-      else if (el.type === "color") el.value = readButtonColor(value);
       else if (typeof value === "string") el.value = value;
     }
     // Зависимые блоки видимости.
@@ -922,8 +922,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // появиться/исчезнуть вместе с ней.
     if ("stats_button_theme" in patch) syncCustomColorRow();
     if (typeof patch.stats_button_color === "string") {
-      const hex = $<HTMLInputElement>("stats_button_color_hex");
-      if (hex) hex.value = readButtonColor(patch.stats_button_color);
+      reflectButtonColor(readButtonColor(patch.stats_button_color));
     }
     if ("obs_enabled" in patch) {
       const s = $("obs_settings");
@@ -1014,11 +1013,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const sbt = $<HTMLSelectElement>("stats_button_theme");
     if (sbt) sbt.value = items.stats_button_theme || "default";
-    const sbc = $<HTMLInputElement>("stats_button_color");
-    // Нормализация: <input type="color"> молча показывает чёрный на мусоре.
-    if (sbc) sbc.value = readButtonColor(items.stats_button_color);
-    const sbcHex = $<HTMLInputElement>("stats_button_color_hex");
-    if (sbcHex) sbcHex.value = readButtonColor(items.stats_button_color);
+    reflectButtonColor(readButtonColor(items.stats_button_color));
     syncCustomColorRow();
     const msv = $<HTMLSelectElement>("match_stats_view");
     if (msv) msv.value = items.match_stats_view || "hints";
@@ -1200,7 +1195,7 @@ document.addEventListener("DOMContentLoaded", () => {
       match_page_stats_enabled: cb("match_page_stats_enabled", true),
       match_stats_view: $<HTMLSelectElement>("match_stats_view")?.value || "hints",
       stats_button_theme: ($<HTMLSelectElement>("stats_button_theme")?.value || "default"),
-      stats_button_color: readButtonColor($<HTMLInputElement>("stats_button_color")?.value),
+      stats_button_color: readButtonColor(currentButtonColor),
       auto_hide_roles_enabled: autoHideRolesEnabled,
       role_phase_auto_switch_enabled:
         autoHideRolesEnabled && cb("role_phase_auto_switch_enabled", false),
@@ -1274,7 +1269,6 @@ document.addEventListener("DOMContentLoaded", () => {
     "statistics_enabled",
     "match_page_stats_enabled",
     "stats_button_theme",
-    "stats_button_color",
     "match_stats_view",
     "auto_hide_roles_enabled",
     "role_phase_auto_switch_enabled",
@@ -1326,40 +1320,66 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   $("stats_button_theme")?.addEventListener("change", syncCustomColorRow);
 
-  // Свой цвет. Два пути, потому что родной color-input на macOS в попапе
-  // Firefox может вовсе не получать значение из системной палитры (жалобы
-  // владельца 14.08.2026, дважды): 1) живой выбор пипеткой с дросселем;
-  // 2) ТЕКСТОВОЕ поле #rrggbb — работает везде и не зависит от палитры.
-  // Каждый путь пишет в журнал: если палитра снова промолчит, это станет
-  // видно по отсутствию строки, а не по новой загадке.
+  // Свой цвет: СОБСТВЕННАЯ палитра внутри попапа + поле #rrggbb. Никакого
+  // <input type=color>: системная пипетка на macOS открывается отдельным
+  // окном, Firefox на потере фокуса ЗАКРЫВАЕТ попап — и выбранный цвет
+  // некуда доставлять (догадка владельца 14.08.2026, подтверждена: три
+  // «выбрал — не изменилось» подряд и пустой журнал попапа). Всё ниже живёт
+  // в DOM попапа и от системных окон не зависит.
   {
-    const colorInput = $<HTMLInputElement>("stats_button_color");
+    const preview = $("stats_button_color");
     const hexInput = $<HTMLInputElement>("stats_button_color_hex");
+    const grid = $("stats_button_color_grid");
     let colorSaveTimer: number | null = null;
-    const scheduleSave = (): void => {
+    const applyColor = (hex: string, from: string): void => {
+      currentButtonColor = hex;
+      if (preview) preview.style.background = hex;
+      if (hexInput && hexInput.value.trim().toLowerCase() !== hex) hexInput.value = hex;
+      log.info("popup", `цвет (${from})`, hex);
+      // Немедленный сброс журнала: попап живёт меньше трёх секунд планового
+      // сброса, и без этого его строки умирали вместе с ним (все прошлые
+      // «пустые» логи — ровно поэтому).
+      log.flushNow();
       if (colorSaveTimer !== null) window.clearTimeout(colorSaveTimer);
       colorSaveTimer = window.setTimeout(() => {
         colorSaveTimer = null;
-        log.info("popup", "цвет сохраняется", colorInput?.value);
         saveSettings();
+        log.flushNow();
       }, 250);
     };
-    colorInput?.addEventListener("input", () => {
-      log.info("popup", "цвет из палитры", colorInput.value);
-      if (hexInput) hexInput.value = colorInput.value;
-      scheduleSave();
-    });
-    colorInput?.addEventListener("change", () => {
-      log.info("popup", "палитра закрыта", colorInput.value);
-    });
+    reflectButtonColor = (hex: string): void => {
+      currentButtonColor = hex;
+      if (preview) preview.style.background = hex;
+      if (hexInput) hexInput.value = hex;
+    };
+    // Сетка: 22 ходовых цвета + белый и чёрный. Клик — выбрал.
+    if (grid) {
+      const swatches = [
+        "#ffffff", "#e6e9f0", "#8b93a7", "#000000",
+        "#ef4444", "#f97316", "#f59e0b", "#ffd54f",
+        "#eab308", "#84cc16", "#22c55e", "#10b981",
+        "#14b8a6", "#38bdf8", "#3b82f6", "#4267b2",
+        "#6366f1", "#8b5cf6", "#a855f7", "#ec4899",
+        "#f43f5e", "#94623c", "#d4a373", "#71717a",
+      ];
+      for (const hex of swatches) {
+        const cell = document.createElement("button");
+        cell.type = "button";
+        cell.title = hex;
+        cell.style.cssText =
+          `background:${hex};height:22px;border-radius:6px;cursor:pointer;` +
+          "border:1px solid rgba(255,255,255,.18);padding:0";
+        cell.addEventListener("click", () => applyColor(hex, "клетка"));
+        grid.appendChild(cell);
+      }
+    }
     hexInput?.addEventListener("input", () => {
       const v = hexInput.value.trim().toLowerCase();
       if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(v)) return; // ждём, пока допишет
-      log.info("popup", "цвет из поля", v);
-      if (colorInput) colorInput.value = v.length === 4
-        ? `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`
-        : v;
-      scheduleSave();
+      applyColor(
+        v.length === 4 ? `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}` : v,
+        "поле",
+      );
     });
   }
 
