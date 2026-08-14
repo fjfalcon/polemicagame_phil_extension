@@ -75,6 +75,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // Включено: подсказка ничего не делает за игрока и появляется только там,
   // где клавиша реально сработает.
   hotkey_hints_enabled: true,
+  // Обе включены: кнопка сама по себе ничего не делает (действие — только по
+  // явному клику), а метка обрыва лишь показывает состояние.
+  camera_reload_enabled: true,
+  stream_lost_icon_enabled: true,
   update_check_enabled: true,
   debug_logging_enabled: true,
   connection_diag_enabled: false,

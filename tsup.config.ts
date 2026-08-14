@@ -20,6 +20,8 @@ export default defineConfig({
     // (content-скрипт на document_start — сокет комнаты создаётся раньше,
     // чем грузится основной content.js).
     "room-probe-page": "src/content/page/room-probe-page.ts",
+    // Зонд медиа-комнаты: «F5 только для видео», ставится лениво по клику.
+    "media-probe-page": "src/content/page/media-probe-page.ts",
     "room-probe-inject": "src/content/page/room-probe-inject.ts",
   },
   outDir: ".dist-js",

@@ -428,6 +428,12 @@ describe("§4.7 lifecycle heuristic", () => {
   type Allowance = { listeners?: number; timers?: number; reason: string };
   const allowances: Record<string, Allowance> = {
     // Populated only for reviewed DOM-owned one-shot handlers/timers. Exact deltas make new tails fail.
+    "src/content/features/camera-health.ts": {
+      listeners: 1,
+      timers: 0,
+      reason:
+        "click-обработчик живёт на кнопке #pn-camera-reload и удаляется вместе с её узлом в disable()",
+    },
     "src/content/features/connection-diag.ts": {
       listeners: 1,
       timers: 1,

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Polemica Notes",
-  "version": "9.22.0",
+  "version": "9.23.0",
   "description": "Заметки об игроках, статистика, цветные ники и удобные мелочи для Polemica Game: пауза, мьют, разбор матчей.",
   "permissions": [
     "storage",
@@ -23,7 +23,8 @@
     {
       "resources": [
         "conn-diag-page.js",
-        "room-probe-page.js"
+        "room-probe-page.js",
+        "media-probe-page.js"
       ],
       "matches": [
         "https://*.polemicagame.com/*"

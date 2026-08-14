@@ -19,6 +19,7 @@ import { getOwnUserId } from "@core/own-user";
 
 import { searchFeature } from "./features/search";
 import { autoStartFeature } from "./features/auto-start";
+import { cameraHealthFeature } from "./features/camera-health";
 import { hotkeyHintsFeature } from "./features/hotkey-hints";
 import { outcryHotkeyFeature } from "./features/outcry-hotkey";
 import { playerNotesFeature, syncPlayerNotesRoute } from "./features/player-notes";
@@ -50,6 +51,7 @@ const manager = new FeatureManager().register(
   pauseHotkeyFeature,
   outcryHotkeyFeature,
   hotkeyHintsFeature,
+  cameraHealthFeature,
   f5RefreshFeature,
   roleMarkerFeature,
   updateNotifyFeature,

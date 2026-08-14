@@ -75,6 +75,10 @@ export interface Settings {
   outcry_hotkey_code: string;
   /** Писать клавишу прямо на кнопке: «Выкрикнуть (C)», «Пауза (F8)». */
   hotkey_hints_enabled: boolean;
+  /** Кнопка «Перезагрузить камеры» в игре (видео пересоздаётся без F5). */
+  camera_reload_enabled: boolean;
+  /** Метка обрыва на камере игрока, чей видеопоток перестал приходить. */
+  stream_lost_icon_enabled: boolean;
   /** Проверять наличие новой версии на GitHub и показывать баннер. */
   update_check_enabled: boolean;
   /** Вести логи в storage.local для диагностики (выгружаются из popup). */

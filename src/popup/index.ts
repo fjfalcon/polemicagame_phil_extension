@@ -1026,6 +1026,8 @@ document.addEventListener("DOMContentLoaded", () => {
     set("disable_webcam_clicks", items.disable_webcam_clicks);
     set("auto_accept_enabled", items.auto_accept_enabled);
     set("camera_rotate_enabled", items.camera_rotate_enabled);
+    set("camera_reload_enabled", items.camera_reload_enabled);
+    set("stream_lost_icon_enabled", items.stream_lost_icon_enabled);
     set("player_mute_enabled", items.player_mute_enabled);
     set("nick_colors_enabled", items.nick_colors_enabled);
     const nfw = $<HTMLSelectElement>("note_frame_width");
@@ -1145,6 +1147,8 @@ document.addEventListener("DOMContentLoaded", () => {
       disable_webcam_clicks: cb("disable_webcam_clicks", false),
       auto_accept_enabled: cb("auto_accept_enabled", true),
       camera_rotate_enabled: cb("camera_rotate_enabled", true),
+      camera_reload_enabled: cb("camera_reload_enabled", true),
+      stream_lost_icon_enabled: cb("stream_lost_icon_enabled", true),
       player_mute_enabled: cb("player_mute_enabled", true),
       nick_colors_enabled: cb("nick_colors_enabled", true),
       note_frame_width: noteFrameWidthValue(),
@@ -1271,6 +1275,8 @@ document.addEventListener("DOMContentLoaded", () => {
     "disable_webcam_clicks",
     "auto_accept_enabled",
     "camera_rotate_enabled",
+    "camera_reload_enabled",
+    "stream_lost_icon_enabled",
     "player_mute_enabled",
     "nick_colors_enabled",
     "note_frame_width",
