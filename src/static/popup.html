@@ -300,8 +300,9 @@
                     <option value="custom">Своя тема…</option>
                 </select>
             </div>
-            <div class="row" id="stats_button_color_row" style="display:none"><span>— Свой цвет</span>
-                <input type="color" id="stats_button_color" class="sel" style="min-width:64px;width:64px;padding:2px;height:32px">
+            <div class="row" id="stats_button_color_row" style="display:none"><span>— Свой цвет<span class="hint">впиши #rrggbb или выбери пипеткой</span></span>
+                <input type="text" id="stats_button_color_hex" class="inp" style="width:88px;flex:0 0 auto;font-family:monospace" maxlength="7" spellcheck="false" placeholder="#ffd54f">
+                <input type="color" id="stats_button_color" class="sel" style="min-width:44px;width:44px;padding:2px;height:32px">
             </div>
             <div class="row" style="flex-wrap:wrap;gap:6px"><span style="flex:1 0 100%">Кнопки на плитке игрока<span class="hint">сними галочку — кнопка исчезнет из ряда под игроком</span></span>
                 <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="btn_stats_enabled" checked> Статистика</label>

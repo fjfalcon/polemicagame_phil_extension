@@ -921,6 +921,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // Тему могли сменить с другого устройства — строка своего цвета обязана
     // появиться/исчезнуть вместе с ней.
     if ("stats_button_theme" in patch) syncCustomColorRow();
+    if (typeof patch.stats_button_color === "string") {
+      const hex = $<HTMLInputElement>("stats_button_color_hex");
+      if (hex) hex.value = readButtonColor(patch.stats_button_color);
+    }
     if ("obs_enabled" in patch) {
       const s = $("obs_settings");
       if (s) s.style.display = patch.obs_enabled ? "block" : "none";
@@ -1013,6 +1017,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const sbc = $<HTMLInputElement>("stats_button_color");
     // Нормализация: <input type="color"> молча показывает чёрный на мусоре.
     if (sbc) sbc.value = readButtonColor(items.stats_button_color);
+    const sbcHex = $<HTMLInputElement>("stats_button_color_hex");
+    if (sbcHex) sbcHex.value = readButtonColor(items.stats_button_color);
     syncCustomColorRow();
     const msv = $<HTMLSelectElement>("match_stats_view");
     if (msv) msv.value = items.match_stats_view || "hints";
@@ -1320,20 +1326,39 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   $("stats_button_theme")?.addEventListener("change", syncCustomColorRow);
 
-  // Свой цвет сохраняется и по ЖИВОМУ выбору, а не только по change: Firefox
-  // на macOS не доносит change от системной палитры до попапа (жалоба
-  // владельца 14.08.2026 — «выбрал цвет, остался тот же»). Дроссель
-  // обязателен: пока курсор возят по спектру, input сыплется десятками в
-  // секунду, и каждый писал бы в storage.
+  // Свой цвет. Два пути, потому что родной color-input на macOS в попапе
+  // Firefox может вовсе не получать значение из системной палитры (жалобы
+  // владельца 14.08.2026, дважды): 1) живой выбор пипеткой с дросселем;
+  // 2) ТЕКСТОВОЕ поле #rrggbb — работает везде и не зависит от палитры.
+  // Каждый путь пишет в журнал: если палитра снова промолчит, это станет
+  // видно по отсутствию строки, а не по новой загадке.
   {
     const colorInput = $<HTMLInputElement>("stats_button_color");
+    const hexInput = $<HTMLInputElement>("stats_button_color_hex");
     let colorSaveTimer: number | null = null;
-    colorInput?.addEventListener("input", () => {
+    const scheduleSave = (): void => {
       if (colorSaveTimer !== null) window.clearTimeout(colorSaveTimer);
       colorSaveTimer = window.setTimeout(() => {
         colorSaveTimer = null;
         saveSettings();
       }, 250);
+    };
+    colorInput?.addEventListener("input", () => {
+      log.debug("popup", "цвет из палитры", colorInput.value);
+      if (hexInput) hexInput.value = colorInput.value;
+      scheduleSave();
+    });
+    colorInput?.addEventListener("change", () => {
+      log.debug("popup", "палитра закрыта", colorInput.value);
+    });
+    hexInput?.addEventListener("input", () => {
+      const v = hexInput.value.trim().toLowerCase();
+      if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(v)) return; // ждём, пока допишет
+      log.debug("popup", "цвет из поля", v);
+      if (colorInput) colorInput.value = v.length === 4
+        ? `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`
+        : v;
+      scheduleSave();
     });
   }
 
