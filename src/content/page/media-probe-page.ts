@@ -36,6 +36,7 @@ interface RoomProxy {
     isConnected?: boolean;
     disconnect?: (keepStream: boolean) => void;
     connect?: (gameId: unknown) => void;
+    updateStreams?: () => void;
   } | null;
   createMediaRoom?: () => void;
   $store?: { state?: { gameId?: unknown } };
@@ -50,7 +51,26 @@ export function findRoomProxy(doc: Document): RoomProxy | null {
 }
 
 /**
- * Пересоздать медиа-сессию. Возвращает причину отказа или null при успехе.
+ * МЯГКИЙ шаг: mediaRoom.updateStreams() — публичный метод сайта. Для каждого
+ * игрока он дожимает ОТЛОЖЕННУЮ подписку (события медиасервера, пропущенные
+ * из-за гонки с состоянием комнаты, лежат в карте до этого вызова) и заново
+ * раздаёт потоки по плиткам. Ничего не разрывает: у остальных игроков картинка
+ * даже не мигнёт. Это максимально близкое к «обновить одного игрока», что
+ * достижимо снаружи, — сами подписки заперты в замыкании.
+ */
+export function refreshStreams(doc: Document): string | null {
+  const proxy = findRoomProxy(doc);
+  if (!proxy) return "vue_root_not_found";
+  const room = proxy.mediaRoom;
+  if (!room) return "media_room_not_found";
+  if (!room.isConnected) return "media_not_connected";
+  if (typeof room.updateStreams !== "function") return "update_streams_missing";
+  room.updateStreams();
+  return null;
+}
+
+/**
+ * ЖЁСТКИЙ шаг: пересоздать медиа-сессию. Возвращает причину отказа или null.
  * Каждый шаг проверен отдельно: «не вышло» обязано быть диагнозом, а не
  * загадкой («vue root не найден» и «медиа не подключено» — разные ответы).
  */
@@ -86,16 +106,21 @@ interface ProbeWindow extends Window {
   window.addEventListener("message", (e: MessageEvent) => {
     if (e.source !== window) return;
     const d = e.data as { source?: string; action?: unknown };
-    if (d?.source !== MEDIA_CMD_SOURCE || d.action !== "reconnect") return;
+    if (d?.source !== MEDIA_CMD_SOURCE) return;
+    if (d.action !== "reconnect" && d.action !== "refresh") return;
     let reason: string | null;
     try {
-      reason = reconnectMedia(document);
+      reason = d.action === "refresh" ? refreshStreams(document) : reconnectMedia(document);
     } catch (err) {
       // Ошибка внутри кода сайта — честно наружу, но страницу не роняем.
       reason = `threw:${String(err).slice(0, 120)}`;
     }
     try {
-      window.postMessage({ source: MEDIA_RESULT_SOURCE, ok: reason === null, reason }, location.origin);
+      // action в ответе обязателен: content различает по нему шаги лесенки.
+      window.postMessage(
+        { source: MEDIA_RESULT_SOURCE, ok: reason === null, reason, action: d.action },
+        location.origin,
+      );
     } catch {
       /* страница уходит */
     }

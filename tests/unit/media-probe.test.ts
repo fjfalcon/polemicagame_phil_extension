@@ -9,7 +9,7 @@
  */
 import { describe, expect, test, vi } from "vitest";
 
-import { findRoomProxy, reconnectMedia } from "@content/page/media-probe-page";
+import { findRoomProxy, reconnectMedia, refreshStreams } from "@content/page/media-probe-page";
 
 function appWithProxy(proxy: unknown): void {
   document.body.innerHTML = `<div id="app"></div>`;
@@ -95,6 +95,24 @@ describe("честные отказы вместо поломки страниц
     });
     appWithProxy(proxy);
     expect(reconnectMedia(document)).toBe("recreate_failed");
+  });
+
+  test("мягкий шаг зовёт updateStreams и НИЧЕГО не рвёт", () => {
+    // Смысл мягкого шага именно в бескровности: дожать отложенные подписки,
+    // не трогая соединения, — у остальных игроков картинка не мигает.
+    const { proxy } = workingProxy();
+    (proxy.mediaRoom as { updateStreams?: () => void }).updateStreams = vi.fn();
+    appWithProxy(proxy);
+    expect(refreshStreams(document)).toBeNull();
+    expect((proxy.mediaRoom as { updateStreams: () => void }).updateStreams).toHaveBeenCalled();
+    expect(proxy.mediaRoom.disconnect).not.toHaveBeenCalled();
+    expect(proxy.createMediaRoom).not.toHaveBeenCalled();
+  });
+
+  test("мягкий шаг без updateStreams — честный отказ", () => {
+    const { proxy } = workingProxy();
+    appWithProxy(proxy);
+    expect(refreshStreams(document)).toBe("update_streams_missing");
   });
 
   test("findRoomProxy достаёт proxy из #app", () => {

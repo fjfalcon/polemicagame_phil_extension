@@ -25,7 +25,7 @@ vi.mock("@core/env", () => ({
   browser: { runtime: { getURL: (p: string) => `chrome-extension://x/${p}` } },
 }));
 vi.mock("@core/log", () => ({
-  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), flushNow: vi.fn() },
 }));
 const toasts: string[] = [];
 vi.mock("@core/toast", () => ({
@@ -40,13 +40,17 @@ import {
   BUTTON_ID,
   FROZEN_PASSES,
   MEDIA_CMD_SOURCE,
+  MEDIA_RESULT_SOURCE,
   OVERLAY_CLASS,
   WATCH_INTERVAL_MS,
   cameraHealthFeature,
+  deadCause,
   isDeadTrack,
   isFrozen,
   ownSpeechInProgress,
+  tileNick,
 } from "@content/features/camera-health";
+import { log } from "@core/log";
 import type { Settings } from "@shared/types";
 
 const ctx = (over: Record<string, unknown> = {}) =>
@@ -98,6 +102,10 @@ describe("чистые датчики", () => {
     expect(isDeadTrack({ readyState: "ended" })).toBe(true);
     expect(isDeadTrack({ muted: false, readyState: "live" })).toBe(false);
     expect(isDeadTrack(undefined), "нет дорожки — нет и утверждения").toBe(false);
+    // Причина различима в журнале: «упала сеть» и «камера убрана» — разное.
+    expect(deadCause({ muted: true })).toBe("muted");
+    expect(deadCause({ muted: true, readyState: "ended" }), "ended сильнее").toBe("ended");
+    expect(deadCause({ muted: false })).toBeNull();
   });
 
   test("замер — только при совпадении с ПРОШЛЫМ замером", () => {
@@ -143,6 +151,28 @@ describe("метка обрыва", () => {
     expect(overlay(), `нужно ${FROZEN_PASSES} совпадения, было одно`).toBeNull();
     tickOnce(); // совпадение №2
     expect(overlay()).not.toBeNull();
+  });
+
+  test("журнал различает «оборвалось» и «ожило» и называет ника", () => {
+    // Логи и есть доказательство «работает/нет» при живой проверке: пара
+    // «оборвалось → ожило» с ником читается без второй игры.
+    const video = room();
+    document.querySelector("#p0")!.insertAdjacentHTML(
+      "beforeend",
+      '<div class="player__info info"><span class="info__name">Petya</span></div>',
+    );
+    const track = { muted: true, readyState: "live" };
+    video.srcObject = stream(track);
+    cameraHealthFeature.enable(ctx());
+    tickOnce();
+    const infoCalls = (log.info as ReturnType<typeof vi.fn>).mock.calls.map((c) => c.join(" "));
+    expect(infoCalls.some((c) => c.includes("Petya") && c.includes("muted"))).toBe(true);
+
+    track.muted = false;
+    tickOnce();
+    const after = (log.info as ReturnType<typeof vi.fn>).mock.calls.map((c) => c.join(" "));
+    expect(after.some((c) => c.includes("ожило") && c.includes("Petya"))).toBe(true);
+    expect(tileNick(document.querySelector("#p0") as HTMLElement)).toBe("Petya");
   });
 
   test("метка идемпотентна: второй проход не плодит вторую", () => {
@@ -207,6 +237,33 @@ describe("кнопка «Перезагрузить камеры»", () => {
     expect(button()?.disabled, "переподключение спрячет камеру посреди речи").toBe(true);
   });
 
+  /** Перехват команд зонду + ручная готовность зонда (jsdom не грузит src). */
+  function armProbe(): { sent: Array<{ source?: string; action?: string }>; ready: () => void } {
+    const sent: Array<{ source?: string; action?: string }> = [];
+    const orig = window.postMessage.bind(window);
+    vi.spyOn(window, "postMessage").mockImplementation(((msg: unknown) => {
+      sent.push(msg as never);
+      orig(msg as never, location.origin);
+    }) as never);
+    return {
+      sent,
+      ready: () => {
+        const tag = document.querySelector("script[data-pn-media-probe]") as HTMLScriptElement;
+        tag?.onload?.(new Event("load"));
+      },
+    };
+  }
+
+  /** Ответ зонда, как его шлёт page-скрипт. */
+  function probeReplies(ok: boolean, action: string): void {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { source: MEDIA_RESULT_SOURCE, ok, action },
+        source: window as never,
+      }),
+    );
+  }
+
   test("клик шлёт зонду команду переподключения", () => {
     room();
     cameraHealthFeature.enable(ctx());
@@ -228,6 +285,51 @@ describe("кнопка «Перезагрузить камеры»", () => {
       sent.some((m) => (m as { source?: string })?.source === MEDIA_CMD_SOURCE),
       "команда ушла после готовности зонда",
     ).toBe(true);
+  });
+
+  test("ЛЕСЕНКА: сначала мягкий шаг, и если метки сошли — сессию не трогаем", () => {
+    // Мягкий updateStreams не рвёт ничего — у остальных даже не мигнёт.
+    // Жёсткое пересоздание при уже оживших плитках было бы вредом от кнопки.
+    const video = room();
+    const track = { muted: true, readyState: "live" };
+    video.srcObject = stream(track);
+    cameraHealthFeature.enable(ctx());
+    tickOnce();
+
+    const probe = armProbe();
+    button()!.click();
+    probe.ready();
+    expect(probe.sent.filter((m) => m.source === MEDIA_CMD_SOURCE).map((m) => m.action)).toEqual([
+      "refresh",
+    ]);
+
+    probeReplies(true, "refresh");
+    track.muted = false; // мягкий шаг помог — поток ожил
+    tickOnce();
+    vi.advanceTimersByTime(3100);
+    expect(
+      probe.sent.filter((m) => m.source === MEDIA_CMD_SOURCE).map((m) => m.action),
+      "reconnect не понадобился",
+    ).toEqual(["refresh"]);
+    expect(button()!.disabled, "кнопка разблокирована").toBe(false);
+  });
+
+  test("ЛЕСЕНКА: мягкого шага мало — эскалация в пересоздание", () => {
+    const video = room();
+    video.srcObject = stream({ muted: true, readyState: "live" });
+    cameraHealthFeature.enable(ctx());
+    tickOnce();
+
+    const probe = armProbe();
+    button()!.click();
+    probe.ready();
+    probeReplies(true, "refresh");
+    tickOnce(); // метка всё ещё стоит
+    vi.advanceTimersByTime(3100);
+    expect(probe.sent.filter((m) => m.source === MEDIA_CMD_SOURCE).map((m) => m.action)).toEqual([
+      "refresh",
+      "reconnect",
+    ]);
   });
 
   test("зонд молчит — кнопка не остаётся заблокированной навсегда", () => {

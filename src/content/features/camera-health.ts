@@ -47,6 +47,8 @@ const PROBE_MARK = "data-pn-media-probe";
 export const WATCH_INTERVAL_MS = 2000;
 /** Через сколько после переподключения проверяем, помогло ли. */
 const VERDICT_DELAY_MS = 7000;
+/** Пауза после МЯГКОГО шага: дожатой подписке нужна пара секунд на кадры. */
+const SOFT_WAIT_MS = 3000;
 
 // ─────────────────────────── чистые функции ───────────────────────────
 
@@ -56,12 +58,26 @@ interface TrackLike {
 }
 
 /**
- * Мёртвая ли видео-дорожка. muted — браузер сам говорит «данные не идут»
- * (типичный обрыв сети у игрока); ended — дорожку закрыли совсем.
+ * Причина смерти видео-дорожки. muted — браузер сам говорит «данные не идут»
+ * (типичный обрыв сети у игрока); ended — дорожку закрыли совсем. Причина
+ * пишется в журнал: по ней в логах различимы «упала сеть» и «камера убрана».
  */
+export type DeadCause = "muted" | "ended" | "frozen";
+
+export function deadCause(track: TrackLike | undefined): DeadCause | null {
+  if (!track) return null;
+  if (track.readyState === "ended") return "ended";
+  if (track.muted === true) return "muted";
+  return null;
+}
+
 export function isDeadTrack(track: TrackLike | undefined): boolean {
-  if (!track) return false;
-  return track.muted === true || track.readyState === "ended";
+  return deadCause(track) !== null;
+}
+
+/** Ник с плитки — для журнала: «оборвалось у кого-то» бесполезно в разборе. */
+export function tileNick(tile: HTMLElement): string {
+  return tile.querySelector(SITE.playerName)?.textContent?.trim() || "?";
 }
 
 /**
@@ -105,6 +121,8 @@ class CameraHealth {
   private frozenPasses = new WeakMap<HTMLVideoElement, number>();
   /** Кнопка ждёт ответа зонда — повторные клики не шлют команду дважды. */
   private reconnecting = false;
+  /** Текущий шаг лесенки: мягкий refresh или жёсткий reconnect. */
+  private stage: "refresh" | "reconnect" | null = null;
 
   enable(ctx: FeatureContext): void {
     this.settings = ctx.settings;
@@ -139,6 +157,7 @@ class CameraHealth {
       this.resultListener = null;
     }
     this.reconnecting = false;
+    this.stage = null;
     document.getElementById(BUTTON_ID)?.remove();
     this.removeOverlays();
   }
@@ -156,17 +175,20 @@ class CameraHealth {
       // Своя плитка: локальный поток от сети не зависит, метка на себе врала бы.
       if (tile.classList.contains("my-player")) continue;
       const video = tile.querySelector<HTMLVideoElement>(SITE.playerVideoEl);
-      this.markTile(tile, video ? this.probeVideo(video) : false);
+      this.markTile(tile, video ? this.probeVideo(video) : null);
     }
   }
 
-  /** Мёртв ли поток этого <video> прямо сейчас. */
-  private probeVideo(video: HTMLVideoElement): boolean {
+  /** Латч: про запрет Xray говорим в журнал один раз, а не каждые 2 секунды. */
+  private xrayWarned = false;
+
+  /** Причина смерти потока этого <video>; null — живой. */
+  private probeVideo(video: HTMLVideoElement): DeadCause | null {
     const stream = video.srcObject as MediaStream | null;
     if (!stream) {
       // Потока нет — сайт сам рисует заглушку, наша метка была бы дублёром.
       this.frozenPasses.delete(video);
-      return false;
+      return null;
     }
     let track: TrackLike | undefined;
     try {
@@ -175,30 +197,41 @@ class CameraHealth {
       // Firefox Xray может не пустить к потоку страницы — тогда работаем
       // только по currentTime, это честная деградация, а не поломка.
       track = undefined;
+      if (!this.xrayWarned) {
+        this.xrayWarned = true;
+        log.warn(SCOPE, "браузер не пустил к дорожкам потока — метка работает по замершим кадрам");
+      }
     }
-    if (isDeadTrack(track)) {
+    const byTrack = deadCause(track);
+    if (byTrack) {
       this.frozenPasses.delete(video);
-      return true;
+      return byTrack;
     }
     const now = video.currentTime;
     const frozen = isFrozen(this.lastTimes.get(video), now) && !video.paused;
     this.lastTimes.set(video, now);
     const passes = frozen ? (this.frozenPasses.get(video) ?? 0) + 1 : 0;
     this.frozenPasses.set(video, passes);
-    return passes >= FROZEN_PASSES;
+    return passes >= FROZEN_PASSES ? "frozen" : null;
   }
 
   /** Поставить/снять метку обрыва. Идемпотентно (§4 п.1). */
-  private markTile(tile: HTMLElement, dead: boolean): void {
+  private markTile(tile: HTMLElement, cause: DeadCause | null): void {
     const wrapper = tile.querySelector<HTMLElement>(SITE.playerVideoWrapper) ?? tile;
     const existing = wrapper.querySelector<HTMLElement>(`.${OVERLAY_CLASS}`);
-    if (!dead) {
-      existing?.remove();
+    if (!cause) {
+      if (existing) {
+        existing.remove();
+        // Снятие тоже в журнал: пара «оборвалось → ожило» и есть картина
+        // инцидента; без второй половины лог читается как вечный обрыв.
+        log.info(SCOPE, `видео ожило: «${tileNick(tile)}»`);
+      }
       return;
     }
     if (existing) return;
     const badge = document.createElement("div");
     badge.className = OVERLAY_CLASS;
+    badge.dataset.pnCause = cause;
     badge.title = "Видео от игрока не приходит — похоже, у него оборвалась связь";
     badge.style.cssText =
       "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;" +
@@ -214,7 +247,7 @@ class CameraHealth {
       '<path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>' +
       '<line x1="12" y1="20" x2="12" y2="20"/></svg>';
     wrapper.appendChild(badge);
-    log.info(SCOPE, "у игрока оборвалось видео (метка поставлена)");
+    log.info(SCOPE, `видео оборвалось: «${tileNick(tile)}» (${cause})`);
   }
 
   private removeOverlays(): void {
@@ -281,6 +314,38 @@ class CameraHealth {
     (document.head || document.documentElement).appendChild(s);
   }
 
+  /** Ники плиток с меткой обрыва — картина «до» и «после» для журнала. */
+  private deadNicks(): string[] {
+    return Array.from(document.querySelectorAll<HTMLElement>(`.${OVERLAY_CLASS}`)).map((badge) => {
+      const tile = badge.closest<HTMLElement>(SITE.player);
+      return tile ? tileNick(tile) : "?";
+    });
+  }
+
+  private sendCmd(action: "refresh" | "reconnect"): void {
+    this.stage = action;
+    this.ensureProbe(() => {
+      try {
+        window.postMessage({ source: MEDIA_CMD_SOURCE, action }, location.origin);
+      } catch {
+        this.reconnecting = false;
+        this.stage = null;
+      }
+    });
+    // Страховка: зонд не ответил (страница перерисовалась, скрипт умер) —
+    // кнопка не должна остаться заблокированной навсегда.
+    this.verdictTimer = setTimeout(() => {
+      if (this.reconnecting) {
+        this.reconnecting = false;
+        this.stage = null;
+        this.syncButton();
+        showToast("Видео не ответило на переподключение — похоже, нужен F5");
+        log.warn(SCOPE, `зонд не ответил на команду ${action}`);
+        log.flushNow();
+      }
+    }, VERDICT_DELAY_MS);
+  }
+
   private reconnect(): void {
     if (this.reconnecting) return;
     // Гейт от гонки: речь могла начаться между проходами наблюдателя.
@@ -290,25 +355,13 @@ class CameraHealth {
     }
     this.reconnecting = true;
     this.syncButton();
-    log.info(SCOPE, "переподключение видео по кнопке");
-    showToast("Переподключаю видео…");
-    this.ensureProbe(() => {
-      try {
-        window.postMessage({ source: MEDIA_CMD_SOURCE, action: "reconnect" }, location.origin);
-      } catch {
-        this.reconnecting = false;
-      }
-    });
-    // Страховка: зонд не ответил (страница перерисовалась, скрипт умер) —
-    // кнопка не должна остаться заблокированной навсегда.
-    this.verdictTimer = setTimeout(() => {
-      if (this.reconnecting) {
-        this.reconnecting = false;
-        this.syncButton();
-        showToast("Видео не ответило на переподключение — похоже, нужен F5");
-        log.warn(SCOPE, "зонд не ответил на команду переподключения");
-      }
-    }, VERDICT_DELAY_MS);
+    // Картина «до» — без неё по журналу не понять, что именно чинили.
+    log.info(SCOPE, `кнопка камер: мёртвых плиток ${this.deadNicks().length} [${this.deadNicks().join(", ")}]`);
+    showToast("Обновляю видео…");
+    // ЛЕСЕНКА. Сначала мягкий шаг: updateStreams() дожимает отложенные
+    // подписки и не рвёт ничего — у остальных даже не мигнёт. Жёсткое
+    // пересоздание — только если мягкого не хватило.
+    this.sendCmd("refresh");
   }
 
   private onProbeResult(e: MessageEvent): void {
@@ -319,32 +372,69 @@ class CameraHealth {
       clearTimeout(this.verdictTimer);
       this.verdictTimer = null;
     }
-    if (d.ok === true) {
-      log.info(SCOPE, "медиа-сессия пересоздана");
-      // Вердикт «помогло/нет» — по меткам обрыва спустя пару секунд: если
-      // мёртвые плитки остались, честно говорим, что кнопка не всесильна.
-      this.verdictTimer = setTimeout(() => {
-        this.verdictTimer = null;
-        this.reconnecting = false;
-        this.syncButton();
-        const still = document.querySelectorAll(`.${OVERLAY_CLASS}`).length;
-        showToast(
-          still > 0
-            ? "Видео пересобрано, но у кого-то поток так и не идёт — проблема на его стороне"
-            : "Видео пересобрано",
-        );
-      }, VERDICT_DELAY_MS);
-    } else {
+    const step = this.stage ?? "reconnect";
+    if (d.ok !== true) {
       this.reconnecting = false;
+      this.stage = null;
       this.syncButton();
       const reason = typeof d.reason === "string" ? d.reason : "unknown";
-      log.warn(SCOPE, `переподключение не удалось: ${reason}`);
+      log.warn(SCOPE, `шаг ${step} не удался: ${reason}`);
+      log.flushNow();
       showToast(
         reason === "media_not_connected"
           ? "Видеосвязь ещё не поднята — переподключать нечего"
-          : "Не удалось переподключить видео — сайт изменился или матч не идёт. Поможет F5",
+          : "Не удалось обновить видео — сайт изменился или матч не идёт. Поможет F5",
       );
+      return;
     }
+
+    if (step === "refresh") {
+      log.info(SCOPE, "мягкий шаг прошёл (updateStreams), жду кадры");
+      // Дожатой подписке нужна пара секунд; если метки сошли — жёсткий шаг
+      // не нужен вовсе, и ни у кого ничего не мигнуло.
+      this.verdictTimer = setTimeout(() => {
+        this.verdictTimer = null;
+        const still = this.deadNicks();
+        if (still.length === 0) {
+          this.reconnecting = false;
+          this.stage = null;
+          this.syncButton();
+          log.info(SCOPE, "хватило мягкого шага — соединения не трогали");
+          log.flushNow();
+          showToast("Видео обновлено");
+          return;
+        }
+        log.info(SCOPE, `мягкого шага мало, остались [${still.join(", ")}] — пересоздаю сессию`);
+        showToast("Не помогло мягко — переподключаю видео целиком…");
+        this.sendCmd("reconnect");
+      }, SOFT_WAIT_MS);
+      return;
+    }
+
+    log.info(SCOPE, "медиа-сессия пересоздана");
+    // Вердикт «помогло/нет» — по меткам обрыва спустя пару секунд: если
+    // мёртвые плитки остались, честно говорим, что кнопка не всесильна.
+    this.verdictTimer = setTimeout(() => {
+      this.verdictTimer = null;
+      this.reconnecting = false;
+      this.stage = null;
+      this.syncButton();
+      const still = this.deadNicks();
+      // Итог — в журнал и сразу на диск: это и есть доказательство «работает /
+      // не работает» для разбора без повторной игры.
+      log.info(
+        SCOPE,
+        still.length === 0
+          ? "итог: все плитки ожили"
+          : `итог: не ожили [${still.join(", ")}] — проблема на их стороне`,
+      );
+      log.flushNow();
+      showToast(
+        still.length > 0
+          ? "Видео пересобрано, но у кого-то поток так и не идёт — проблема на его стороне"
+          : "Видео пересобрано",
+      );
+    }, VERDICT_DELAY_MS);
   }
 }
 
