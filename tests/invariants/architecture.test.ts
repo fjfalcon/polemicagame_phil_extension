@@ -430,9 +430,11 @@ describe("§4.7 lifecycle heuristic", () => {
     // Populated only for reviewed DOM-owned one-shot handlers/timers. Exact deltas make new tails fail.
     "src/content/features/camera-health.ts": {
       listeners: 1,
-      timers: 0,
+      timers: 1,
       reason:
-        "click-обработчик живёт на кнопке #pn-camera-reload и удаляется вместе с её узлом в disable()",
+        "click-обработчик живёт на кнопке #pn-camera-reload и удаляется вместе с её узлом в disable(); " +
+        "+1 таймер (9.23.1) — шаги лесенки ставят setTimeout трижды при одном clearTimeout-поле verdictTimer, " +
+        "каждый прежний таймер снимается перед новым и в disable()",
     },
     "src/content/features/connection-diag.ts": {
       listeners: 1,
