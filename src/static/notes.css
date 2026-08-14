@@ -172,7 +172,7 @@
 .note-button svg circle,
 .last-games-button svg circle,
 .hide-video-button svg circle {
-    stroke: var(--stats-button-theme-color, #4267B2) !important;
+    stroke: var(--stats-button-theme-color, #ffffff) !important;
     stroke-width: 1.5 !important;
     stroke-linejoin: round !important;
     stroke-linecap: round !important;

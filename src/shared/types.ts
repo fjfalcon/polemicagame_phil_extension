@@ -20,6 +20,8 @@ export interface Settings {
   /** Вид страницы разбора матча: hints | legend | classic. */
   match_stats_view: string;
   stats_button_theme: StatsTheme;
+  /** Цвет темы «своя» (#rrggbb). Работает, когда выбрана тема custom. */
+  stats_button_color: string;
   // Игровой процесс
   auto_accept_enabled: boolean;
   skip_start_screen_enabled: boolean;

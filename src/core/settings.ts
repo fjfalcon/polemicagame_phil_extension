@@ -7,6 +7,7 @@
  */
 import { browser } from "./env";
 import { log } from "./log";
+import { DEFAULT_CUSTOM_COLOR } from "@shared/button-theme";
 import { DEFAULT_LAST_GAMES_COUNT } from "@shared/last-games";
 import type { Settings, SettingKey } from "@shared/types";
 
@@ -21,7 +22,10 @@ export const DEFAULT_SETTINGS: Settings = {
   statistics_enabled: true,
   match_page_stats_enabled: true,
   match_stats_view: "hints",
+  // "default" теперь БЕЛАЯ (просьба владельца 13.08.2026). Прежний тёмно-синий
+  // доступен как "classic" — вернуть старый вид можно одним выбором.
   stats_button_theme: "default",
+  stats_button_color: DEFAULT_CUSTOM_COLOR,
   auto_accept_enabled: true,
   skip_start_screen_enabled: true,
   pause_hotkey_enabled: true,

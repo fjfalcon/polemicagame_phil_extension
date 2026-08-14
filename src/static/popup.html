@@ -287,16 +287,21 @@
 
         <!-- ── Иконки и плашка игрока ── -->
         <div class="panel" data-panel="icons">
-            <div class="row"><span>Тема кнопок</span>
+            <div class="row"><span>Тема кнопок<span class="hint">цвет иконок на плитке игрока</span></span>
                 <select id="stats_button_theme" class="sel">
-                    <option value="default">Стандарт</option>
+                    <option value="default">Белая</option>
+                    <option value="classic">Синяя (как раньше)</option>
                     <option value="pink">Розовая</option>
                     <option value="yellow">Жёлтая</option>
                     <option value="red">Красная</option>
                     <option value="green">Зелёная</option>
                     <option value="lime">Салатовая</option>
                     <option value="blue">Голубая</option>
+                    <option value="custom">Своя тема…</option>
                 </select>
+            </div>
+            <div class="row" id="stats_button_color_row" style="display:none"><span>— Свой цвет</span>
+                <input type="color" id="stats_button_color" class="sel" style="min-width:64px;width:64px;padding:2px;height:32px">
             </div>
             <div class="row" style="flex-wrap:wrap;gap:6px"><span style="flex:1 0 100%">Кнопки на плитке игрока<span class="hint">сними галочку — кнопка исчезнет из ряда под игроком</span></span>
                 <label style="display:flex;align-items:center;gap:5px;font-size:11px"><input type="checkbox" id="btn_stats_enabled" checked> Статистика</label>

@@ -32,6 +32,7 @@ import {
 } from "@core/crossover";
 import { fetchFirstKilled } from "@core/match-brief";
 import { getOwnUserId, ownNameFromTable, rememberOwnUserId } from "@core/own-user";
+import { buttonThemeColor } from "@shared/button-theme";
 import { lastGamesLimit } from "@shared/last-games";
 import { showToast } from "@core/toast";
 import { onDomChange, paintNickEl } from "@core/dom";
@@ -304,16 +305,6 @@ function unavailablePlayerStats(): PlayerStatsEntry {
     },
   };
 }
-
-const THEME_COLORS: Record<string, string> = {
-  default: "rgb(66, 103, 178)",
-  pink: "#ec4899",
-  yellow: "#eab308",
-  red: "#ef4444",
-  green: "#22c55e",
-  lime: "#84cc16",
-  blue: "#38bdf8",
-};
 
 // ───────────────────────── Менеджер фичи ─────────────────────────
 
@@ -1634,7 +1625,7 @@ class PlayerNotesManager {
   // ─────────── Тема кнопок ───────────
 
   private getStatsThemeColor(): string {
-    return THEME_COLORS[this.settings.stats_button_theme] || THEME_COLORS.default;
+    return buttonThemeColor(this.settings.stats_button_theme, this.settings.stats_button_color);
   }
 
   private applyButtonTheme(button: HTMLElement | null): void {

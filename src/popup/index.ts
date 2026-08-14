@@ -24,6 +24,7 @@ import { formatKeyCode, isModifierCode } from "@core/keyboard";
 // Список углов — общий с content-скриптом (см. shared/nick-plate).
 import { PLATE_POSITIONS } from "@shared/nick-plate";
 import { readControlPosition } from "@shared/controls-layout";
+import { CUSTOM_THEME, readButtonColor } from "@shared/button-theme";
 import { readLastGamesCount } from "@shared/last-games";
 import { escapeHtml } from "@core/escape";
 import {
@@ -913,6 +914,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     // Зависимые блоки видимости.
     if ("extension_enabled" in patch) applyExtOff(patch.extension_enabled !== false);
+    // Тему могли сменить с другого устройства — строка своего цвета обязана
+    // появиться/исчезнуть вместе с ней.
+    if ("stats_button_theme" in patch) syncCustomColorRow();
     if ("obs_enabled" in patch) {
       const s = $("obs_settings");
       if (s) s.style.display = patch.obs_enabled ? "block" : "none";
@@ -1002,6 +1006,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const sbt = $<HTMLSelectElement>("stats_button_theme");
     if (sbt) sbt.value = items.stats_button_theme || "default";
+    const sbc = $<HTMLInputElement>("stats_button_color");
+    // Нормализация: <input type="color"> молча показывает чёрный на мусоре.
+    if (sbc) sbc.value = readButtonColor(items.stats_button_color);
+    syncCustomColorRow();
     const msv = $<HTMLSelectElement>("match_stats_view");
     if (msv) msv.value = items.match_stats_view || "hints";
 
@@ -1178,6 +1186,7 @@ document.addEventListener("DOMContentLoaded", () => {
       match_page_stats_enabled: cb("match_page_stats_enabled", true),
       match_stats_view: $<HTMLSelectElement>("match_stats_view")?.value || "hints",
       stats_button_theme: ($<HTMLSelectElement>("stats_button_theme")?.value || "default"),
+      stats_button_color: readButtonColor($<HTMLInputElement>("stats_button_color")?.value),
       auto_hide_roles_enabled: autoHideRolesEnabled,
       role_phase_auto_switch_enabled:
         autoHideRolesEnabled && cb("role_phase_auto_switch_enabled", false),
@@ -1251,6 +1260,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "statistics_enabled",
     "match_page_stats_enabled",
     "stats_button_theme",
+    "stats_button_color",
     "match_stats_view",
     "auto_hide_roles_enabled",
     "role_phase_auto_switch_enabled",
@@ -1287,6 +1297,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const el = $(id);
     if (el) el.addEventListener("change", saveSettings);
   });
+
+  /**
+   * Строка «свой цвет» показывается только у темы «Своя». Отдельный обработчик
+   * рядом с сохранением: порядок не важен, оба слушают одно событие.
+   */
+  function syncCustomColorRow(): void {
+    const row = $("stats_button_color_row");
+    if (!row) return;
+    row.style.display =
+      $<HTMLSelectElement>("stats_button_theme")?.value === CUSTOM_THEME ? "" : "none";
+  }
+  $("stats_button_theme")?.addEventListener("change", syncCustomColorRow);
 
   // Мгновенная визуальная реакция на мастер-выключатель (не ждём storage.onChanged).
   $<HTMLInputElement>("extension_enabled")?.addEventListener("change", (e) => {

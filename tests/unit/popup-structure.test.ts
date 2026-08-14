@@ -31,6 +31,7 @@ vi.mock("@core/env", () => ({
 
 import { DEFAULT_SETTINGS } from "@core/settings";
 import { PLATE_POSITIONS } from "@shared/nick-plate";
+import { CUSTOM_THEME, THEME_COLORS } from "@shared/button-theme";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const html = fs.readFileSync(path.join(ROOT, "src/static/popup.html"), "utf8");
@@ -102,6 +103,18 @@ describe("ни одна настройка не потерялась при пе
     for (const id of ["stats_button_theme", "match_stats_view", "note_frame_width"]) {
       expect(d.getElementById(id), `${id} пропал из попапа`).not.toBeNull();
     }
+    // Палитра кнопок — общий контракт попапа и content-скрипта: до 9.22.0 они
+    // жили порознь и УЖЕ разошлись (в разметке не было половины значений, и
+    // выбрать их было нечем).
+    const theme = d.getElementById("stats_button_theme") as HTMLSelectElement;
+    const themeValues = Array.from(theme.querySelectorAll("option")).map((o) =>
+      o.getAttribute("value"),
+    );
+    for (const key of Object.keys(THEME_COLORS)) {
+      expect(themeValues, `тема ${key} есть в палитре, но её нельзя выбрать`).toContain(key);
+    }
+    expect(themeValues, "«своя тема» — отдельный пункт").toContain(CUSTOM_THEME);
+    expect(d.getElementById("stats_button_color"), "выбор своего цвета").not.toBeNull();
     const plate = d.getElementById("nick_plate_position") as HTMLSelectElement | null;
     expect(plate, "селект угла плашки").not.toBeNull();
     const values = Array.from(plate?.querySelectorAll("option") || []).map((o) =>

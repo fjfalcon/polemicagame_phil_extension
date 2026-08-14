@@ -565,3 +565,48 @@ describe("окно последних игр", () => {
     expect(urls.some((u) => u.includes("get-games")), "запрос ушёл без ожидания").toBe(true);
   });
 });
+
+/**
+ * Цветовая схема кнопок (просьба владельца 13.08.2026: белая по умолчанию,
+ * прежняя синяя отдельным пунктом, плюс «своя»).
+ *
+ * Сторожим проводку: палитра живёт в shared, а перекраска — в content, и
+ * между ними легко потерять именно «свой цвет» (единственное значение,
+ * которое приходит не из палитры).
+ */
+describe("цвет кнопок игрока", () => {
+  async function board(settings: Record<string, unknown>): Promise<HTMLElement> {
+    playerNotesFeature.disable();
+    seam.subs = [];
+    await playerNotesFeature.enable({
+      settings: { statistics_enabled: true, btn_stats_enabled: true, ...settings } as never,
+    });
+    document.body.className = "";
+    document.body.innerHTML = `
+      <div class="players"><div class="player" id="p0">
+        <div class="player__info info"><span class="info__name">Alpha</span></div>
+      </div></div>`;
+    fire([rec({ target: document.body, added: [document.querySelector(".player") as Node] })]);
+    await vi.advanceTimersByTimeAsync(1);
+    return document.querySelector("#p0 .stats-button") as HTMLElement;
+  }
+
+  test("по умолчанию кнопки белые", async () => {
+    const button = await board({});
+    expect(button.style.color).toBe("rgb(255, 255, 255)");
+  });
+
+  test("«своя тема» красит в выбранный цвет", async () => {
+    const button = await board({ stats_button_theme: "custom", stats_button_color: "#12ab34" });
+    expect(button.style.color).toBe("rgb(18, 171, 52)");
+  });
+
+  test("смена темы в попапе перекрашивает уже нарисованные кнопки", async () => {
+    // Иначе цвет применялся бы только к кнопкам следующей игры.
+    const button = await board({});
+    playerNotesFeature.update?.({
+      settings: { statistics_enabled: true, btn_stats_enabled: true, stats_button_theme: "classic" },
+    } as never);
+    expect(button.style.color).toBe("rgb(66, 103, 178)");
+  });
+});
