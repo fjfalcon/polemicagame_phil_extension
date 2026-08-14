@@ -1320,6 +1320,23 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   $("stats_button_theme")?.addEventListener("change", syncCustomColorRow);
 
+  // Свой цвет сохраняется и по ЖИВОМУ выбору, а не только по change: Firefox
+  // на macOS не доносит change от системной палитры до попапа (жалоба
+  // владельца 14.08.2026 — «выбрал цвет, остался тот же»). Дроссель
+  // обязателен: пока курсор возят по спектру, input сыплется десятками в
+  // секунду, и каждый писал бы в storage.
+  {
+    const colorInput = $<HTMLInputElement>("stats_button_color");
+    let colorSaveTimer: number | null = null;
+    colorInput?.addEventListener("input", () => {
+      if (colorSaveTimer !== null) window.clearTimeout(colorSaveTimer);
+      colorSaveTimer = window.setTimeout(() => {
+        colorSaveTimer = null;
+        saveSettings();
+      }, 250);
+    });
+  }
+
   // Мгновенная визуальная реакция на мастер-выключатель (не ждём storage.onChanged).
   $<HTMLInputElement>("extension_enabled")?.addEventListener("change", (e) => {
     applyExtOff((e.target as HTMLInputElement).checked);
