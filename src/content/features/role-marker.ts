@@ -48,6 +48,8 @@ let storeAll: Record<string, Marks> = {}; // gameKey -> Marks
 let gameKey: string | null = null;
 let marks: Marks = {};
 
+/** Иконки сайта в метке (настройка role_marker_icons_enabled). */
+let useIcons = true;
 let offDom: (() => void) | null = null;
 let closeMenu: (() => void) | null = null;
 /** Отложенная (на тик) подписка меню на клик вне его — гасится вместе с меню. */
@@ -198,16 +200,25 @@ function persist(): void {
  * на частоте кадров и подвешивала страницу. Сверяемся с dataset.role и выходим.
  */
 export function paintMarker(marker: HTMLElement, roleId: string): void {
-  if (marker.dataset.role === roleId) return;
+  // В ключе идемпотентности и ВИД: смена настройки «иконки/текст» обязана
+  // перерисовать метку с той же ролью, а прежний гейт по одной роли её
+  // пропускал бы до конца игры.
+  const paintKey = `${roleId}|${useIcons ? "icon" : "text"}`;
+  if (marker.dataset.role === paintKey) return;
   const r = roleById(roleId);
-  marker.dataset.role = roleId;
+  marker.dataset.role = paintKey;
   marker.style.background = r.color;
   marker.style.color = r.text;
   // Иконка сайта вместо подписи «Мир/Шер/Дон» — те же фрагменты спрайта, что
   // рисует сама комната. Сброс («?») остаётся текстом: у него иконки нет.
-  if (r.sprite) marker.innerHTML = createRoleSvg(r.sprite, 14);
+  if (useIcons && r.sprite) marker.innerHTML = createRoleSvg(r.sprite, 14);
   else marker.textContent = r.abbr;
   marker.title = `Мой read: ${r.label}`;
+}
+
+/** Тестовый шов и приёмник настройки. */
+export function setRoleMarkerIcons(on: boolean): void {
+  useIcons = on;
 }
 
 function openMenu(marker: HTMLElement, username: string): void {
@@ -336,7 +347,13 @@ function scan(): void {
 export const roleMarkerFeature: Feature = {
   id: "role-marker",
   settingKey: "role_marker_enabled",
-  async enable() {
+  update(ctx) {
+    setRoleMarkerIcons(ctx.settings.role_marker_icons_enabled !== false);
+    // Перерисовать уже стоящие метки: paintKey сменился, scan закрасит заново.
+    scan();
+  },
+  async enable(ctx) {
+    setRoleMarkerIcons(ctx.settings.role_marker_icons_enabled !== false);
     let res: { [STORAGE_KEY]: Record<string, Marks> };
     try {
       res = (await browser.storage.local.get({ [STORAGE_KEY]: {} })) as typeof res;

@@ -18,7 +18,7 @@ vi.mock("@core/log", () => ({
 vi.mock("@core/toast", () => ({ showToast: vi.fn(), clearToasts: vi.fn() }));
 vi.mock("@core/dom", () => ({ onDomChange: vi.fn(() => () => {}) }));
 
-import { paintMarker } from "@content/features/role-marker";
+import { paintMarker, setRoleMarkerIcons } from "@content/features/role-marker";
 import { resetRoleSpriteCache } from "@content/role-sprite";
 
 const hrefOf = (m: HTMLElement): string =>
@@ -33,6 +33,7 @@ function marker(): HTMLElement {
 afterEach(() => {
   document.body.innerHTML = "";
   resetRoleSpriteCache();
+  setRoleMarkerIcons(true);
 });
 
 describe("иконки сайта в метке", () => {
@@ -65,6 +66,26 @@ describe("иконки сайта в метке", () => {
     const m = marker();
     paintMarker(m, "sheriff");
     expect(hrefOf(m)).toBe("/room/bundle/abc123.svg#sheriff");
+  });
+
+  test("настройка выключена — прежние подписи «Мир/Шер/Дон»", () => {
+    setRoleMarkerIcons(false);
+    const m = marker();
+    paintMarker(m, "don");
+    expect(m.querySelector("use"), "иконки выключены").toBeNull();
+    expect(m.textContent).toBe("Дон");
+  });
+
+  test("переключение вида ПЕРЕРИСОВЫВАЕТ метку с той же ролью", () => {
+    // Прежний гейт идемпотентности сравнивал только роль — смена «иконки ↔
+    // текст» без этой поправки не применялась бы до конца игры.
+    const m = marker();
+    paintMarker(m, "civ");
+    expect(m.querySelector("use")).not.toBeNull();
+    setRoleMarkerIcons(false);
+    paintMarker(m, "civ");
+    expect(m.querySelector("use"), "тот же роль-id, но вид сменился").toBeNull();
+    expect(m.textContent).toBe("Мир");
   });
 
   test("повторная перерисовка той же роли НИЧЕГО не пишет (§4 п.1)", () => {

@@ -921,6 +921,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Тему могли сменить с другого устройства — строка своего цвета обязана
     // появиться/исчезнуть вместе с ней.
     if ("stats_button_theme" in patch) syncCustomColorRow();
+    if ("role_marker_enabled" in patch) syncRoleMarkerIconsRow();
     if (typeof patch.stats_button_color === "string") {
       reflectButtonColor(readButtonColor(patch.stats_button_color));
     }
@@ -1049,6 +1050,8 @@ document.addEventListener("DOMContentLoaded", () => {
     set("last_games_first_killed", items.last_games_first_killed);
     set("note_indicator_enabled", items.note_indicator_enabled);
     set("role_marker_enabled", items.role_marker_enabled);
+    set("role_marker_icons_enabled", items.role_marker_icons_enabled);
+    syncRoleMarkerIconsRow();
     set("compact_nicknames_enabled", items.compact_nicknames_enabled);
     const npp = $<HTMLSelectElement>("nick_plate_position");
     // Нормализация: мусор в storage иначе оставил бы селект пустым.
@@ -1163,6 +1166,7 @@ document.addEventListener("DOMContentLoaded", () => {
       last_games_first_killed: cb("last_games_first_killed", true),
       note_indicator_enabled: cb("note_indicator_enabled", true),
       role_marker_enabled: cb("role_marker_enabled", false),
+      role_marker_icons_enabled: cb("role_marker_icons_enabled", true),
       compact_nicknames_enabled: cb("compact_nicknames_enabled", false),
       nick_plate_position: $<HTMLSelectElement>("nick_plate_position")?.value || "default",
       ws_full_log_enabled: cb("ws_full_log_enabled", false),
@@ -1291,6 +1295,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "last_games_first_killed",
     "note_indicator_enabled",
     "role_marker_enabled",
+    "role_marker_icons_enabled",
     "compact_nicknames_enabled",
     "nick_plate_position",
     "ws_full_log_enabled",
@@ -1322,6 +1327,14 @@ document.addEventListener("DOMContentLoaded", () => {
       $<HTMLSelectElement>("stats_button_theme")?.value === CUSTOM_THEME ? "" : "none";
   }
   $("stats_button_theme")?.addEventListener("change", syncCustomColorRow);
+
+  /** Строка «Использовать иконки» видна только при включённых метках ролей. */
+  function syncRoleMarkerIconsRow(): void {
+    const row = $("role_marker_icons_row");
+    if (!row) return;
+    row.style.display = $<HTMLInputElement>("role_marker_enabled")?.checked ? "" : "none";
+  }
+  $("role_marker_enabled")?.addEventListener("change", syncRoleMarkerIconsRow);
 
   // Свой цвет: СОБСТВЕННАЯ палитра внутри попапа + поле #rrggbb. Никакого
   // <input type=color>: системная пипетка на macOS открывается отдельным

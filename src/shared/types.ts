@@ -55,6 +55,8 @@ export interface Settings {
   note_indicator_enabled: boolean;
   /** Квадратик-метка роли у игрока (мой read, сбрасывается за игру). */
   role_marker_enabled: boolean;
+  /** В метке — иконка роли из спрайта сайта; false — прежние «Мир/Шер/Дон». */
+  role_marker_icons_enabled: boolean;
   /** Управлять раскладкой кнопок действий в игре. */
   safe_controls_layout_enabled: boolean;
   /** Позиция кнопки в центре ряда: left | center | right. */
