@@ -596,6 +596,12 @@ class PlayerNotesManager {
           } else {
             this.applyStatsButtonTheme();
             this.processExistingElements();
+            // Точки «есть заметка» — здесь же: настройки приезжают ДВУМЯ
+            // путями (это сообщение и storage.onChanged→update), причём
+            // сообщение первым вливает их в this.settings — и проверка
+            // «изменилось ли» во втором пути уже не видит изменения. Жалоба
+            // 15.08.2026: тумблер выключен, а точка стоит.
+            this.refreshNoteIndicators();
             // Выключение nick_colors_enabled должно снять покраску сразу.
             this.refreshNickColors();
             // Смена толщины рамки должна примениться сразу, без ожидания
@@ -761,7 +767,6 @@ class PlayerNotesManager {
 
   update(ctx: FeatureContext): void {
     const cameraWasEnabled = this.settings.camera_rotate_enabled;
-    const indicatorWas = this.settings.note_indicator_enabled;
     const gamesViewChanged =
       this.settings.last_games_count !== ctx.settings.last_games_count ||
       this.settings.last_games_first_killed !== ctx.settings.last_games_first_killed;
@@ -777,8 +782,10 @@ class PlayerNotesManager {
       this.removeStatisticsElements();
       return;
     }
-    // Тумблер точки применяется сразу: и снятие, и возврат.
-    if (indicatorWas !== this.settings.note_indicator_enabled) this.refreshNoteIndicators();
+    // Тумблер точки применяется сразу, БЕЗУСЛОВНО: сравнение «изменилось ли»
+    // тут не работает — быстрый путь (сообщение попапа) вливает настройки
+    // раньше, и диф всегда пуст. Сам refresh идемпотентен и дёшев.
+    this.refreshNoteIndicators();
     this.applyStatsButtonTheme();
     this.processExistingElements();
     this.updateAllTooltips();

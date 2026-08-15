@@ -52,8 +52,14 @@ vi.mock("@core/env", () => ({ browser: browserMock }));
 vi.mock("@core/log", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+const msgSeam = vi.hoisted(() => ({ handler: null as ((m: unknown) => void) | null }));
 vi.mock("@core/messaging", () => ({
-  onMessage: vi.fn(() => () => {}),
+  onMessage: vi.fn((cb: (m: unknown) => void) => {
+    msgSeam.handler = cb;
+    return () => {
+      msgSeam.handler = null;
+    };
+  }),
   sendRuntime: vi.fn(async () => ({ success: true })),
   broadcastToGameTabs: vi.fn(),
   sendToActiveTabStrict: vi.fn(),
@@ -651,6 +657,31 @@ describe("тумблер точки «есть заметка»", () => {
   test("включено — точка стоит у игрока с заметкой", async () => {
     await boardWithNote(true);
     expect(document.querySelector(".pn-note-dot"), "заметка есть — точка есть").not.toBeNull();
+  });
+
+  test("выключение ЧЕРЕЗ СООБЩЕНИЕ попапа снимает точку (жалоба 15.08.2026)", async () => {
+    // Настройки приезжают двумя путями, и быстрый (сообщение) вливает их
+    // раньше storage-пути — диф-проверка второго пути всегда пуста. Баг
+    // выглядел так: тумблер выключен, а точка стоит.
+    await boardWithNote(true);
+    expect(document.querySelector(".pn-note-dot")).not.toBeNull();
+
+    msgSeam.handler?.({
+      type: "updateNotesSettings",
+      settings: { note_indicator_enabled: false },
+    });
+    expect(document.querySelector(".pn-note-dot"), "точка снята быстрым путём").toBeNull();
+
+    // И контрольный второй путь с ТЕМИ ЖЕ настройками (диф пуст) — точка
+    // не воскресает и не остаётся при обратном включении.
+    playerNotesFeature.update?.({
+      settings: {
+        statistics_enabled: true,
+        btn_note_enabled: true,
+        note_indicator_enabled: false,
+      } as never,
+    } as never);
+    expect(document.querySelector(".pn-note-dot")).toBeNull();
   });
 
   test("выключено — точки нет, а при выключении на лету снимается", async () => {
