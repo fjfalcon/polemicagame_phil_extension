@@ -20,6 +20,7 @@ import { getOwnUserId } from "@core/own-user";
 import { searchFeature } from "./features/search";
 import { autoStartFeature } from "./features/auto-start";
 import { cameraHealthFeature } from "./features/camera-health";
+import { freezeWatchFeature } from "./features/freeze-watch";
 import { hotkeyHintsFeature } from "./features/hotkey-hints";
 import { outcryHotkeyFeature } from "./features/outcry-hotkey";
 import { playerNotesFeature, syncPlayerNotesRoute } from "./features/player-notes";
@@ -52,6 +53,7 @@ const manager = new FeatureManager().register(
   outcryHotkeyFeature,
   hotkeyHintsFeature,
   cameraHealthFeature,
+  freezeWatchFeature,
   f5RefreshFeature,
   roleMarkerFeature,
   updateNotifyFeature,
