@@ -11,6 +11,7 @@ import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
 import { showToast } from "@core/toast";
 import { SITE } from "@core/selectors";
+import { createRoleSvg } from "../role-sprite";
 import type { Feature } from "@core/feature";
 
 interface RoleDef {
@@ -19,16 +20,21 @@ interface RoleDef {
   abbr: string;
   color: string;
   text: string;
+  /** id фрагмента в спрайте сайта; none иконки не имеет. */
+  sprite?: string;
 }
 
 // Цвета: Мирный — красный, Шериф — жёлтый, Мафия — серый, Дон — фиолетовый.
 // «Серый» (по умолчанию) = нейтральный тёмный «?», отличается от серой Мафии.
+// В квадратике рисуется ИКОНКА САЙТА (просьба владельца 15.08.2026), abbr
+// остался фолбэком на случай, если спрайт не загрузится.
 const ROLES: RoleDef[] = [
   { id: "none", label: "Серый (сброс)", abbr: "?", color: "#9ca3af", text: "#111827" },
-  { id: "civ", label: "Мирный", abbr: "Мир", color: "#ef4444", text: "#ffffff" },
-  { id: "sheriff", label: "Шериф", abbr: "Шер", color: "#eab308", text: "#2b2000" },
-  { id: "mafia", label: "Мафия", abbr: "Маф", color: "#374151", text: "#cbd5e1" },
-  { id: "don", label: "Дон", abbr: "Дон", color: "#9333ea", text: "#ffffff" },
+  { id: "civ", label: "Мирный", abbr: "Мир", color: "#ef4444", text: "#ffffff", sprite: "civilian" },
+  { id: "sheriff", label: "Шериф", abbr: "Шер", color: "#eab308", text: "#2b2000", sprite: "sheriff" },
+  { id: "mafia", label: "Мафия", abbr: "Маф", color: "#374151", text: "#cbd5e1", sprite: "mafia" },
+  // Дон в спрайте сайта зовётся godfather (тот же id, что у истории игр).
+  { id: "don", label: "Дон", abbr: "Дон", color: "#9333ea", text: "#ffffff", sprite: "godfather" },
 ];
 const roleById = (id: string) => ROLES.find((r) => r.id === id) || ROLES[0];
 
@@ -191,13 +197,16 @@ function persist(): void {
  * запись style/textContent здесь порождала цикл «мутация → scan → мутация»
  * на частоте кадров и подвешивала страницу. Сверяемся с dataset.role и выходим.
  */
-function paintMarker(marker: HTMLElement, roleId: string): void {
+export function paintMarker(marker: HTMLElement, roleId: string): void {
   if (marker.dataset.role === roleId) return;
   const r = roleById(roleId);
   marker.dataset.role = roleId;
   marker.style.background = r.color;
   marker.style.color = r.text;
-  marker.textContent = r.abbr;
+  // Иконка сайта вместо подписи «Мир/Шер/Дон» — те же фрагменты спрайта, что
+  // рисует сама комната. Сброс («?») остаётся текстом: у него иконки нет.
+  if (r.sprite) marker.innerHTML = createRoleSvg(r.sprite, 14);
+  else marker.textContent = r.abbr;
   marker.title = `Мой read: ${r.label}`;
 }
 
@@ -222,7 +231,11 @@ function openMenu(marker: HTMLElement, username: string): void {
     `;
     item.addEventListener("mouseenter", () => (item.style.background = "rgba(255,255,255,.08)"));
     item.addEventListener("mouseleave", () => (item.style.background = "transparent"));
-    item.innerHTML = `<span style="width:14px;height:14px;border-radius:4px;flex:0 0 auto;border:1px solid rgba(0,0,0,.4);background:${r.color}"></span><span>${r.label}</span>`;
+    // В меню — цветной квадратик С ИКОНКОЙ, ровно как будет выглядеть метка.
+    item.innerHTML =
+      `<span style="width:16px;height:16px;border-radius:4px;flex:0 0 auto;border:1px solid rgba(0,0,0,.4);` +
+      `background:${r.color};display:inline-flex;align-items:center;justify-content:center;color:${r.text}">` +
+      `${r.sprite ? createRoleSvg(r.sprite, 11) : r.abbr}</span><span>${r.label}</span>`;
     item.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();

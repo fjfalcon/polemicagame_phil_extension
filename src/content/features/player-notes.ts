@@ -39,6 +39,7 @@ import { onDomChange, paintNickEl } from "@core/dom";
 import { onMessage, sendRuntime } from "@core/messaging";
 import { toggleFlipForPlayer, isPlayerFlipped, unflipAll } from "../camera-flip";
 import { getMatchId } from "../match-data";
+import { createRoleSvg } from "../role-sprite";
 import { escapeHtml } from "@core/escape";
 import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
 import {
@@ -516,7 +517,6 @@ class PlayerNotesManager {
   /** Тултип → его кнопка: на время показа тултип уезжает в body (портал). */
   private tooltipAnchors = new WeakMap<HTMLElement, HTMLElement>();
 
-  private roleSpriteBaseUrl: string | null = null;
 
   // Подписки/слушатели для последующей очистки в disable().
   private unsubscribers: Array<() => void> = [];
@@ -3749,72 +3749,11 @@ class PlayerNotesManager {
   }
 
   // ─────────── SVG ролей ───────────
-
-  private resolveRoleSpriteBaseUrl(): string {
-    if (this.roleSpriteBaseUrl !== null) return this.roleSpriteBaseUrl;
-
-    const roleMarkers = ["#civilian", "#sheriff", "#mafia", "#godfather"];
-
-    if (document.querySelector(SITE.roleSymbols)) {
-      this.roleSpriteBaseUrl = "";
-      return this.roleSpriteBaseUrl;
-    }
-
-    const useElements = document.querySelectorAll(SITE.roleUse);
-
-    for (const useEl of Array.from(useElements)) {
-      const rawHref =
-        useEl.getAttribute("href") || useEl.getAttribute("xlink:href");
-      if (!rawHref) continue;
-      if (roleMarkers.includes(rawHref)) {
-        this.roleSpriteBaseUrl = "";
-        return this.roleSpriteBaseUrl;
-      }
-      if (!rawHref.includes("/bundle/") || !rawHref.includes(".svg")) continue;
-      if (!roleMarkers.some((m) => rawHref.includes(m))) continue;
-      const base = rawHref.split("#")[0];
-      if (base) {
-        this.roleSpriteBaseUrl = base;
-        return base;
-      }
-    }
-
-    for (const useEl of Array.from(useElements)) {
-      const rawHref =
-        useEl.getAttribute("href") || useEl.getAttribute("xlink:href");
-      if (!rawHref) continue;
-      if (!rawHref.includes("/bundle/") || !rawHref.includes(".svg")) continue;
-      const base = rawHref.split("#")[0];
-      if (base) {
-        this.roleSpriteBaseUrl = base;
-        return base;
-      }
-    }
-
-    const defaultPrefix = window.location.pathname.includes("/new-room/")
-      ? "/new-room/bundle/"
-      : "/room/bundle/";
-    this.roleSpriteBaseUrl = `${defaultPrefix}f59bacbc2885635c4d91.svg`;
-    return this.roleSpriteBaseUrl;
-  }
+  // Спрайт и разметка вынесены в content/role-sprite.ts (общие с метками
+  // ролей). Методы-делегаты сохранены: вызовов много, а поведение прежнее.
 
   private createRoleSvg(roleId: string, size: number): string {
-    const base = this.resolveRoleSpriteBaseUrl();
-    const href = `${base}#${roleId}`;
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    svg.setAttributeNS(
-      "http://www.w3.org/2000/xmlns/",
-      "xmlns:xlink",
-      "http://www.w3.org/1999/xlink",
-    );
-    svg.setAttribute("width", String(size));
-    svg.setAttribute("height", String(size));
-    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-    use.setAttribute("href", href);
-    use.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", href);
-    svg.appendChild(use);
-    return svg.outerHTML;
+    return createRoleSvg(roleId, size);
   }
 
   // ─────────── Инъекция кнопок к игрокам ───────────
