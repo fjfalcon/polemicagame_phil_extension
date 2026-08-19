@@ -126,6 +126,8 @@ export interface Settings {
   twitch_chat_enabled: boolean;
   twitch_channel_name: string;
   twitch_floating_panel_enabled: boolean;
+  /** Чат на всех страницах сайта (поиск, лобби, профиль), не только в игре. */
+  twitch_chat_everywhere: boolean;
 }
 
 export type SettingKey = keyof Settings;

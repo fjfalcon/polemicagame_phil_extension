@@ -31,6 +31,7 @@ import {
   matchFinishedVisible,
 } from "@core/selectors";
 import { isGameRoomPath } from "@shared/routes";
+import { showToast } from "@core/toast";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { ObsConnectionState, ObsScene } from "@shared/types";
 
@@ -969,8 +970,19 @@ function requestTimeOfDayCheck(): void {
   // Route-гейт (перф-аудит 06.08.2026, PERF-4): вне игровой комнаты фаз не
   // существует, а детектор на /game-search дважды за проверку сериализовал
   // document.body.textContent и был способен «подтвердить день» и дёрнуть
-  // сцену эфира с посторонней страницы.
-  if (!isGameRoomPath(location.pathname)) return;
+  // сцену эфира с посторонней страницы. Единственное, что делаем вне комнаты
+  // — возвращаем день, если ушли ночью (это не детекция, а сброс).
+  if (!isGameRoomPath(location.pathname)) {
+    resetNightOnLeave();
+    return;
+  }
+  // Долгая ночь: не переключаем (честная ночь бывает длинной), подсказываем.
+  if (currentTimeOfDay === "night" && !longNightWarned && isLongNight(nightSince, Date.now())) {
+    longNightWarned = true;
+    const minutes = Math.round((Date.now() - (nightSince ?? Date.now())) / 60_000);
+    log.warn(SCOPE, `ночная сцена держится уже ${minutes} мин — проверь, не зависла ли фаза`);
+    showToast(`Ночная сцена на стриме уже ${minutes} мин — проверь, всё ли так`);
+  }
 
   if (timeOfDayCheckDebounceTimer) {
     timeOfDayCheckQueued = true;
@@ -1022,6 +1034,8 @@ function evaluateTimeOfDay(): void {
         log.info(SCOPE, "фаза подтверждена:", currentTimeOfDay, "→", confirmedTimeOfDay);
         currentTimeOfDay = confirmedTimeOfDay;
         pendingTimeOfDay = null;
+        nightSince = confirmedTimeOfDay === "night" ? Date.now() : null;
+        longNightWarned = false;
         if (confirmedTimeOfDay === "day") await hideRoleBeforeDaySceneSwitch();
         scheduleRoleVisibility(confirmedTimeOfDay);
         void savePersistedAutoState();
@@ -1039,6 +1053,66 @@ function evaluateTimeOfDay(): void {
       }
     }, 350);
   }
+}
+
+/**
+ * Сколько ночная сцена может держаться молча. Честная ночь с паузой и
+ * договоркой бывает длинной, поэтому порог щедрый: не переключаем, только
+ * подсказываем стримеру (жалоба 16.08.2026: «какая-то долгая ночь»).
+ */
+export const LONG_NIGHT_MS = 4 * 60_000;
+
+/**
+ * Нужно ли вернуть дневную сцену при уходе из комнаты. Чистая функция —
+ * сторожится мутационно. Вне комнаты фаз нет, и ночной оверлей на стриме
+ * становится враньём: игрок уже в поиске, а зрители видят «ночь» (жалоба
+ * 16.08.2026 — пришлось переключать вручную, в чате «какая-то долгая ночь»).
+ */
+export function shouldResetNightOnLeave(input: {
+  autoMode: boolean;
+  inRoom: boolean;
+  currentTimeOfDay: TimeOfDay | null;
+}): boolean {
+  return input.autoMode && !input.inRoom && input.currentTimeOfDay === "night";
+}
+
+/** Держится ли ночная сцена дольше разумного (для подсказки, не для смены). */
+export function isLongNight(nightSince: number | null, now: number): boolean {
+  return nightSince !== null && now - nightSince >= LONG_NIGHT_MS;
+}
+
+/** Когда началась текущая ночная сцена; null — сейчас не ночь. */
+let nightSince: number | null = null;
+/** Подсказка о долгой ночи показана для ЭТОЙ ночи — не повторяем. */
+let longNightWarned = false;
+
+/**
+ * Уход из комнаты ночью: вернуть день. Гейт route у остальных путей остаётся
+ * (PERF-4: вне комнаты фазы не ДЕТЕКТИРУЮТСЯ), но возврат на день — не
+ * детекция, а сброс известного состояния, и ему вне комнаты самое место.
+ */
+function resetNightOnLeave(): void {
+  if (
+    !shouldResetNightOnLeave({
+      autoMode: autoModeEnabled,
+      inRoom: isGameRoomPath(location.pathname),
+      currentTimeOfDay,
+    })
+  ) {
+    return;
+  }
+  log.info(SCOPE, "ушли из комнаты ночью — возвращаем дневную сцену");
+  currentTimeOfDay = "day";
+  nightSince = null;
+  longNightWarned = false;
+  if (!dayScene) {
+    log.info(SCOPE, "дневная сцена не выбрана — вернуть нечего");
+    return;
+  }
+  if (currentScene === dayScene) return;
+  void switchScene(dayScene).catch((e: Error) => {
+    log.warn(SCOPE, "возврат дневной сцены при уходе не удался", e);
+  });
 }
 
 /** Автоматически переключает сцену в зависимости от времени суток. */
@@ -1440,6 +1514,8 @@ export const obsPanelFeature: Feature = {
     currentScene = null;
     obsSessionId = null;
     currentTimeOfDay = null;
+    nightSince = null;
+    longNightWarned = false;
     phaseConfirmedLive = false;
     phaseFlagPathname = "";
     lastAppliedRoleVisibility = null;

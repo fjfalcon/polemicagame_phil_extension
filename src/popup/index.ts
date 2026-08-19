@@ -1109,6 +1109,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (twitchChannelName) twitchChannelName.value = items.twitch_channel_name;
     set("twitch_floating_panel_enabled", items.twitch_floating_panel_enabled);
+    set("twitch_chat_everywhere", items.twitch_chat_everywhere);
     if (items.twitch_chat_enabled) {
       // Тихий пробник: попап, открытый с чужой вкладки (YouTube и т.п.),
       // не должен рисовать «⚠️ Откройте страницу игры» в twitch-статус.
@@ -1217,6 +1218,7 @@ document.addEventListener("DOMContentLoaded", () => {
       twitch_chat_enabled: cb("twitch_chat_enabled", false),
       twitch_channel_name: val("twitch_channel_name", ""),
       twitch_floating_panel_enabled: cb("twitch_floating_panel_enabled", false),
+      twitch_chat_everywhere: cb("twitch_chat_everywhere", true),
     };
 
     // Пишем ТОЛЬКО изменившиеся ключи. До завершения загрузки не пишем вовсе —
@@ -1310,6 +1312,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "update_check_enabled",
     "debug_logging_enabled",
     "connection_diag_enabled",
+    "twitch_chat_everywhere",
   ];
   simpleChangeIds.forEach((id) => {
     const el = $(id);

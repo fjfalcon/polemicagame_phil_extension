@@ -165,6 +165,34 @@ function formatTime(date: Date): string {
 }
 
 /** Детекция активного игрового интерфейса (порт hasActiveGameInterface). */
+/**
+ * Где живёт чат: «везде на сайте» (по умолчанию) или «только в игре».
+ * Просьба владельца 16.08.2026: стример вне игры (поиск, лобби, профиль)
+ * чата не видел, хотя со зрителями разговаривает и там. Режим «только в игре»
+ * — прежнее поведение, оставлен как выбор.
+ */
+export type ChatScope = "site" | "game";
+let chatScope: ChatScope = "site";
+
+/** Тестовый шов. */
+export function setChatScope(scope: ChatScope): void {
+  chatScope = scope;
+}
+
+/**
+ * Чату здесь место? Единый гейт вместо четырёх route-проверок: в режиме
+ * «везде» — любая страница сайта (мы и так инжектимся только на него),
+ * в режиме «только игра» — комната с живым игровым UI, как раньше.
+ */
+export function chatBelongsHere(input: {
+  scope: ChatScope;
+  pathname: string;
+  gameUi: boolean;
+}): boolean {
+  if (input.scope === "site") return true;
+  return isGameRoomPath(input.pathname) && input.gameUi;
+}
+
 function hasActiveGameInterface(): boolean {
   const playerCount = document.querySelectorAll(SITE.playerDesktop).length;
   const webcamCount = document.querySelectorAll(SITE.playerVideo).length;
@@ -786,7 +814,7 @@ function startIdleWatchdog(): void {
     // Страховка PERF-7: если уход с игрового маршрута прошёл без единой
     // childList-мутации (и sync его не заметил), тик watchdog'а добивает
     // соединение сам — сокет вне /game не нужен никому.
-    if (!isGameRoomPath(location.pathname)) {
+    if (!chatBelongsHere({ scope: chatScope, pathname: location.pathname, gameUi: hasActiveGameInterface() })) {
       disconnect();
       return;
     }
@@ -867,20 +895,17 @@ function syncVisibilityWithGameState(): void {
   // DOM-вставки чата и 60-секундный watchdog продолжались на поиске/лобби всю
   // сессию (PERF-7). Скрытие панели ПОЛЬЗОВАТЕЛЕМ (panelWanted) — отдельная
   // политика и здесь не трогается: она про видимость, а не про маршрут.
-  if (!isGameRoomPath(location.pathname)) {
+  const hasGameUi = hasActiveGameInterface();
+  const belongs = chatBelongsHere({ scope: chatScope, pathname: location.pathname, gameUi: hasGameUi });
+  if (!belongs) {
     gameUiVisible = false;
     hidePanel();
     if (socket || reconnectTimer || idleWatchdog || joinWatchdog) disconnect();
     return;
   }
-
-  const hasGameUi = hasActiveGameInterface();
-  gameUiVisible = hasGameUi;
-
-  if (!hasGameUi) {
-    hidePanel();
-    return;
-  }
+  // gameUiVisible — исторически «панели есть где жить». В режиме «везде»
+  // это верно на любой странице; имя оставлено ради минимального диффа.
+  gameUiVisible = true;
   // Игровой UI есть — показываем, если пользователь панель не скрывал.
   if (panelWanted && (!panel || !panel.isShown)) {
     showPanel();
@@ -948,7 +973,7 @@ function scheduleReconnect(): void {
     reconnectTimer = null;
     // За время задержки могли уйти с игрового маршрута — переподключаться
     // не к чему, и остаточные watchdog'и здесь же гасим (PERF-7).
-    if (!isGameRoomPath(location.pathname)) {
+    if (!chatBelongsHere({ scope: chatScope, pathname: location.pathname, gameUi: hasActiveGameInterface() })) {
       disconnect();
       return;
     }
@@ -971,9 +996,9 @@ function connectToTwitch(): void {
   // видна (hasActiveGameInterface требует игровой UI), а соединение «в никуда»
   // жгло сеть и CPU до конца сессии (PERF-7). Явное подключение из попапа на
   // другой странице честно отвечает отказом вместо ложного успеха.
-  if (!isGameRoomPath(location.pathname)) {
-    log.debug(SCOPE, "twitch: не игровой маршрут — подключение не выполняем");
-    sendTwitchStatus(false, "Чат подключается только на странице игры");
+  if (!chatBelongsHere({ scope: chatScope, pathname: location.pathname, gameUi: hasActiveGameInterface() })) {
+    log.debug(SCOPE, "twitch: чату здесь не место (режим «только в игре») — подключение не выполняем");
+    sendTwitchStatus(false, "Чат подключается только в игре — или включите «Чат везде на сайте»");
     return;
   }
 
@@ -1254,6 +1279,7 @@ export const twitchPanelFeature: TwitchFeature = {
   enable(ctx: FeatureContext) {
     channelName = normalizeChannel(ctx.settings.twitch_channel_name || "");
     panelWanted = ctx.settings.twitch_floating_panel_enabled !== false;
+    chatScope = ctx.settings.twitch_chat_everywhere === false ? "game" : "site";
 
     unsubMessage = onMessage((msg) => {
       if (isTwitchControlMsg(msg)) handleControlMessage(msg);
@@ -1289,6 +1315,14 @@ export const twitchPanelFeature: TwitchFeature = {
   },
 
   update(ctx: FeatureContext) {
+    const nextScope: ChatScope = ctx.settings.twitch_chat_everywhere === false ? "game" : "site";
+    if (nextScope !== chatScope) {
+      chatScope = nextScope;
+      // Сменили режим — пересверить, место ли чату здесь; сверка сама
+      // поднимет панель/сокет или погасит их.
+      syncVisibilityWithGameState();
+      if (channelName && gameUiVisible && !hasLiveSocket()) connectToTwitch();
+    }
     const next = normalizeChannel(ctx.settings.twitch_channel_name || "");
     if (next !== channelName) {
       channelName = next;

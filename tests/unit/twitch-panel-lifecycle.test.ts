@@ -148,9 +148,9 @@ function mountGameUi(): void {
   document.body.appendChild(controls);
 }
 
-function enableFeature(): void {
+function enableFeature(over: Record<string, unknown> = {}): void {
   twitchPanelFeature.enable({
-    settings: { twitch_chat_enabled: true, twitch_channel_name: "streamer" },
+    settings: { twitch_chat_enabled: true, twitch_channel_name: "streamer", ...over },
   } as unknown as FeatureContext);
 }
 
@@ -241,8 +241,10 @@ describe("TW-P7: жизненный цикл сокета Twitch", () => {
     expect(liveSockets()).toHaveLength(1);
   });
 
-  test("уход с игрового маршрута закрывает сокет и все таймеры", () => {
-    enableFeature();
+  test("режим «только в игре»: уход с игрового маршрута закрывает сокет и все таймеры", () => {
+    // Прежний контракт PERF-7 живёт в режиме «только в игре». В режиме
+    // «везде» (дефолт с 9.28.0) чат вне игры нужен стримеру — см. тест ниже.
+    enableFeature({ twitch_chat_everywhere: false });
     const ws = lastSocket();
     ws.emitOpen(); // запускает idle- и join-watchdog'и
     expect(vi.getTimerCount()).toBeGreaterThan(0);
@@ -259,6 +261,23 @@ describe("TW-P7: жизненный цикл сокета Twitch", () => {
     // И спустя долгое время никто не переподключается втихую.
     vi.advanceTimersByTime(10 * 60 * 1000);
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  test("режим «везде» (дефолт): уход в поиск НЕ рвёт сокет — чат нужен и там", () => {
+    // Просьба владельца 16.08.2026: стример вне игры (поиск, лобби) чата не
+    // видел. Переход по сайту — SPA, соединение одно на вкладку.
+    enableFeature();
+    const ws = lastSocket();
+    ws.emitOpen();
+    const before = ws.closeCalls;
+
+    window.history.replaceState(null, "", "/game-search");
+    h.domSub?.([childRecord()]);
+    vi.advanceTimersByTime(600);
+
+    expect(ws.closeCalls, "сокет жив на поиске").toBe(before);
+    expect(liveSockets()).toHaveLength(1);
+    expect(FakeWebSocket.instances, "и новых подключений не плодим").toHaveLength(1);
   });
 
   test("disable() не оставляет ни сокетов, ни таймеров, ни реконнекта", () => {
