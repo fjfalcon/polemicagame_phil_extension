@@ -20,6 +20,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const h = vi.hoisted(() => ({
   domSub: null as null | ((mutations: MutationRecord[]) => void),
   msgHandler: null as null | ((msg: unknown) => void),
+  /** Сколько раз панель реально показали (FloatingPanel.show). */
+  panelShows: 0,
 }));
 
 vi.mock("@core/dom", () => ({
@@ -60,6 +62,7 @@ vi.mock("@core/FloatingPanel", () => ({
     isMounted = false;
     constructor(_opts: unknown) {}
     show(): void {
+      h.panelShows++;
       this.isMounted = true;
       this.root.style.display = "";
     }
@@ -175,6 +178,7 @@ function spyDocQsa(): { n: number } {
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
+  h.panelShows = 0;
   (globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket;
   vi.useFakeTimers();
   vi.setSystemTime(new Date(1_800_000_000_000));
@@ -278,6 +282,61 @@ describe("TW-P7: жизненный цикл сокета Twitch", () => {
     expect(ws.closeCalls, "сокет жив на поиске").toBe(before);
     expect(liveSockets()).toHaveLength(1);
     expect(FakeWebSocket.instances, "и новых подключений не плодим").toHaveLength(1);
+  });
+
+  test("режим «везде»: загрузка ВНЕ игры (поиск, без игрового UI) — панель показана, сокет открыт", () => {
+    // Жалоба 23.08.2026: «чат вне игры совсем не видно». Причина: showPanel()
+    // требовал hasActiveGameInterface() — 10 плиток игроков, которых на
+    // поиске нет, — и молча выходил; следом гейт gameUiVisible не давал
+    // открыть и сокет. «Чат везде» существовал только в комнате.
+    document.body.innerHTML = ""; // на поиске игрового UI нет
+    window.history.replaceState(null, "", "/game-search");
+
+    enableFeature(); // twitch_chat_everywhere по умолчанию (site)
+
+    expect(h.panelShows, "панель поднята без игрового UI").toBeGreaterThan(0);
+    expect(liveSockets(), "и чат подключается сразу").toHaveLength(1);
+  });
+
+  test("режим «везде»: цикл поиск → игра → выход не перезапускает ни сокет, ни панель", () => {
+    // Вопрос владельца 23.08.2026: «поиграл игру, вышел — он будет
+    // перезагружаться?». Не должен: SPA-переходы не трогают живой сокет
+    // (hasLiveSocket) и показанную панель (гейт !panel.isShown в сверке).
+    document.body.innerHTML = "";
+    window.history.replaceState(null, "", "/game-search");
+    enableFeature();
+    const ws = lastSocket();
+    ws.emitOpen();
+    const showsAfterEnable = h.panelShows;
+
+    // Зашли в игру: игровой UI смонтировался.
+    window.history.replaceState(null, "", "/game/123");
+    mountGameUi();
+    h.domSub?.([childRecord()]);
+    vi.advanceTimersByTime(600);
+
+    // Вышли обратно в поиск: игровой UI размонтировался.
+    document.body.innerHTML = "";
+    window.history.replaceState(null, "", "/game-search");
+    h.domSub?.([childRecord()]);
+    vi.advanceTimersByTime(600);
+
+    expect(FakeWebSocket.instances, "сокет один на весь цикл").toHaveLength(1);
+    expect(ws.closeCalls, "и его никто не закрывал").toBe(0);
+    expect(ws.readyState).toBe(FakeWebSocket.OPEN);
+    expect(h.panelShows, "панель не перепоказывалась").toBe(showsAfterEnable);
+  });
+
+  test("режим «только в игре»: загрузка вне игры — ни панели, ни сокета (сторож обратного)", () => {
+    // Мутант «chatBelongsHere → true» в showPanel показывал бы панель на
+    // поиске и тем, кто явно выбрал прежнее поведение.
+    document.body.innerHTML = "";
+    window.history.replaceState(null, "", "/game-search");
+
+    enableFeature({ twitch_chat_everywhere: false });
+
+    expect(h.panelShows).toBe(0);
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
   test("disable() не оставляет ни сокетов, ни таймеров, ни реконнекта", () => {

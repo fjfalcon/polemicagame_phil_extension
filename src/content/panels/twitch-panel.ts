@@ -876,10 +876,16 @@ function hasLiveSocket(): boolean {
 // ── видимость в зависимости от игрового интерфейса (порт sync...) ──
 
 function showPanel(): void {
-  if (!hasActiveGameInterface()) {
+  // Гейт — chatBelongsHere, НЕ hasActiveGameInterface: в режиме «везде»
+  // (дефолт с 9.28.0) панель обязана подниматься и на поиске/лобби, где
+  // игрового UI нет. Жёсткая проверка на 10 плиток здесь молча глотала
+  // показ вне комнаты — «чат везде» не показывался нигде, кроме игры
+  // (жалоба 23.08.2026: «пообещали — имеем ничего»).
+  if (!chatBelongsHere({ scope: chatScope, pathname: location.pathname, gameUi: hasActiveGameInterface() })) {
     gameUiVisible = false;
     return;
   }
+  gameUiVisible = true;
   const p = ensurePanel();
   p.show();
   // Подключаемся к чату при показе, если есть канал и живого сокета ещё нет.
