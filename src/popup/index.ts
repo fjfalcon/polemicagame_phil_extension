@@ -986,7 +986,12 @@ document.addEventListener("DOMContentLoaded", () => {
     roleKeyRenders.forEach((r) => r());
     const set = (id: string, val: boolean) => {
       const el = $<HTMLInputElement>(id);
-      if (el) el.checked = val;
+      // Строго === true — тем же правилом фичи включает FeatureManager.
+      // Truthy-мусор из хранилища (строка "true" и т.п.) рисовал галочку при
+      // выключенной фиче: попап врал «всё включено», а кнопок не было
+      // (жалоба 25.08.2026). Со снятой галочкой пользователь щёлкает тумблер
+      // и записывает честный boolean — хранилище самолечится.
+      if (el) el.checked = val === true;
     };
 
     set("extension_enabled", items.extension_enabled);

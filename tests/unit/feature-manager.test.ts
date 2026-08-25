@@ -17,6 +17,7 @@ vi.mock("@core/log", () => ({
 }));
 
 import { FeatureManager, type Feature } from "@core/feature";
+import { log } from "@core/log";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -65,5 +66,53 @@ describe("FeatureManager lifecycle", () => {
     state.onChange?.({ extension_enabled: true });
     await vi.advanceTimersByTimeAsync(50);
     expect(feature.update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("бут-лог пропущенных фич (жалоба 25.08.2026: «кнопок нет», а журнал молчал)", () => {
+  const gated = (): Feature => ({
+    id: "stats-like",
+    settingKey: "statistics_enabled",
+    enable: vi.fn(),
+    disable: vi.fn(),
+  });
+
+  test("truthy-мусор в хранилище: фича пропущена И журнал называет виновника с типом", async () => {
+    // Строка "true" — попап раньше рисовал галочку, гейт фичу не включал.
+    state.settings = { extension_enabled: true, statistics_enabled: "true" };
+    const f = gated();
+    await new FeatureManager().register(f).start();
+    // Гейт обязан быть строгим === true: мутант «!== false» включил бы фичу
+    // от мусорного значения — и молча разошёлся бы с журналом.
+    expect(f.enable).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "feature",
+      "пропущены настройками:",
+      'stats-like(statistics_enabled="true")',
+    );
+  });
+
+  test("выключено честным false — тоже в журнале, булев тип виден без кавычек", async () => {
+    state.settings = { extension_enabled: true, statistics_enabled: false };
+    await new FeatureManager().register(gated()).start();
+    expect(log.info).toHaveBeenCalledWith(
+      "feature",
+      "пропущены настройками:",
+      "stats-like(statistics_enabled=false)",
+    );
+  });
+
+  test("все гейтовые фичи включены — строки про пропуски нет", async () => {
+    state.settings = { extension_enabled: true, statistics_enabled: true };
+    await new FeatureManager().register(gated()).start();
+    const calls = (log.info as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.some((c) => c.includes("пропущены настройками:"))).toBe(false);
+  });
+
+  test("мастер-выключатель — не «пропуск»: списка нет, чтобы не пугать полным перечнем", async () => {
+    state.settings = { extension_enabled: false, statistics_enabled: true };
+    await new FeatureManager().register(gated()).start();
+    const calls = (log.info as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.some((c) => c.includes("пропущены настройками:"))).toBe(false);
   });
 });

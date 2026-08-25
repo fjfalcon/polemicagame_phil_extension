@@ -42,6 +42,7 @@ export class FeatureManager {
   async start(): Promise<void> {
     this.settings = await getSettings();
     await this.enqueueSync();
+    this.logSkippedAtBoot();
     onSettingsChanged((patch) => {
       this.settings = { ...(this.settings as Settings), ...patch };
       // Сохранение настроек пишет в sync и local раздельно → два события подряд.
@@ -61,6 +62,23 @@ export class FeatureManager {
       () => this.sync(),
     );
     return this.queue;
+  }
+
+  /**
+   * Одна строка в журнал при буте: какие фичи пропущены настройками и что
+   * РЕАЛЬНО лежит в хранилище под их ключом. Пропуск по настройке — законное
+   * молчание, но когда пользователь жалуется «кнопок нет», а в попапе
+   * «галочки стоят», журнал обязан отвечать сам (жалоба 25.08.2026: полдня
+   * раскопок вместо одной строки). JSON.stringify показывает и тип: строка
+   * "true" из битого хранилища видна как «"true"», а не как булево.
+   */
+  private logSkippedAtBoot(): void {
+    const s = this.settings as Settings;
+    if (s.extension_enabled === false) return; // мастер-выключатель — не «пропуск»
+    const skipped = this.features
+      .filter((f) => f.settingKey !== null && !this.isEnabled(f))
+      .map((f) => `${f.id}(${f.settingKey}=${JSON.stringify(s[f.settingKey as keyof Settings])})`);
+    if (skipped.length) log.info("feature", "пропущены настройками:", skipped.join(" "));
   }
 
   private isEnabled(f: Feature): boolean {
