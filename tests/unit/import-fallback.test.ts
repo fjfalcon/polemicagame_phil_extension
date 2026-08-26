@@ -77,7 +77,7 @@ describe("петля фолбэка импорта", () => {
     expect(saved).toHaveLength(0);
   });
 
-  test("карта растёт бесконечно — после MAX_CONFIRMS согласий пишем без пинг-понга", async () => {
+  test("карта растёт быстрее согласий — ОТМЕНА, не запись «как получилось»", async () => {
     // Каждое перечитывание приносит новый затираемый ключ.
     const maps: NotesMap[] = Array.from({ length: MAX_CONFIRMS + 2 }, (_, i) => {
       const m: NotesMap = {};
@@ -88,9 +88,11 @@ describe("петля фолбэка импорта", () => {
     for (let k = 1; k <= MAX_CONFIRMS + 2; k++) grow[`u:${k}`] = note(`импорт ${k}`);
     const { d, saved } = deps(maps);
     const r = await runImportFallback(grow, 0, d);
-    expect(r.status).toBe("saved");
+    // Граница согласия: применить больше одобренного нельзя даже «чуть-чуть»
+    // (ревью 26.08.2026, №3). Повтор импорта бесплатен.
+    expect(r).toEqual({ status: "unstable" });
     expect(d.confirmMore).toHaveBeenCalledTimes(MAX_CONFIRMS);
-    expect(saved).toHaveLength(1);
+    expect(saved, "ничего не записано").toHaveLength(0);
   });
 
   test("чтение упало — отказ без записи (не пишем поверх непрочитанного)", async () => {

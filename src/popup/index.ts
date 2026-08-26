@@ -894,6 +894,13 @@ document.addEventListener("DOMContentLoaded", () => {
             showPopupToast("Импорт отменён");
             return;
           }
+          if (result.status === "unstable") {
+            showPopupToast(
+              "Заметки прямо сейчас активно меняются — импорт отменён, повторите позже",
+              "error",
+            );
+            return;
+          }
           if (result.status === "save_failed") {
             showPopupToast("Не удалось сохранить заметки", "error");
             return;

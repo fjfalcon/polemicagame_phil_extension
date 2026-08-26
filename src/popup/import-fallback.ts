@@ -8,9 +8,10 @@
  * числе после каждого диалога согласия (пока пользователь читал вопрос,
  * игровая вкладка могла писать; ревью №2: прежний код после второго
  * согласия писал мерж, посчитанный ДО диалога). Если затираемых стало
- * больше одобренного — новый вопрос; после MAX_CONFIRMS согласий пишем по
- * последнему перечитыванию без нового вопроса (окно — миллисекунды, а
- * бесконечный пинг-понг диалогов хуже).
+ * больше одобренного — новый вопрос; если карта растёт быстрее, чем
+ * пользователь успевает соглашаться (MAX_CONFIRMS исчерпан, а рост
+ * продолжается) — ОТМЕНА, не запись «как получилось»: граница согласия
+ * важнее удобства, а повторить импорт бесплатно (ревью 26.08.2026, №3).
  */
 import { mergeNotes, type NotesMap } from "@core/notes-store";
 
@@ -24,6 +25,8 @@ export interface ImportFallbackDeps {
 export type ImportFallbackResult =
   | { status: "saved"; added: number; replaced: number }
   | { status: "cancelled" }
+  /** Карта меняется быстрее согласий — импорт отменён, повторить позже. */
+  | { status: "unstable" }
   | { status: "read_failed" }
   | { status: "save_failed" };
 
@@ -40,7 +43,8 @@ export async function runImportFallback(
     const { notes, loadFailed } = await deps.loadNotes();
     if (loadFailed) return { status: "read_failed" };
     const fresh = mergeNotes(notes, incoming);
-    if (fresh.replaced > approved && confirms < MAX_CONFIRMS) {
+    if (fresh.replaced > approved) {
+      if (confirms >= MAX_CONFIRMS) return { status: "unstable" };
       confirms++;
       if (!(await deps.confirmMore(fresh.replaced, approved))) return { status: "cancelled" };
       approved = fresh.replaced;

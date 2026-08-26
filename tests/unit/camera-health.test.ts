@@ -313,6 +313,51 @@ describe("кнопка «Перезагрузить камеры»", () => {
     );
   }
 
+  test("враждебный reason из мира страницы не доезжает до журнала сырым", () => {
+    // postMessage доступен самой странице (недоверенный источник, AGENTS §5):
+    // произвольная строка — в т.ч. ник или токен — в persistent-лог не идёт,
+    // только белый список кодов зонда либо метка с длиной (ревью 26.08.2026).
+    room();
+    cameraHealthFeature.enable(ctx());
+    button()!.click();
+    const probeTag = document.querySelector("script[data-pn-media-probe]") as HTMLScriptElement;
+    probeTag.onload?.(new Event("load"));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          source: MEDIA_RESULT_SOURCE,
+          ok: false,
+          action: "refresh",
+          reason: "Petya сидит без камеры, token=SECRET",
+        },
+        source: window as never,
+      }),
+    );
+    const warns = (log.warn as ReturnType<typeof vi.fn>).mock.calls.map((c) => c.join(" "));
+    const stepWarn = warns.find((w) => w.includes("не удался"));
+    expect(stepWarn, "warn о шаге есть").toBeTruthy();
+    expect(stepWarn).toContain("unrecognized(");
+    expect(stepWarn).not.toContain("Petya");
+    expect(stepWarn).not.toContain("SECRET");
+  });
+
+  test("известный код зонда проходит в журнал как есть", () => {
+    room();
+    cameraHealthFeature.enable(ctx());
+    button()!.click();
+    (document.querySelector("script[data-pn-media-probe]") as HTMLScriptElement).onload?.(
+      new Event("load"),
+    );
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { source: MEDIA_RESULT_SOURCE, ok: false, action: "refresh", reason: "media_not_connected" },
+        source: window as never,
+      }),
+    );
+    const warns = (log.warn as ReturnType<typeof vi.fn>).mock.calls.map((c) => c.join(" "));
+    expect(warns.some((w) => w.includes("media_not_connected"))).toBe(true);
+  });
+
   test("клик шлёт зонду команду переподключения", () => {
     room();
     cameraHealthFeature.enable(ctx());

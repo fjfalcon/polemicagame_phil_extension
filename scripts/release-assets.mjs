@@ -17,6 +17,7 @@
  * `npm run release:assets -- --skip-sign`.
  */
 import { execFileSync } from "node:child_process";
+import { fileSha256, treeSha256 } from "./dist-digest.mjs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +67,11 @@ async function main() {
   const version = await readVersion();
   console.log(`\n▶ Сборка релиза ${version}\n`);
 
+  // Штамп прошлого прогона снимается ДО гейта: если этот прогон упадёт,
+  // старые артефакты останутся БЕЗ штампа — publish/sign честно откажут
+  // (ревью 26.08.2026, хвост №2).
+  await fs.rm(path.join(dist, ".gate-stamp.json"), { force: true });
+
   // Полный ОФЛАЙН-гейт (26.08.2026, ревью доказуемости контура): релизные
   // артефакты НЕ собираются, пока красное хоть что-то из: production
   // typecheck, typecheck тестов, вся офлайн-сюита (unit + invariants).
@@ -100,21 +106,32 @@ async function main() {
     console.warn("\n⚠ docs/review-ledger.md отсутствует — леджер волн не ведётся.\n");
   }
 
-  // Штамп gated-прогона (ревью 26.08.2026): verify-dist сверяет, что
-  // публикуемый артефакт собран ИМЕННО этим прогоном на текущем HEAD —
-  // same-version stale dist больше не проходит publish/sign молча.
-  const gitHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "";
-  await fs.writeFile(
-    path.join(dist, ".gate-stamp.json"),
-    JSON.stringify({ version, gitHead, dirty, builtAt: new Date().toISOString() }, null, 2),
-  );
-  if (dirty) console.warn("\n⚠ Рабочее дерево грязное: артефакт собран с незакоммиченными правками.\n");
-
   const assets = [
     await zipTarget("chrome", "polemica-chrome.zip"),
     await zipTarget("firefox", "polemica-firefox.zip"),
   ];
+
+  // Штамп gated-прогона — ПОСЛЕ упаковки и С ДАЙДЖЕСТАМИ БАЙТОВ (ревью
+  // 26.08.2026, хвост №1): verify-dist пересчитывает sha256 zip'а и дерева
+  // dist/firefox — частичная пересборка после гейта не подпишется.
+  const gitHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "";
+  await fs.writeFile(
+    path.join(dist, ".gate-stamp.json"),
+    JSON.stringify(
+      {
+        version,
+        gitHead,
+        dirty,
+        builtAt: new Date().toISOString(),
+        chromeZipSha256: fileSha256(path.join(dist, "polemica-chrome.zip")),
+        firefoxTreeSha256: treeSha256(path.join(dist, "firefox")),
+      },
+      null,
+      2,
+    ),
+  );
+  if (dirty) console.warn("\n⚠ Рабочее дерево грязное: артефакт собран с незакоммиченными правками.\n");
 
   if (skipSign) {
     console.log("\n⚠ Подпись пропущена (--skip-sign): Firefox-пользователи получат только zip.\n");

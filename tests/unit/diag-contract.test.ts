@@ -56,6 +56,18 @@ describe("снимок: настройки", () => {
     expect(joined).toContain("obs_password: <задан>");
     expect(joined).toContain('statistics_enabled: true');
   });
+  test("креды и токены в obs_host не доезжают до снимка", () => {
+    // В адресе бывают ws://user:pass@host/?token=… — snapshot обязан
+    // резать до схема+хост+порт (тот же safeEndpoint, что в OBS-логе).
+    const lines = formatSettings({
+      obs_host: "ws://admin:hunter2@10.0.0.5:4455/?token=SECRET",
+    } as unknown as Settings).join("\n");
+    expect(lines).toContain("obs_host: ws://10.0.0.5:4455");
+    expect(lines).not.toContain("hunter2");
+    expect(lines).not.toContain("admin");
+    expect(lines).not.toContain("SECRET");
+  });
+
   test("пустой пароль честно помечен пустым", () => {
     const lines = formatSettings({ obs_password: "" } as unknown as Settings);
     expect(lines.join("\n")).toContain("obs_password: <пуст>");

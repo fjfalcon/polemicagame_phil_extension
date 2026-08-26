@@ -9,6 +9,7 @@
  * Использование: node scripts/verify-dist.mjs chrome-zip | firefox
  */
 import { execFileSync } from "node:child_process";
+import { fileSha256, treeSha256 } from "./dist-digest.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,6 +58,19 @@ if (stamp.version !== want) fail(`штамп гейта от версии ${stam
 const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 if (stamp.gitHead !== head) {
   fail(`артефакт собран на ${String(stamp.gitHead).slice(0, 7)}, HEAD сейчас ${head.slice(0, 7)} — исходники уехали`);
+}
+// Привязка к БАЙТАМ (ревью 26.08.2026, хвост №1): частичная пересборка
+// (build:firefox) после gated-прогона меняет дерево при том же штампе.
+if (target === "chrome-zip") {
+  const sha = fileSha256(path.join(root, "dist/polemica-chrome.zip"));
+  if (sha !== stamp.chromeZipSha256) {
+    fail("dist/polemica-chrome.zip изменился после gated-прогона — пересобери");
+  }
+} else {
+  const sha = treeSha256(path.join(root, "dist/firefox"));
+  if (sha !== stamp.firefoxTreeSha256) {
+    fail("dist/firefox изменился после gated-прогона (build мимо гейта?) — пересобери");
+  }
 }
 if (stamp.dirty) console.warn("⚠ verify-dist: артефакт собирался с незакоммиченными правками (штамп dirty).");
 console.log(`✓ verify-dist: ${target} = ${got}, gated-прогон на ${head.slice(0, 7)}`);
