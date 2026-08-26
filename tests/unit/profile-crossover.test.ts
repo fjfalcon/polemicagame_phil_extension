@@ -62,7 +62,9 @@ import {
 } from "@content/features/profile-crossover";
 import type { FeatureContext } from "@core/feature";
 
-const flush = () => new Promise((r) => setTimeout(r, 0));
+// Реальные таймеры: пауза перед сетью 350 мс + микротаски. Дольше, зато
+// честно гоняет тот же путь, что у пользователя.
+const flush = () => new Promise((r) => setTimeout(r, 400));
 const childRecord = (): MutationRecord =>
   ({ type: "childList", addedNodes: [], removedNodes: [] }) as unknown as MutationRecord;
 
@@ -162,6 +164,27 @@ describe("карточка на профиле", () => {
     profileCrossoverFeature.enable({ settings: {} } as unknown as FeatureContext);
     await flush();
     expect(block()).toBeNull();
+  });
+
+  test("БЛОКЕР §4: самоудаление карточки не зацикливает вставку через onDomChange", async () => {
+    // Свой профиль: fillBlock удаляет карточку; удаление — childList-мутация,
+    // и apply() обязан НЕ вставить её заново (adversarial 26.08.2026).
+    window.history.replaceState(null, "", "/profile/13509");
+    profileCrossoverFeature.enable({ settings: {} } as unknown as FeatureContext);
+    await flush();
+    expect(block()).toBeNull();
+    // Мутация, которую породило самоудаление (реальный MutationObserver её
+    // доставит; тестовый люк прошлой версии её «не доигрывал»).
+    h.domSub?.([childRecord()]);
+    await flush();
+    expect(block(), "вердикт запомнен — перевставки нет").toBeNull();
+    h.domSub?.([childRecord()]);
+    expect(block()).toBeNull();
+    expect((fetchFirstPage as ReturnType<typeof vi.fn>).mock.calls, "и сеть молчит").toHaveLength(0);
+  });
+
+  test("ведущие нули в URL не путают «свой/чужой» профиль", () => {
+    expect(profileIdFromPath("/profile/0993")).toBe("993");
   });
 
   test("disable симметричен: ни карточки, ни подписки", async () => {

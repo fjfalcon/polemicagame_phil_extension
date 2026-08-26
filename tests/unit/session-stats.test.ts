@@ -20,16 +20,24 @@ import {
 const at = (d: number, h: number, mi = 0) => new Date(2026, 7, d, h, mi).getTime();
 
 describe("parseGameDate", () => {
-  test("формат сайта «YYYY-MM-DD HH:MM:SS» разбирается в локальное время", () => {
-    expect(parseGameDate("2026-08-26 21:30:00")).toBe(at(26, 21, 30));
+  test("формат сайта «YYYY-MM-DD HH:MM:SS» разбирается как UTC (замер 26.08.2026)", () => {
+    // Разбор как локального уводил игры на смещение пояса в прошлое, и
+    // «начать заново» терял свежие игры (adversarial №1 по «Моему вечеру»).
+    expect(parseGameDate("2026-08-26 21:30:00")).toBe(Date.UTC(2026, 7, 26, 21, 30, 0));
   });
   test("T-разделитель тоже понимается", () => {
-    expect(parseGameDate("2026-08-26T04:00:00")).toBe(at(26, 4));
+    expect(parseGameDate("2026-08-26T04:00:00")).toBe(Date.UTC(2026, 7, 26, 4));
   });
   test("мусор и пустота — null, не Invalid Date", () => {
     expect(parseGameDate("вчера")).toBeNull();
     expect(parseGameDate(undefined)).toBeNull();
     expect(parseGameDate("2026-08-26")).toBeNull();
+  });
+  test("переполнение полей — null, а не «месяц 19 = следующий год»", () => {
+    // Date молча перекатывает переполнение; битой метке место в null, иначе
+    // она становилась «будущим» и затаскивала игру в сессию (adversarial №7).
+    expect(parseGameDate("2026-19-40 27:70:70")).toBeNull();
+    expect(parseGameDate("2026-00-10 10:00:00")).toBeNull();
   });
 });
 
@@ -57,15 +65,19 @@ const row = (over: Partial<GameRow> & { id: number }): GameRow => ({
   ...over,
 });
 
+/** Метка сайта (UTC) из epoch-миллисекунд — тесты не зависят от TZ раннера. */
+const utcStamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+
 describe("игры сессии", () => {
   test("до якоря и без даты — не сессия; свежие первыми", () => {
+    const anchor = at(26, 20); // локальный вечерний якорь
     const rows = [
-      row({ id: 1, date: "2026-08-26 12:00:00" }), // до якоря
-      row({ id: 3, date: "2026-08-26 23:50:00" }),
-      row({ id: 2, date: "2026-08-26 21:00:00" }),
+      row({ id: 1, date: utcStamp(anchor - 3600_000) }), // за час до якоря
+      row({ id: 3, date: utcStamp(anchor + 2 * 3600_000) }),
+      row({ id: 2, date: utcStamp(anchor + 3600_000) }),
       row({ id: 4 }), // даты нет
     ];
-    expect(pickSessionGames(rows, at(26, 20)).map((r) => r.id)).toEqual([3, 2]);
+    expect(pickSessionGames(rows, anchor).map((r) => r.id)).toEqual([3, 2]);
   });
 });
 

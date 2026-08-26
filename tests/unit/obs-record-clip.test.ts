@@ -15,7 +15,9 @@ const store = vi.hoisted(() => ({ data: {} as Record<string, unknown> }));
 const settings = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const wiring = vi.hoisted(() => ({
   onMessage: [] as ((msg: unknown, sender: unknown) => unknown)[],
-  roomTabs: [] as { id: number }[],
+  onAlarm: [] as ((a: { name: string; scheduledTime: number }) => void)[],
+  /** Вкладки сайта и их ответ на probe «ты в комнате?». */
+  siteTabs: [] as { id: number; inRoom: boolean }[],
 }));
 
 vi.mock("@core/env", () => ({
@@ -51,7 +53,7 @@ vi.mock("@core/env", () => ({
       create: vi.fn(async () => undefined),
       clear: vi.fn(async () => undefined),
       getAll: vi.fn(async () => []),
-      onAlarm: { addListener: vi.fn() },
+      onAlarm: { addListener: (fn: (typeof wiring.onAlarm)[number]) => wiring.onAlarm.push(fn) },
     },
     runtime: {
       onStartup: { addListener: vi.fn() },
@@ -62,7 +64,7 @@ vi.mock("@core/env", () => ({
     tabs: {
       onRemoved: { addListener: vi.fn() },
       query: vi.fn(async (q: { url?: string }) =>
-        q.url === "*://*.polemicagame.com/game/*" ? wiring.roomTabs : [],
+        q.url === "*://*.polemicagame.com/*" ? wiring.siteTabs.map((t) => ({ id: t.id })) : [],
       ),
       sendMessage: vi.fn(async () => undefined),
       update: vi.fn(async () => undefined),
@@ -78,7 +80,11 @@ vi.mock("@core/messaging", () => ({
     wiring.onMessage.push(fn);
     return () => undefined;
   }),
-  sendToTab: vi.fn(async () => undefined),
+  sendToTab: vi.fn(async (tabId: number, msg: { type?: string }) => {
+    if (msg?.type !== "obs_room_probe") return undefined;
+    const tab = wiring.siteTabs.find((t) => t.id === tabId);
+    return tab ? { inRoom: tab.inRoom } : undefined;
+  }),
   sendRuntime: vi.fn(async () => undefined),
   broadcastToGameTabs: vi.fn(async () => undefined),
 }));
@@ -103,6 +109,8 @@ class FakeObs {
 
   recording = false;
   replayActive = false;
+  /** Следующий StopRecord отказывает (обрыв связи в момент выхода). */
+  failNextStop = false;
   /** Replay Buffer выключен в настройках OBS → StartReplayBuffer отказывает. */
   replayAllowed = true;
   params = new Map<string, string>([["Output/Mode", "Simple"]]);
@@ -138,6 +146,11 @@ class FakeObs {
         this.recording = true;
         break;
       case "StopRecord":
+        if (this.failNextStop) {
+          this.failNextStop = false;
+          result = false;
+          break;
+        }
         this.recording = false;
         responseData = { outputPath: "/rec/игра.mkv" };
         break;
@@ -218,7 +231,8 @@ async function command(
 beforeEach(() => {
   store.data = {};
   wiring.onMessage.length = 0;
-  wiring.roomTabs = [];
+  wiring.onAlarm.length = 0;
+  wiring.siteTabs = [];
   settings.current = {
     extension_enabled: true,
     obs_enabled: true,
@@ -267,14 +281,101 @@ describe("автозапись игр", () => {
     expect(store.data.obs_auto_record_started).toBeUndefined();
   });
 
-  test("вторая игровая вкладка держит запись живой", async () => {
+  test("вторая игровая вкладка держит запись живой — по её СОБСТВЕННОМУ ответу", async () => {
     const obs = await bootConnected();
     await command("record_start", undefined, 5);
-    wiring.roomTabs = [{ id: 9 }]; // другая вкладка всё ещё в комнате
+    // Другая вкладка отвечает «я в комнате» (в т.ч. на голом /game, который
+    // url-паттерн не ловил, — adversarial OBS-5).
+    wiring.siteTabs = [
+      { id: 5, inRoom: false },
+      { id: 9, inRoom: true },
+    ];
     const stop = await command("record_stop", undefined, 5);
     expect(stop.data?.ignored).toBe("other_room_tabs");
     expect(obs.recording, "запись продолжается для второй вкладки").toBe(true);
     expect(store.data.obs_auto_record_started, "флаг не потерян").toBe(true);
+  });
+
+  test("молчащая (усыплённая) вкладка комнатой не считается — запись не сиротеет", async () => {
+    const obs = await bootConnected();
+    await command("record_start", undefined, 5);
+    wiring.siteTabs = [{ id: 9, inRoom: false }]; // discarded: probe без ответа «в комнате»
+    const stop = await command("record_stop", undefined, 5);
+    expect(stop.data?.stopped).toBe(true);
+    expect(obs.recording).toBe(false);
+  });
+});
+
+describe("стражи владения записью (adversarial 26.08.2026)", () => {
+  test("БЛОКЕР OBS-1: отказ StopRecord НЕ снимает флаг — запись не сиротеет", async () => {
+    const obs = await bootConnected();
+    await command("record_start");
+    obs.failNextStop = true;
+    const stop = await command("record_stop");
+    expect(stop.success).toBe(false);
+    expect(store.data.obs_auto_record_started, "флаг пережил неудачный стоп").toBe(true);
+    // Повторный стоп (следующий переход/сверка) добивает.
+    const retry = await command("record_stop");
+    expect(retry.data?.stopped).toBe(true);
+    expect(store.data.obs_auto_record_started).toBeUndefined();
+  });
+
+  test("OBS-4: гонка «стоп старой + старт новой» сериализована — новая игра ПИШЕТСЯ", async () => {
+    const obs = await bootConnected();
+    await command("record_start"); // первая игра
+    // Комната → поиск → комната: обе команды в полёте одновременно.
+    const [stop, start] = await Promise.all([
+      command("record_stop"),
+      command("record_start"),
+    ]);
+    expect(stop.data?.stopped).toBe(true);
+    expect(start.data?.started, "старт дождался стопа, а не увидел «already»").toBe(true);
+    expect(obs.recording, "новая игра записывается").toBe(true);
+    expect(store.data.obs_auto_record_started).toBe(true);
+  });
+
+  test("OBS-3: протухший флаг при ЧУЖОЙ записи чистится сверкой, чужое не трогается", async () => {
+    const obs = await bootConnected();
+    store.data.obs_auto_record_started = true; // осталось со вчера
+    obs.recording = false; // нашей записи давно нет
+    for (const fn of wiring.onAlarm) fn({ name: "polemica:obs-watchdog", scheduledTime: 0 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(store.data.obs_auto_record_started, "протухший флаг снят").toBeUndefined();
+    // Теперь стример пишет сам — record_stop обязан ответить not_ours.
+    obs.recording = true;
+    const stop = await command("record_stop");
+    expect(stop.data?.ignored).toBe("not_ours");
+    expect(obs.recording).toBe(true);
+  });
+
+  test("OBS-2: вкладку закрыли без record_stop — watchdog доостанавливает сироту", async () => {
+    const obs = await bootConnected();
+    await command("record_start");
+    wiring.siteTabs = []; // вкладка исчезла, record_stop не пришёл
+    for (const fn of wiring.onAlarm) fn({ name: "polemica:obs-watchdog", scheduledTime: 0 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(obs.recording, "осиротевшая запись остановлена").toBe(false);
+    expect(store.data.obs_auto_record_started).toBeUndefined();
+  });
+
+  test("watchdog не трогает запись, пока хоть одна вкладка в комнате", async () => {
+    const obs = await bootConnected();
+    await command("record_start");
+    wiring.siteTabs = [{ id: 7, inRoom: true }];
+    for (const fn of wiring.onAlarm) fn({ name: "polemica:obs-watchdog", scheduledTime: 0 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(obs.recording).toBe(true);
+    expect(store.data.obs_auto_record_started).toBe(true);
+  });
+
+  test("OBS не подключён — новые команды отвечают по-русски, а не стектрейсом", async () => {
+    vi.resetModules();
+    await import("../../src/background/index");
+    await flush();
+    // hello не отправлен — клиент не подключён.
+    const res = await command("record_start");
+    expect(res.success).toBe(false);
+    expect(res.error).toBe("OBS не подключён");
   });
 });
 
@@ -303,6 +404,17 @@ describe("клипы (Replay Buffer)", () => {
     expect(obs.requests).toContain("StopReplayBuffer");
     expect(obs.requests).toContain("StartReplayBuffer");
     expect(obs.replayActive).toBe(true);
+  });
+
+  test("OBS-6: бут вкладки не перетирает длину, выставленную стримером руками", async () => {
+    const obs = await bootConnected();
+    await command("replay_setup", { seconds: 60 }); // наша первая настройка
+    obs.params.set("SimpleOutput/RecRBTime", "300"); // стример поставил 5 минут сам
+    obs.requests.length = 0;
+    await command("replay_setup", { seconds: 60 }); // F5: настройка расширения та же
+    expect(obs.params.get("SimpleOutput/RecRBTime"), "значение стримера не тронуто").toBe("300");
+    expect(obs.requests).not.toContain("SetProfileParameter");
+    expect(obs.requests, "и буфер не перезапущен — хвост эфира цел").not.toContain("StopReplayBuffer");
   });
 
   test("та же длина повторно — буфер НЕ перезапускается (хвост не теряем зря)", async () => {

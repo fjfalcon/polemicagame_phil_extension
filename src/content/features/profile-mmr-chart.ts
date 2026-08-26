@@ -13,7 +13,7 @@
  */
 import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
-import { fetchHistory, type GameRow } from "@core/crossover";
+import { fetchFirstPage, type GameRow } from "@core/crossover";
 import { getOwnUserId } from "@core/own-user";
 import { profileIdFromPath } from "./profile-crossover";
 import type { Feature } from "@core/feature";
@@ -56,13 +56,19 @@ export function chartPoints(values: number[], w: number, h: number, pad = 4): st
 let enabled = false;
 let routeId: string | null = null;
 let unsubDom: (() => void) | null = null;
+/** Вердикт «не мой профиль»: без него самоудаление карточки из fillBlock
+ *  зацикливало вставку/удаление через onDomChange (см. profile-crossover,
+ *  adversarial 26.08.2026, блокер). */
+let hiddenFor: string | null = null;
 let cache: { at: number; values: number[] } | null = null;
 let inFlight: Promise<number[] | null> | null = null;
 
 async function loadSeries(myId: number): Promise<number[] | null> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.values;
   if (inFlight) return inFlight;
-  const p = fetchHistory(myId)
+  // Первой страницы (2000 строк) хватает на 120 точек с большим запасом —
+  // completeHistory с его страницами тут был бы чистым перерасходом.
+  const p = fetchFirstPage(myId)
     .then((h) => {
       if (!h) return null;
       const values = mmrSeries(h.rows);
@@ -126,7 +132,7 @@ function renderChart(body: HTMLElement, values: number[]): void {
 }
 
 function apply(): void {
-  if (!enabled || routeId === null) {
+  if (!enabled || routeId === null || routeId === hiddenFor) {
     removeBlock();
     return;
   }
@@ -145,9 +151,15 @@ function apply(): void {
 async function fillBlock(profileId: string, block: HTMLElement): Promise<void> {
   const body = block.querySelector<HTMLElement>(".pn-chart-body");
   if (!body) return;
+  // Пауза перед сетью — как у «Вместе с вами»: листание профилей не должно
+  // качать историю на каждый мелькнувший.
+  await new Promise((r) => setTimeout(r, 350));
+  if (routeId !== profileId || !block.isConnected) return;
   const myId = await getOwnUserId();
   // График — только про себя: чужой профиль обслуживает «Вместе с вами».
   if (myId === null || String(myId) !== profileId) {
+    // Вердикт — ДО remove: удаление будит onDomChange, вставлять снова нельзя.
+    hiddenFor = profileId;
     block.remove();
     return;
   }
@@ -165,6 +177,7 @@ async function fillBlock(profileId: string, block: HTMLElement): Promise<void> {
 export function syncProfileMmrRoute(profileId: string | null): void {
   if (routeId === profileId) return;
   routeId = profileId;
+  hiddenFor = null;
   apply();
 }
 
@@ -185,11 +198,13 @@ export const profileMmrChartFeature: Feature = {
     // Не ждём роутер: он зовёт sync только на СМЕНЕ URL, а включиться
     // могли уже стоя на профиле.
     routeId = profileIdFromPath(location.pathname);
+    hiddenFor = null;
     apply();
   },
 
   disable() {
     enabled = false;
+    hiddenFor = null;
     if (unsubDom) {
       unsubDom();
       unsubDom = null;

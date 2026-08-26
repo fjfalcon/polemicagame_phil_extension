@@ -48,6 +48,8 @@ const STALE_ALARM_CUTOFF_MS = 90_000;
 const OBS_MANUAL_DISCONNECT_KEY = "obs_manual_disconnect";
 /** Запись начата НАМИ (автозапись игр): только такую имеем право останавливать. */
 const OBS_AUTO_RECORD_KEY = "obs_auto_record_started";
+/** Длина буфера повторов, которую последний раз выставляли МЫ (секунды). */
+const OBS_CLIP_RB_SET_KEY = "obs_clip_rb_set";
 /** Последняя попытка редкого режима (бюджет исчерпан). В storage: SW смертен. */
 const OBS_DEGRADED_ATTEMPT_KEY = "obs_degraded_attempt_at";
 /**
@@ -64,6 +66,69 @@ function enqueueObs<T>(task: () => Promise<T> | T): Promise<T> {
     () => undefined,
   );
   return result;
+}
+
+/**
+ * Очередь операций записи/клипов. Отдельная от enqueueObs (та возит
+ * 10-20-секундные connect/probe — запись к началу игры не должна их ждать),
+ * но сериализует record/replay МЕЖДУ СОБОЙ: на переходе «комната → поиск →
+ * комната» stop и start иначе интерливились, и новая игра оставалась без
+ * записи при тосте «сохранена» (adversarial 26.08.2026, OBS-4/7).
+ */
+let recordQueue: Promise<unknown> = Promise.resolve();
+function enqueueRecord<T>(task: () => Promise<T> | T): Promise<T> {
+  const result = recordQueue.then(task, task);
+  recordQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+/**
+ * Сколько вкладок СЕЙЧАС в игровой комнате — спрашиваем сами вкладки
+ * (инвариант §4 п.10: правду о вкладке знает только она; url-паттерн
+ * считал живой discarded-вкладку и не видел комнату на голом /game —
+ * adversarial 26.08.2026, OBS-5). Не ответившая вкладка комнатой не
+ * считается: осиротевший content-скрипт запись не остановит никогда.
+ */
+async function countRoomTabs(excludeTabId?: number): Promise<number> {
+  const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/*" });
+  const answers = await Promise.all(
+    tabs
+      .filter((t) => t.id != null && t.id !== excludeTabId)
+      .map((t) => sendToTab<{ inRoom?: boolean }>(t.id as number, { type: "obs_room_probe" })),
+  );
+  return answers.filter((a) => a?.inRoom === true).length;
+}
+
+/**
+ * Сверка автозаписи — доостанавливает осиротевшую: вкладку закрыли/браузер
+ * упал, record_stop не пришёл, запись писала бы диск до ручного вмешательства
+ * (adversarial 26.08.2026, OBS-1/2/3). Зовётся минутным watchdog'ом и на
+ * буте воркера. Только СТОП-сторона: автостарт отсюда перезапускал бы запись,
+ * которую стример только что остановил руками.
+ */
+async function reconcileAutoRecord(): Promise<void> {
+  await enqueueRecord(async () => {
+    const st = (await browser.storage.local.get({ [OBS_AUTO_RECORD_KEY]: false })) as Record<
+      string,
+      unknown
+    >;
+    if (st[OBS_AUTO_RECORD_KEY] !== true) return;
+    if (!obs.getStatus().connected) return; // без связи судить не о чем
+    if (!(await obs.isRecording())) {
+      // Запись уже не идёт (стример остановил сам / OBS перезапущен) —
+      // протухший флаг обязан уйти, иначе однажды остановит ЧУЖУЮ запись.
+      await browser.storage.local.remove(OBS_AUTO_RECORD_KEY);
+      log.info("background", "автозапись: флаг протух (записи нет) — снят");
+      return;
+    }
+    if ((await countRoomTabs()) > 0) return; // игра ещё идёт где-то
+    const path = await obs.stopRecord();
+    await browser.storage.local.remove(OBS_AUTO_RECORD_KEY);
+    log.info("background", "автозапись: осиротевшая запись остановлена", path ?? "");
+  }).catch((e) => log.warn("background", "сверка автозаписи не удалась", e));
 }
 
 async function setManualDisconnect(value: boolean): Promise<void> {
@@ -368,71 +433,88 @@ async function handleObsQuery(
     }
     case "get_scenes":
       return obs.requestSceneList();
-    // ── запись и клипы (стримерский пакет 26.08.2026). Лёгкие операции:
-    // не сериализуются с reconcile/connect — запись к началу игры должна
-    // стартовать сразу, а не отстояв очередь за минутной пробой.
-    case "record_start": {
-      if (await obs.isRecording()) {
-        // Стример уже пишет сам — не присваиваем себе его запись, иначе
-        // конец игры остановил бы ЕГО файл.
-        return { already: true };
-      }
-      await obs.startRecord();
-      await browser.storage.local.set({ [OBS_AUTO_RECORD_KEY]: true });
-      return { started: true };
-    }
-    case "record_stop": {
-      const st = (await browser.storage.local.get({ [OBS_AUTO_RECORD_KEY]: false })) as Record<
-        string,
-        unknown
-      >;
-      const ours = st[OBS_AUTO_RECORD_KEY] === true;
-      // Останавливаем ТОЛЬКО начатое нами: ручную запись стримера не трогаем.
-      if (!ours) {
+    // ── запись и клипы (стримерский пакет 26.08.2026). Свой конвейер
+    // enqueueRecord: сериализует record/replay между собой (гонки stop/start
+    // на смене маршрута), но не ждёт длинные connect/probe из enqueueObs.
+    case "record_start":
+      return enqueueRecord(async () => {
+        if (!obs.getStatus().connected) throw new Error("OBS не подключён");
+        if (await obs.isRecording()) {
+          // Запись уже идёт. НАША (флаг стоит — например, F5 посреди игры
+          // или комната→комната) — просто продолжается. Чужая (флага нет —
+          // стример пишет сам) — не присваиваем и не трогаем.
+          return { already: true };
+        }
+        await obs.startRecord();
+        await browser.storage.local.set({ [OBS_AUTO_RECORD_KEY]: true });
+        return { started: true };
+      });
+    case "record_stop":
+      return enqueueRecord(async () => {
+        const st = (await browser.storage.local.get({ [OBS_AUTO_RECORD_KEY]: false })) as Record<
+          string,
+          unknown
+        >;
+        // Останавливаем ТОЛЬКО начатое нами: ручную запись стримера не трогаем.
+        if (st[OBS_AUTO_RECORD_KEY] !== true) return { ignored: "not_ours" };
+        if (!obs.getStatus().connected) throw new Error("OBS не подключён");
+        if (!(await obs.isRecording())) {
+          // Стример остановил сам — флаг протух, чистим.
+          await browser.storage.local.remove(OBS_AUTO_RECORD_KEY);
+          return { ignored: "not_active" };
+        }
+        // Другая вкладка ещё в комнате (стример смотрит две игры) — её игра
+        // пишется тем же файлом. Комнатность спрашиваем у самих вкладок
+        // (§4.10), а не по url-паттерну.
+        if ((await countRoomTabs(tabId)) > 0) return { ignored: "other_room_tabs" };
+        const path = await obs.stopRecord();
+        // Флаг — ПОСЛЕ подтверждённой остановки: упавший stopRecord не должен
+        // осиротить живую запись (adversarial 26.08.2026, OBS-1).
         await browser.storage.local.remove(OBS_AUTO_RECORD_KEY);
-        return { ignored: "not_ours" };
-      }
-      // Вторая вкладка ещё в комнате (стример смотрит две игры) — её игра
-      // пишется тем же файлом, останавливать рано. «/game/» точный: поиск
-      // (/game-search) под паттерн не попадает.
-      const roomTabs = (await browser.tabs.query({ url: "*://*.polemicagame.com/game/*" })).filter(
-        (t) => t.id !== undefined && t.id !== tabId,
-      );
-      if (roomTabs.length > 0) return { ignored: "other_room_tabs" };
-      await browser.storage.local.remove(OBS_AUTO_RECORD_KEY);
-      if (!(await obs.isRecording())) return { ignored: "not_active" };
-      const path = await obs.stopRecord();
-      return { stopped: true, path };
-    }
-    case "replay_save": {
-      if (!(await obs.isReplayBufferActive())) {
-        throw new Error(
-          "Буфер повторов не запущен — включите Replay Buffer в настройках вывода OBS",
-        );
-      }
-      await obs.saveReplayBuffer();
-      return { saved: true };
-    }
-    case "replay_setup": {
-      const seconds = Math.max(5, Math.min(3600, Math.round(data?.seconds ?? 60)));
-      // Длина буфера — параметр профиля; категория зависит от режима вывода.
-      const mode = await obs.getProfileParameter("Output", "Mode");
-      const category = mode === "Advanced" ? "AdvOut" : "SimpleOutput";
-      const current = await obs.getProfileParameter(category, "RecRBTime");
-      const changed = current !== String(seconds);
-      if (changed) await obs.setProfileParameter(category, "RecRBTime", String(seconds));
-      const active = await obs.isReplayBufferActive();
-      if (active && changed) {
-        // Новая длина применяется только перезапуском буфера (текущий
-        // недописанный хвост при этом честно теряется).
-        await obs.stopReplayBuffer();
-        await obs.startReplayBuffer();
-      } else if (!active) {
-        // Буфер выключен в настройках OBS — StartReplayBuffer скажет об этом.
-        await obs.startReplayBuffer();
-      }
-      return { seconds, restarted: active && changed };
-    }
+        return { stopped: true, path };
+      });
+    case "replay_save":
+      return enqueueRecord(async () => {
+        if (!obs.getStatus().connected) throw new Error("OBS не подключён");
+        if (!(await obs.isReplayBufferActive())) {
+          throw new Error(
+            "Буфер повторов не запущен — включите Replay Buffer в настройках вывода OBS",
+          );
+        }
+        await obs.saveReplayBuffer();
+        return { saved: true };
+      });
+    case "replay_setup":
+      return enqueueRecord(async () => {
+        if (!obs.getStatus().connected) throw new Error("OBS не подключён");
+        const seconds = Math.max(5, Math.min(3600, Math.round(data?.seconds ?? 60)));
+        // Длину буфера пишем ТОЛЬКО когда её сменили в настройках расширения
+        // (сравнение с тем, что писали МЫ в прошлый раз, а не с текущим
+        // значением OBS): бут вкладки не должен молча перетирать длину,
+        // выставленную стримером руками, и рестартовать буфер, теряя хвост
+        // эфира (adversarial 26.08.2026, OBS-6).
+        const prev = (await browser.storage.local.get({ [OBS_CLIP_RB_SET_KEY]: null })) as Record<
+          string,
+          unknown
+        >;
+        const changed = prev[OBS_CLIP_RB_SET_KEY] !== seconds;
+        if (changed) {
+          const mode = await obs.getProfileParameter("Output", "Mode");
+          const category = mode === "Advanced" ? "AdvOut" : "SimpleOutput";
+          await obs.setProfileParameter(category, "RecRBTime", String(seconds));
+          await browser.storage.local.set({ [OBS_CLIP_RB_SET_KEY]: seconds });
+        }
+        const active = await obs.isReplayBufferActive();
+        if (active && changed) {
+          // Новая длина применяется только перезапуском буфера.
+          await obs.stopReplayBuffer();
+          await obs.startReplayBuffer();
+        } else if (!active) {
+          // Буфер выключен в настройках OBS — StartReplayBuffer скажет об этом.
+          await obs.startReplayBuffer();
+        }
+        return { seconds, restarted: active && changed };
+      });
     default:
       return handleObsCommand(cmd, data);
   }
@@ -691,7 +773,12 @@ async function runUpgradeMigrations(): Promise<void> {
 }
 
 browser.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === OBS_WATCHDOG_ALARM) restoreObsConnection(true);
+  if (alarm.name === OBS_WATCHDOG_ALARM) {
+    restoreObsConnection(true);
+    // Осиротевшая автозапись (вкладку закрыли без record_stop, краш) —
+    // доостанавливается здесь, в пределах минуты.
+    void reconcileAutoRecord();
+  }
   if (tabIdFromAlarmName(alarm.name) !== null) {
     // Просроченный будильник (крышку ноутбука закрыли на два часа) стреляет
     // сразу на пробуждении, когда WS-close ещё не долетел и на странице пока
@@ -725,6 +812,10 @@ browser.runtime.onStartup.addListener(() => {
     await obs.allowAutoReconnect();
     await reconcileObsConnection();
   }).catch((e) => log.error("background", "startup OBS restore failed", e));
+  // Автозапись со вчера (браузер закрыли посреди игры): reconcile снимет
+  // протухший флаг или доостановит запись, когда OBS подключится, — не
+  // раньше сверки соединения выше, обе идут своими очередями.
+  void reconcileAutoRecord();
   void clearStaleQueueGuards();
 });
 browser.runtime.onInstalled.addListener((details) => {

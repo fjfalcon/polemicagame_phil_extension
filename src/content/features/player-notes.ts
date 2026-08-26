@@ -26,8 +26,7 @@ import {
   fetchFirstPage,
   fetchHistory,
   oldestDate,
-  type Bucket,
-  type Crossover,
+    type Crossover,
   type History,
 } from "@core/crossover";
 import { fetchFirstKilled } from "@core/match-brief";

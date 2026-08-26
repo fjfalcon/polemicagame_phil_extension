@@ -436,6 +436,18 @@ describe("§4.7 lifecycle heuristic", () => {
         "+1 таймер (9.23.1) — шаги лесенки ставят setTimeout трижды при одном clearTimeout-поле verdictTimer, " +
         "каждый прежний таймер снимается перед новым и в disable()",
     },
+    "src/content/features/profile-crossover.ts": {
+      listeners: 0,
+      timers: 1,
+      reason:
+        "await-слип 350 мс перед загрузкой историй (9.32.1, anti-листание): промис всегда " +
+        "резолвится сам, после него стоит гейт routeId/isConnected — переживать disable нечему",
+    },
+    "src/content/features/profile-mmr-chart.ts": {
+      listeners: 0,
+      timers: 1,
+      reason: "тот же await-слип 350 мс, что у profile-crossover (9.32.1)",
+    },
     "src/content/features/connection-diag.ts": {
       listeners: 1,
       timers: 1,

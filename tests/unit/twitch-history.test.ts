@@ -28,10 +28,13 @@ import {
 
 type Msg = Parameters<typeof serializeChatHistory>[1][number];
 
+// Метка «минуту назад», не абсолютная: парсер отвергает будущее (+60с), и
+// зашитая дата делала сюиту зависимой от часов раннера (adversarial, тест-мина).
+const recent = () => new Date(Date.now() - 60_000);
 const chat = (over: Partial<Msg> = {}): Msg => ({
   username: "viewer",
   message: "привет",
-  timestamp: new Date("2026-08-26T12:00:00Z"),
+  timestamp: recent(),
   type: "chat",
   ...over,
 });
@@ -50,7 +53,7 @@ describe("круговорот сериализация → парсинг", () 
     expect(out[0].color).toBe("#FF4500");
     expect(out[0].badges).toEqual(["🛡"]);
     expect(out[1].mention).toBe(true);
-    expect(out[0].timestamp.getTime()).toBe(new Date("2026-08-26T12:00:00Z").getTime());
+    expect(Math.abs(out[0].timestamp.getTime() - recent().getTime())).toBeLessThan(5000);
   });
 
   test("системные строки не сохраняются: после F5 «Подключились» было бы враньём", () => {
@@ -140,5 +143,39 @@ describe("недоверенный sessionStorage", () => {
 
   test("пустое имя канала — ничего не восстанавливаем", () => {
     expect(parseChatHistory(serializeChatHistory("", [chat()]), "")).toEqual([]);
+  });
+
+  test("симметрия размеров: спам ctrl-символами не раздувает сохранённое за потолок чтения", () => {
+    // JSON экранирует ctrl-байты ×6: 200 сообщений по 600 таких символов
+    // раньше писались (~740 КБ), а чтение отказывало целиком (находка №1).
+    const spam = Array.from({ length: 200 }, (_, i) =>
+      chat({ message: "\u0002".repeat(600) + `хвост${i}` }),
+    );
+    const raw = serializeChatHistory("ch", spam);
+    expect(raw.length).toBeLessThanOrEqual(400_000);
+    const out = parseChatHistory(raw, "ch");
+    expect(out.length, "что сохранили — то и восстановили").toBeGreaterThan(0);
+    expect(out[out.length - 1].message).toContain("хвост199");
+    expect(out[0].message, "ctrl-байты выброшены при записи").not.toContain("\u0002");
+  });
+
+  test("бейджи дедуплицируются, как в живом IRC-пути", () => {
+    const raw = JSON.stringify({
+      channel: "ch",
+      messages: [{ username: "x", message: "m", timestamp: 1000, badges: ["★", "★", "★", "🛡"] }],
+    });
+    expect(parseChatHistory(raw, "ch")[0].badges).toEqual(["★", "🛡"]);
+  });
+
+  test("пустой и пробельный ник бракуют запись: живой путь таких не рождает", () => {
+    const raw = JSON.stringify({
+      channel: "ch",
+      messages: [
+        { username: "", message: "m", timestamp: 1000 },
+        { username: "   ", message: "m", timestamp: 1000 },
+        { username: "ok", message: "m", timestamp: 1000 },
+      ],
+    });
+    expect(parseChatHistory(raw, "ch").map((m) => m.username)).toEqual(["ok"]);
   });
 });

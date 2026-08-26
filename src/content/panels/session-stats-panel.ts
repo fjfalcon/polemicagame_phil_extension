@@ -37,6 +37,8 @@ export const SESSION_RESET_KEY = "pn_session_reset";
 const REFRESH_MS = 3 * 60_000;
 /** Сколько последних игр сессии показываем (остальное — счётчиком). */
 const ROWS_LIMIT = 12;
+/** Строк истории за запрос: сессия — десятки игр, не тысячи (~65 КБ vs 660). */
+const SESSION_PAGE_LIMIT = 200;
 
 /** Роль сайта → фрагмент спрайта (дон в спрайте зовётся godfather). */
 const ROLE_SPRITE: Record<string, string> = {
@@ -146,7 +148,7 @@ class SessionStatsPanel extends FloatingPanel {
         : `<span style="color:#f87171;">поражение</span>`;
       return `
         <a href="/match/${r.id}" target="_blank" rel="noopener" class="ss-row"
-           title="Открыть разбор матча №${r.id}">
+           title="Открыть разбор матча №${r.id}${r.mode && r.mode !== "league" ? ` · режим: ${r.mode.replace(/[^a-z0-9_-]/gi, "")}` : ""}">
           <span style="width:18px;height:18px;flex:none;display:grid;place-items:center;">${createRoleSvg(sprite, 18)}</span>
           <span style="flex:1;">${result}</span>
           ${diff}
@@ -171,6 +173,12 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let manualResetMs: number | null = null;
 /** Запрос уже в полёте — второй не шлём (кнопка + таймер могут совпасть). */
 let inFlight = false;
+/** Эпоха жизненного цикла: disable её инкрементирует, и висящий refresh
+ *  прошлой жизни не трогает ни панель новой, ни дедуп (adversarial №4). */
+let lifecycle = 0;
+/** Сводка уже показана — фоновая ошибка сети её не стирает (adversarial №3). */
+let hasRendered = false;
+let unsubResetWatch: (() => void) | null = null;
 
 async function loadManualReset(): Promise<void> {
   try {
@@ -197,27 +205,38 @@ async function startNewSession(): Promise<void> {
 }
 
 async function refresh(reason: string): Promise<void> {
-  if (!panel || !panel.isShown || inFlight) return;
+  const p = panel;
+  if (!p || !p.isShown || inFlight) return;
+  const epoch = lifecycle;
   inFlight = true;
   try {
     const userId = await getOwnUserId();
+    if (lifecycle !== epoch) return; // фичу выключили, пока ждали
     if (userId === null) {
-      panel.renderMessage("Профиль ещё не определён — зайдите на страницу поиска игры");
+      p.renderMessage("Профиль ещё не определён — зайдите на страницу поиска игры");
       return;
     }
-    const page = await fetchFirstPage(userId);
+    const page = await fetchFirstPage(userId, SESSION_PAGE_LIMIT);
+    if (lifecycle !== epoch) return;
     if (!page) {
-      panel.renderMessage("История игр не ответила — попробуйте обновить позже");
+      // Показанную сводку сетевая икота не стирает: старые данные полезнее
+      // таблички об ошибке, а следующий тик сам починит.
+      if (!hasRendered) p.renderMessage("История игр не ответила — попробуйте обновить позже");
+      else log.info(SCOPE, "обновление не удалось — оставлена прошлая сводка");
       return;
     }
     const games = pickSessionGames(page.rows, sessionAnchor(Date.now(), manualResetMs));
-    panel.renderSession(games);
+    p.renderSession(games);
+    hasRendered = true;
     log.debug(SCOPE, "обновлено:", reason, `игр в сессии: ${games.length}`);
   } catch (e) {
     log.warn(SCOPE, "обновление не удалось", e);
-    panel?.renderMessage("История игр не ответила — попробуйте обновить позже");
+    if (lifecycle === epoch && !hasRendered) {
+      p.renderMessage("История игр не ответила — попробуйте обновить позже");
+    }
   } finally {
-    inFlight = false;
+    // Дедуп чужой жизни не трогаем: его уже сбросил disable.
+    if (lifecycle === epoch) inFlight = false;
   }
 }
 
@@ -233,20 +252,43 @@ export const sessionStatsFeature: SessionStatsFeature = {
       // Скрытая вкладка не опрашивает чужой сервер впустую.
       if (!document.hidden) void refresh("таймер");
     }, REFRESH_MS);
+    // «Начать заново» в ДРУГОЙ вкладке: якорь общий (storage.local), и обе
+    // панели обязаны считать один и тот же вечер (adversarial №2).
+    const onChanged = (
+      changes: Record<string, { newValue?: unknown }>,
+      area: string,
+    ): void => {
+      if (area !== "local" || !(SESSION_RESET_KEY in changes)) return;
+      const v = changes[SESSION_RESET_KEY]?.newValue;
+      manualResetMs = typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+      void refresh("сброс из другой вкладки");
+    };
+    browser.storage.onChanged.addListener(onChanged);
+    unsubResetWatch = () => browser.storage.onChanged.removeListener(onChanged);
   },
 
   disable() {
+    lifecycle++; // висящие refresh прошлой жизни отваливаются на гейте эпохи
     if (refreshTimer !== null) {
       clearInterval(refreshTimer);
       refreshTimer = null;
     }
+    if (unsubResetWatch) {
+      unsubResetWatch();
+      unsubResetWatch = null;
+    }
     panel?.unmount();
     panel = null;
     inFlight = false;
+    hasRendered = false;
   },
 
   requestClose() {
+    // Прячем сразу: закрытие не должно ждать storage (и его отказа).
+    panel?.hide();
     // Выключаем тумблер — FeatureManager затем вызовет disable().
-    void browser.storage.sync.set({ session_stats_enabled: false });
+    browser.storage.sync.set({ session_stats_enabled: false }).catch((e: unknown) => {
+      log.warn(SCOPE, "не удалось сохранить закрытие панели", e);
+    });
   },
 };

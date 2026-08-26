@@ -28,7 +28,7 @@ vi.mock("@core/crossover", async (importOriginal) => {
   const orig = await importOriginal<typeof import("@core/crossover")>();
   return {
     ...orig,
-    fetchHistory: vi.fn(async () => ({
+    fetchFirstPage: vi.fn(async () => ({
       rows: [
         { id: 3, role: "civilian", win: true, mmrAfter: 120, mmrDiff: 20 },
         { id: 1, role: "civilian", win: true, mmrAfter: 100, mmrDiff: 10 },
@@ -51,7 +51,7 @@ import {
 import type { GameRow } from "@core/crossover";
 import type { FeatureContext } from "@core/feature";
 
-const flush = () => new Promise((r) => setTimeout(r, 0));
+const flush = () => new Promise((r) => setTimeout(r, 400)); // 350 мс паузы перед сетью
 const block = (): HTMLElement | null => document.querySelector(`.${CHART_CLASS}`);
 
 beforeEach(() => {
@@ -109,6 +109,10 @@ describe("карточка на своём профиле", () => {
   test("чужой профиль — карточки нет (там живёт «Вместе с вами»)", async () => {
     window.history.replaceState(null, "", "/profile/993");
     profileMmrChartFeature.enable({ settings: {} } as unknown as FeatureContext);
+    await flush();
+    expect(block()).toBeNull();
+    // Регрессия блокера §4: мутация от самоудаления не перевставляет карточку.
+    h.domSub?.([{ type: "childList" } as unknown as MutationRecord]);
     await flush();
     expect(block()).toBeNull();
   });

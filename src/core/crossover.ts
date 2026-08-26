@@ -212,10 +212,11 @@ const REQUEST_TIMEOUT_MS = 20_000;
 async function fetchPage(
   userId: number | string,
   page: number,
+  limit: number = PAGE_SIZE,
 ): Promise<{ rows: GameRow[]; total: number } | null> {
   try {
     const res = await fetch(
-      `https://polemicagame.com/profile/default/get-games?userId=${encodeURIComponent(String(userId))}&page=${page}&limit=${PAGE_SIZE}`,
+      `https://polemicagame.com/profile/default/get-games?userId=${encodeURIComponent(String(userId))}&page=${page}&limit=${limit}`,
       { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
     );
     if (!res.ok) {
@@ -253,8 +254,11 @@ function reachedDepth(rows: GameRow[], until?: string): boolean {
 /** Первая страница истории. null — не удалось (это НЕ «игр нет»). */
 export function fetchFirstPage(
   userId: number | string,
+  /** Свой limit — для потребителей, которым не нужны тысячи строк:
+   *  «Мой вечер» берёт 200 (~65 КБ) вместо 2000 (~660 КБ) каждые 3 минуты. */
+  limit: number = PAGE_SIZE,
 ): Promise<{ rows: GameRow[]; total: number } | null> {
-  return fetchPage(userId, 1);
+  return fetchPage(userId, 1, limit);
 }
 
 /**

@@ -248,6 +248,11 @@ onMessage((msg) => {
   if ("type" in msg && msg.type === "getContentVersion") {
     return Promise.resolve({ version: browser.runtime.getManifest().version });
   }
+  // Комнатность для автозаписи OBS: отвечает ЛЮБАЯ вкладка сайта, независимо
+  // от включённых фич — правду о вкладке знает только она (§4.10).
+  if ("type" in msg && msg.type === "obs_room_probe") {
+    return Promise.resolve({ inRoom: isGameRoomPath(location.pathname) });
+  }
   return undefined;
 });
 

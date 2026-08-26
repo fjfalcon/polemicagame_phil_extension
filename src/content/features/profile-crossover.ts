@@ -42,12 +42,23 @@ const BAD_TTL_MS = 2 * 60_000;
 /** id из пути профиля: «/profile/993», «/profile/993/…». Чистая функция. */
 export function profileIdFromPath(pathname: string): string | null {
   const m = /^\/profile\/(\d+)(?:[/?#]|$)/.exec(pathname);
-  return m ? m[1] : null;
+  if (!m) return null;
+  // Нормализация ведущих нулей: /profile/0993 — тот же профиль, что 993;
+  // без неё сравнение со «своим» id ложно считало свой профиль чужим.
+  const n = Number(m[1]);
+  return Number.isSafeInteger(n) && n > 0 ? String(n) : null;
 }
 
 let enabled = false;
 let routeId: string | null = null;
 let unsubDom: (() => void) | null = null;
+/**
+ * Вердикт «на этом профиле карточке не место» (свой профиль / разлогин).
+ * Без него самоудаление карточки из fillBlock рождало childList-мутацию,
+ * apply() вставлял её заново — вечный цикл вставка/удаление на ~4 Гц,
+ * прямое нарушение идемпотентности §4 (adversarial 26.08.2026, блокер).
+ */
+let hiddenFor: string | null = null;
 
 const crossCache = new Map<string, { at: number; ttl: number; data: Crossover | null }>();
 const inFlight = new Map<string, Promise<Crossover | null>>();
@@ -122,7 +133,7 @@ function buildBlock(profileId: string): HTMLElement {
  * не на маршруте — карточки нет; на маршруте — карточка одна и с верным id.
  */
 function apply(): void {
-  if (!enabled || routeId === null) {
+  if (!enabled || routeId === null || routeId === hiddenFor) {
     removeBlock();
     return;
   }
@@ -143,14 +154,17 @@ function apply(): void {
 async function fillBlock(profileId: string, block: HTMLElement): Promise<void> {
   const body = block.querySelector<HTMLElement>(".pn-cross-body");
   if (!body) return;
+  // Пауза перед сетью: быстрое листание профилей (состав турнира) не должно
+  // запускать пару историй (до мегабайт) на КАЖДЫЙ мелькнувший профиль —
+  // отменять их после старта нечем (adversarial 26.08.2026, №2).
+  await new Promise((r) => setTimeout(r, 350));
+  if (routeId !== profileId || !block.isConnected) return;
   const myId = await getOwnUserId();
-  if (myId === null) {
-    // Не залогинен или профиль ещё не пойман — сравнивать не с кем.
+  if (myId === null || String(myId) === profileId) {
+    // Не залогинен / свой профиль — сравнивать не с кем. Вердикт запоминаем
+    // ДО remove: удаление будит onDomChange, и apply обязан не вставить снова.
+    hiddenFor = profileId;
     block.remove();
-    return;
-  }
-  if (String(myId) === profileId) {
-    block.remove(); // свой профиль: пересекаться не с кем
     return;
   }
   const data = await computeCrossover(profileId, myId);
@@ -169,6 +183,8 @@ async function fillBlock(profileId: string, block: HTMLElement): Promise<void> {
 export function syncProfileCrossoverRoute(profileId: string | null): void {
   if (routeId === profileId) return;
   routeId = profileId;
+  // Новый профиль — новый вердикт: логин мог смениться, id другой.
+  hiddenFor = null;
   apply();
 }
 
@@ -187,11 +203,13 @@ export const profileCrossoverFeature: Feature = {
       }
     });
     routeId = profileIdFromPath(location.pathname);
+    hiddenFor = null;
     apply();
   },
 
   disable() {
     enabled = false;
+    hiddenFor = null;
     if (unsubDom) {
       unsubDom();
       unsubDom = null;
@@ -200,5 +218,6 @@ export const profileCrossoverFeature: Feature = {
     crossCache.clear();
     inFlight.clear();
     myHistory = null;
+    myHistoryInFlight = null;
   },
 };

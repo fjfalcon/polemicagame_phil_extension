@@ -177,6 +177,9 @@ function spyDocQsa(): { n: number } {
 }
 
 beforeEach(() => {
+  // Гигиена: disable() в afterEach флашит историю в общий jsdom-sessionStorage,
+  // и без чистки старые TW-P7-тесты засевались остатками соседей.
+  sessionStorage.clear();
   FakeWebSocket.instances = [];
   h.panelShows = 0;
   (globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket;

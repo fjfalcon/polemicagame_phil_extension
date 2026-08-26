@@ -179,18 +179,28 @@ const KNOWN_BADGES = new Set(Object.values(BADGE_ICONS));
  * отмечает отдельный разделитель при восстановлении.
  */
 export function serializeChatHistory(channel: string, messages: ChatMessage[]): string {
-  const chat = messages
+  let chat = messages
     .filter((m) => m.type === "chat")
     .slice(-MAX_MESSAGES)
     .map((m) => ({
       username: (m.username ?? "").slice(0, 100),
       color: m.color,
       badges: m.badges?.filter((b) => KNOWN_BADGES.has(b)).slice(0, 5),
-      message: m.message.slice(0, HISTORY_MSG_MAX),
+      // Управляющие символы выбрасываются: JSON экранирует их в \uXXXX (×6),
+      // и спам из ctrl-байтов раздувал сохранённое за потолок чтения — после
+      // F5 восстановление молча отказывало ЦЕЛИКОМ (adversarial 26.08.2026).
+      message: m.message.replace(/[\u0000-\u001f]/g, "").slice(0, HISTORY_MSG_MAX),
       timestamp: m.timestamp.getTime(),
       mention: m.mention === true,
     }));
-  return JSON.stringify({ channel, messages: chat });
+  // Симметрия «что сохранили — то и восстановим»: итог обязан пролезать в
+  // HISTORY_RAW_MAX парсера. Перебор — выкидываем старейшую четверть.
+  let raw = JSON.stringify({ channel, messages: chat });
+  while (raw.length > HISTORY_RAW_MAX && chat.length > 0) {
+    chat = chat.slice(Math.max(1, Math.ceil(chat.length / 4)));
+    raw = JSON.stringify({ channel, messages: chat });
+  }
+  return raw;
 }
 
 /**
@@ -220,7 +230,7 @@ export function parseChatHistory(raw: string | null, channel: string): ChatMessa
     const username = own(item, "username");
     const message = own(item, "message");
     const timestamp = own(item, "timestamp");
-    if (typeof username !== "string" || username.length > 100) continue;
+    if (typeof username !== "string" || username.length > 100 || !username.trim()) continue;
     if (typeof message !== "string" || message.length > HISTORY_MSG_MAX) continue;
     // Метка из будущего или доисторическая — запись битая, не «поправимая».
     if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) continue;
@@ -232,7 +242,9 @@ export function parseChatHistory(raw: string | null, channel: string): ChatMessa
       message,
       color: typeof rawColor === "string" && /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : undefined,
       badges: Array.isArray(rawBadges)
-        ? rawBadges.filter((b): b is string => typeof b === "string" && KNOWN_BADGES.has(b)).slice(0, 5)
+        ? // Дедуп — как в живом parseBadges: пять «★» подряд из враждебного
+          // хранилища рисовали бы фальшивую важность зрителя.
+          [...new Set(rawBadges.filter((b): b is string => typeof b === "string" && KNOWN_BADGES.has(b)))].slice(0, 5)
         : undefined,
       mention: own(item, "mention") === true,
       timestamp: new Date(timestamp),
@@ -383,7 +395,9 @@ class TwitchChatPanel extends FloatingPanel {
   seedHistory(restored: ChatMessage[]): void {
     if (restored.length === 0 || this.messages.length > 0) return;
     this.messages = [
-      ...restored,
+      // Вместе с разделителем — ровно MAX_MESSAGES: буфер в 201 строку
+      // навсегда ломал инвариант размера (shift снимает по одному).
+      ...restored.slice(-(MAX_MESSAGES - 1)),
       { message: "⟲ история восстановлена", timestamp: new Date(), type: "system" },
     ];
     this.renderMessages();

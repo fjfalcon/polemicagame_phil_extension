@@ -17,16 +17,26 @@ import type { GameRow } from "./crossover";
 export const SESSION_DAY_START_HOUR = 4;
 
 /**
- * Разбор даты сайта «YYYY-MM-DD HH:MM:SS» в локальные миллисекунды.
+ * Разбор даты сайта «YYYY-MM-DD HH:MM:SS» в epoch-миллисекунды.
+ *
+ * Метки сервера — UTC: замер 26.08.2026 по свежайшим date_ends тридцати
+ * активных игроков (максимум «13:06:31» при текущем 13:31 UTC, ни одной
+ * метки ПОЗЖЕ UTC-времени; для МСК свежие концы игр были бы «до 16:31»).
+ * Разбор как локального времени уводил игры на смещение пояса в прошлое,
+ * и «начать заново» терял свежие игры у любого пользователя восточнее
+ * Гринвича (adversarial 26.08.2026, находка №1 по «Моему вечеру»).
+ *
  * Руками, не new Date(строка): формат с пробелом Firefox исторически
- * парсит в Invalid Date. null — строка не о том.
+ * парсит в Invalid Date. Диапазоны полей проверяются: Date молча
+ * перекатывает «месяц 19» в следующий год, а битой метке место в null.
  */
 export function parseGameDate(raw: string | undefined): number | null {
   if (!raw) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(raw);
   if (!m) return null;
-  const [, y, mo, d, h, mi, s] = m;
-  const t = new Date(+y, +mo - 1, +d, +h, +mi, +s).getTime();
+  const [, y, mo, d, h, mi, s] = m.map(Number) as unknown as number[];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) return null;
+  const t = Date.UTC(y, mo - 1, d, h, mi, s);
   return Number.isFinite(t) ? t : null;
 }
 
@@ -44,7 +54,17 @@ export function sessionAnchor(nowMs: number, manualResetMs: number | null): numb
     SESSION_DAY_START_HOUR,
   ).getTime();
   // До 04:00 «сегодняшняя» граница ещё в будущем — сутки начались вчера.
-  const dayStart = nowMs >= boundary ? boundary : boundary - 24 * 3600_000;
+  // «Вчера» — через календарь, не −24ч: в день перевода часов (DST) сутки
+  // длиной не 24 часа, и вычитание сдвигало бы границу на час.
+  const dayStart =
+    nowMs >= boundary
+      ? boundary
+      : new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() - 1,
+          SESSION_DAY_START_HOUR,
+        ).getTime();
   return manualResetMs !== null && manualResetMs > dayStart ? manualResetMs : dayStart;
 }
 

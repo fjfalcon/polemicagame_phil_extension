@@ -329,8 +329,14 @@ export interface PostgameLiveProbeMsg {
   type: "postgame_live_probe";
 }
 
+/** Фон спрашивает вкладку: «ты сейчас в игровой комнате?» (автозапись OBS). */
+export interface ObsRoomProbeMsg {
+  type: "obs_room_probe";
+}
+
 export type ExtMessage =
   | ObsCommandMsg
+  | ObsRoomProbeMsg
   | ObsEventMsg
   | UpdateNotesSettingsMsg
   | TwitchControlMsg
