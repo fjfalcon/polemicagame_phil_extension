@@ -55,6 +55,9 @@ try {
   fail("dist/.gate-stamp.json не читается");
 }
 if (stamp.version !== want) fail(`штамп гейта от версии ${stamp.version} — прогони release:assets заново`);
+if (!stamp.chromeZipSha256 || !stamp.firefoxTreeSha256) {
+  fail("штамп старого формата (без дайджестов) — прогони release:assets заново");
+}
 const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 if (stamp.gitHead !== head) {
   fail(`артефакт собран на ${String(stamp.gitHead).slice(0, 7)}, HEAD сейчас ${head.slice(0, 7)} — исходники уехали`);

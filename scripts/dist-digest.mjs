@@ -19,17 +19,28 @@ export function treeSha256(dir) {
   const walk = (d) => {
     for (const name of fs.readdirSync(d).sort()) {
       const p = path.join(d, name);
-      if (fs.statSync(p).isDirectory()) walk(p);
+      // lstat, не stat: симлинк в артефакте — сам по себе повод отказать
+      // (битый давал ENOENT-стектрейс, цикл — вечную рекурсию, а цель вне
+      // дерева делала дайджест зависимым от чужих байтов; adversarial
+      // 26.08.2026, находка 2).
+      const st = fs.lstatSync(p);
+      if (st.isSymbolicLink()) {
+        throw new Error(`symlink в артефакте: ${path.relative(dir, p)} — сборка не должна их класть`);
+      }
+      if (st.isDirectory()) walk(p);
       else files.push(p);
     }
   };
   walk(dir);
   const h = createHash("sha256");
   for (const p of files) {
-    h.update(path.relative(dir, p));
-    h.update("\0");
-    h.update(fs.readFileSync(p));
-    h.update("\0");
+    const body = fs.readFileSync(p);
+    const rel = path.relative(dir, p);
+    // Длины во фрейминге — инъективность: без них {a:"x\0b\0y"} и
+    // {a:"x", b:"y"} давали ОДИН дайджест (adversarial 26.08.2026, находка 1).
+    h.update(`${Buffer.byteLength(rel)}:${body.length}:`);
+    h.update(rel);
+    h.update(body);
   }
   return h.digest("hex");
 }
