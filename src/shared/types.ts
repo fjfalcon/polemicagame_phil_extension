@@ -16,6 +16,8 @@ export interface Settings {
   show_kills: boolean;
   show_roles: boolean;
   statistics_enabled: boolean;
+  /** Панель «Мой вечер»: игры сессии с ролью и ±MMR. */
+  session_stats_enabled: boolean;
   match_page_stats_enabled: boolean;
   /** Вид страницы разбора матча: hints | legend | classic. */
   match_stats_view: string;

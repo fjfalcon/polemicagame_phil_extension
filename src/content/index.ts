@@ -40,6 +40,7 @@ import { nickPlateFeature } from "./features/nick-plate";
 import { wsLogFeature } from "./features/ws-log";
 import { controlsSafetyFeature } from "./features/controls-safety";
 import { obsPanelFeature } from "./panels/obs-panel";
+import { sessionStatsFeature } from "./panels/session-stats-panel";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
 const manager = new FeatureManager().register(
@@ -67,6 +68,7 @@ const manager = new FeatureManager().register(
   controlsSafetyFeature,
   obsPanelFeature,
   twitchPanelFeature,
+  sessionStatsFeature,
 );
 
 function setupUrlRouter(extensionEnabledAtBoot: boolean): void {

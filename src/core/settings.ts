@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS: Settings = {
   show_kills: true,
   show_roles: true,
   statistics_enabled: true,
+  session_stats_enabled: false,
   match_page_stats_enabled: true,
   match_stats_view: "hints",
   // "default" теперь БЕЛАЯ (просьба владельца 13.08.2026). Прежний тёмно-синий

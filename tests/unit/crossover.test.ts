@@ -127,6 +127,7 @@ describe("разбор ответа истории игр", () => {
       role: "civilian",
       win: true,
       date: "2026-08-09 13:25:20",
+      mmrDiff: 36,
     });
     expect(parsed?.total).toBe(373);
   });
@@ -134,6 +135,28 @@ describe("разбор ответа истории игр", () => {
   test("поражение — это НЕ победа", () => {
     const parsed = parseGameRows({ rows: [{ id: 1, role: { type: "mafia" }, result: { code: "fail" } }] });
     expect(parsed?.rows[0].win).toBe(false);
+  });
+
+  test("поля MMR для «Моего вечера» читаются, а мусор в них — нет", () => {
+    // Форма mmr снята с настоящего ответа 26.08.2026 (userId=993).
+    const parsed = parseGameRows({
+      rows: [
+        {
+          id: 623016,
+          role: { type: "mafia" },
+          result: { code: "success" },
+          mmr: { mmr: 10115, mmr_diff: 27 },
+          game_mode: { value: "league" },
+        },
+        // Недобулево/строки в mmr не должны стать числами сводки.
+        { id: 7, role: { type: "civilian" }, result: { code: "fail" }, mmr: { mmr: "10115", mmr_diff: null } },
+      ],
+    });
+    expect(parsed?.rows[0].mmrAfter).toBe(10115);
+    expect(parsed?.rows[0].mmrDiff).toBe(27);
+    expect(parsed?.rows[0].mode).toBe("league");
+    expect(parsed?.rows[1].mmrAfter).toBeUndefined();
+    expect(parsed?.rows[1].mmrDiff).toBeUndefined();
   });
 
   test("мусор вместо ответа не роняет и не превращается в игры", () => {

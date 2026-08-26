@@ -316,7 +316,7 @@ src/
 | local | obs_password | settings.ts (LOCAL_KEYS) |
 | local | roleMarks | role-marker (метки «мой read», ключи g:<id> / l:<состав>) |
 | local | pn_muted_players | player-notes: ники (lowercase) с локально выключенным звуком (8.1.41, глушение через video.volume=0 + маркер data-pn-muted) |
-| local | pn_update_last_check, pn_update_latest, pn_update_dismissed | update-notify (8.1.44). Переехали из localStorage страницы: тот принадлежит сайту (недоверенный) и не виден попапу с кнопкой ручной проверки |
+| local | pn_update_last_check, pn_update_latest, pn_update_dismissed, pn_session_reset | update-notify (8.1.44); pn_session_reset — ручной якорь «начать сессию заново» панели «Мой вечер» (9.30.0). Переехали из localStorage страницы: тот принадлежит сайту (недоверенный) и не виден попапу с кнопкой ручной проверки |
 | local | polemica:logs:{content-<session>,bg,popup,ext} | log.ts (CAP 600/контекст; content-сессии старше 24ч чистятся) |
 | local | pn_own_user_id | own-user.ts — свой userId, прочитанный из ссылки профиля в шапке; нужен статистике пересечений (в комнате шапки нет) |
 | local | polemica:wslog:{session}:{n} | ws-log.ts — полный лог кадров игрового сокета: ВЫКЛЮЧЕН по умолчанию, медиа и секреты не пишутся. Потолок 2 млн символов ОБЩИЙ (не на сессию) и держится `sweepStorage()` — она же удаляет протухшее и битое. Уборка зовётся при включении фичи, при выгрузке из попапа и при отказе записи; TTL сам по себе НИЧЕГО не удаляет (жалоба 10.08.2026: переполненное хранилище перестало сохранять заметки) |

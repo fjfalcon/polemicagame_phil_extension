@@ -1015,6 +1015,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("queue_peek_prime", items.queue_peek_prime);
     set("pause_hotkey_enabled", items.pause_hotkey_enabled);
     set("statistics_enabled", items.statistics_enabled);
+    set("session_stats_enabled", items.session_stats_enabled);
     set("match_page_stats_enabled", items.match_page_stats_enabled);
 
     const sbt = $<HTMLSelectElement>("stats_button_theme");
@@ -1204,6 +1205,7 @@ document.addEventListener("DOMContentLoaded", () => {
       outcry_hotkey_code: outcryCode,
       hotkey_hints_enabled: cb("hotkey_hints_enabled", true),
       statistics_enabled: cb("statistics_enabled", true),
+      session_stats_enabled: cb("session_stats_enabled", false),
       match_page_stats_enabled: cb("match_page_stats_enabled", true),
       match_stats_view: $<HTMLSelectElement>("match_stats_view")?.value || "hints",
       stats_button_theme: ($<HTMLSelectElement>("stats_button_theme")?.value || "default"),
@@ -1280,6 +1282,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "queue_peek_prime",
     "pause_hotkey_enabled",
     "statistics_enabled",
+    "session_stats_enabled",
     "match_page_stats_enabled",
     "stats_button_theme",
     "match_stats_view",

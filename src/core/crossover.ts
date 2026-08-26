@@ -37,6 +37,12 @@ export interface GameRow {
   win: boolean;
   /** Дата начала — по ней ограничиваем глубину чужой истории. */
   date?: string;
+  /** MMR ПОСЛЕ игры — если сайт его отдал (панель «Мой вечер»). */
+  mmrAfter?: number;
+  /** Изменение MMR за игру — если сайт его отдал. */
+  mmrDiff?: number;
+  /** Режим игры (league/…) — подпись в «Моём вечере». */
+  mode?: string;
 }
 
 export interface SharedGame {
@@ -158,14 +164,21 @@ export function parseGameRows(payload: unknown): { rows: GameRow[]; total: numbe
       role?: { type?: unknown };
       result?: { code?: unknown };
       date_start?: unknown;
+      mmr?: { mmr?: unknown; mmr_diff?: unknown };
+      game_mode?: { value?: unknown };
     };
     const id = typeof r?.id === "number" ? r.id : Number(r?.id);
     if (!Number.isSafeInteger(id) || id <= 0) continue;
+    const mmrAfter = r.mmr?.mmr;
+    const mmrDiff = r.mmr?.mmr_diff;
     rows.push({
       id,
       role: typeof r.role?.type === "string" ? r.role.type : "civilian",
       win: r.result?.code === "success",
       date: typeof r.date_start === "string" ? r.date_start : undefined,
+      mmrAfter: typeof mmrAfter === "number" && Number.isFinite(mmrAfter) ? mmrAfter : undefined,
+      mmrDiff: typeof mmrDiff === "number" && Number.isFinite(mmrDiff) ? mmrDiff : undefined,
+      mode: typeof r.game_mode?.value === "string" ? r.game_mode.value : undefined,
     });
   }
   const total = typeof data.totalCount === "number" ? data.totalCount : rows.length;
