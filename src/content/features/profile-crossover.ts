@@ -24,7 +24,6 @@ import {
   crossGames,
   fetchFirstPage,
   getOwnHistory,
-  releaseOwnHistory,
   oldestDate,
   type Crossover,
   type History,
@@ -200,6 +199,7 @@ export const profileCrossoverFeature: Feature = {
     removeBlock();
     crossCache.clear();
     inFlight.clear();
-    releaseOwnHistory();
+    // Общую историю не отпускаем: ей владеет TTL кэша, а release отсюда
+    // выбивал её из-под соседних потребителей (adversarial №5).
   },
 };

@@ -14,7 +14,7 @@
  * разбора; медиа и ключи сессии не попадают в файл никогда (см. core/ws-log).
  */
 import { log } from "@core/log";
-import { flushNow, record, resetBuffer, size, startSession } from "@core/ws-log";
+import { finishSession, flushNow, record, size, startSession } from "@core/ws-log";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const SCOPE = "ws-log";
@@ -84,7 +84,9 @@ export const wsLogFeature: Feature = {
     // Собранное НЕ стираем: человек выключает лог после разбора, а скачать
     // файл хочет уже потом. Для стирания есть отдельная кнопка в попапе.
     log.info(SCOPE, `полный лог кадров выключен (в памяти ${size()}, пропущено медиа: ${skipped})`);
-    void flushNow();
-    resetBuffer();
+    // Хвост ДОЖИДАЕТСЯ записи до закрытия поколения: прежний порядок терял
+    // последние секунды — ровно те, ради которых лог включали (adversarial
+    // 26.08.2026, HIGH-1).
+    void finishSession();
   },
 };

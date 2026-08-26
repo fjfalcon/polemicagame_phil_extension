@@ -339,7 +339,11 @@ export function getOwnHistory(myId: number | string): Promise<History | null> {
   if (ownHistoryInFlight && ownHistoryInFlight.id === id) return ownHistoryInFlight.p;
   const p = fetchHistory(myId)
     .then((h) => {
-      if (h) ownHistory = { id, at: Date.now(), data: h };
+      // Гард поздней развязки: сменился аккаунт и уже летит НОВЫЙ запрос —
+      // старый не затирает кэш чужими данными (adversarial №11).
+      if (h && (!ownHistoryInFlight || ownHistoryInFlight.p === p)) {
+        ownHistory = { id, at: Date.now(), data: h };
+      }
       return h;
     })
     .finally(() => {
@@ -350,8 +354,9 @@ export function getOwnHistory(myId: number | string): Promise<History | null> {
 }
 
 /**
- * Отпустить строки истории (у завсегдатая — мегабайты): сводки уже
- * посчитаны и лежат в кэшах потребителей. Летящий запрос не трогаем.
+ * Отпустить строки истории (у завсегдатая — мегабайты). Продакшен-вызовов
+ * НЕТ осознанно (adversarial 26.08.2026, №4/№5: release одного потребителя
+ * выбивал кэш из-под другого) — память отпускает TTL. Экспорт — тестовый шов.
  */
 export function releaseOwnHistory(): void {
   if (!ownHistoryInFlight) ownHistory = null;

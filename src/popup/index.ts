@@ -227,7 +227,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Заодно уборка: попап — единственное место, куда человек приходит сам,
     // и удобный момент вернуть браузеру место.
     await wsLog.sweepStorage();
-    const frames = await wsLog.collectAll();
+    const { frames, dropped } = await wsLog.collectAll();
     if (frames.length === 0) {
       // Пустой файл только собьёт с толку: причина почти всегда одна —
       // настройку не включили либо включили уже после игры.
@@ -238,14 +238,16 @@ document.addEventListener("DOMContentLoaded", () => {
       );
       return;
     }
-    const blob = new Blob([wsLog.formatFrames(frames)], { type: "text/plain" });
+    const blob = new Blob([wsLog.formatFrames(frames, dropped)], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `polemica-ws-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`;
     a.click();
     URL.revokeObjectURL(url);
-    showPopupToast(`Кадров: ${frames.length}`);
+    showPopupToast(
+      dropped > 0 ? `Кадров: ${frames.length} (отброшено при перегрузке: ${dropped})` : `Кадров: ${frames.length}`,
+    );
   });
   $("clear_ws_log")?.addEventListener("click", async () => {
     await wsLog.clearAll();

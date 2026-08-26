@@ -29,7 +29,6 @@ import {
     type Crossover,
   type History,
   getOwnHistory,
-  releaseOwnHistory,
 } from "@core/crossover";
 import { fetchFirstKilled } from "@core/match-brief";
 import { getOwnUserId, ownNameFromTable, rememberOwnUserId } from "@core/own-user";
@@ -758,7 +757,6 @@ class PlayerNotesManager {
     this.lastGamesInFlight.clear();
     this.crossoverCache.clear();
     this.crossoverInFlight.clear();
-    releaseOwnHistory();
     this.warmBusy = false;
     this.warmStopped = false;
     this.statsErrorAt.clear();
@@ -3393,10 +3391,6 @@ class PlayerNotesManager {
    * Отпустить свою историю: сводки посчитаны, строки больше не нужны.
    * Пересечения переживают её в кэше — там уже готовые числа.
    */
-  private releaseMyHistory(): void {
-    releaseOwnHistory();
-  }
-
   /**
    * Прогрев пересечений — по ОДНОМУ игроку за проход.
    *
@@ -3419,8 +3413,9 @@ class PlayerNotesManager {
       return key !== "" && key !== mine && !this.crossoverCache.has(key);
     });
     if (pending.length === 0) {
-      // Стол прогрет целиком — держать историю больше незачем.
-      if (names.length > 0) this.releaseMyHistory();
+      // Стол прогрет. Историю НЕ отпускаем вручную: общий кэш живёт своим
+      // TTL, а release из 2-секундного прохода выбивал её из-под ховер-
+      // апгрейда и профильных карточек (adversarial 26.08.2026, №4/№5).
       return;
     }
     // Прогрев начинается с первой НОЧИ: днём игрок говорит и смотрит на стол,

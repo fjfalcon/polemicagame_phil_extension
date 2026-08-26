@@ -717,12 +717,14 @@ async function clearStaleQueueGuards(): Promise<void> {
 let lastReconcileAt = 0;
 const WAKE_RECONCILE_DEDUPE_MS = 30_000;
 
-function restoreObsConnection(probe = false): void {
+function restoreObsConnection(probe = false, force = false): void {
   void enqueueObs(async () => {
-    // Дедуп «одна сверка на пробуждение» — для ЛЮБОГО пути (PERF26-12):
-    // top-level инкарнации + onStartup ставили ДВЕ сверки подряд, и при
-    // недоступном хосте очередь держалась до 20 секунд двумя connect'ами.
-    if (Date.now() - lastReconcileAt < WAKE_RECONCILE_DEDUPE_MS) return;
+    // Дедуп «одна сверка на пробуждение» (PERF26-12): top-level инкарнации +
+    // alarm ставили ДВЕ сверки подряд, при недоступном хосте — до 20 секунд
+    // очереди. force — для путей с ГАРАНТИЕЙ (onInstalled после снятия
+    // protocol-блока: watchdog там погашен, пропуск = не подключимся вовсе
+    // до перезапуска браузера; adversarial 26.08.2026, HIGH-2).
+    if (!force && Date.now() - lastReconcileAt < WAKE_RECONCILE_DEDUPE_MS) return;
     try {
       await reconcileObsConnection(probe);
     } finally {
@@ -850,7 +852,9 @@ browser.runtime.onInstalled.addListener((details) => {
     // подключиться всегда — сохраняем этот контракт (PERF-8). Блокировку по
     // паролю (4008/4009) сброс счётчика не снимает — она проверяется раньше.
     obs.resetReconnectAttempts();
-    restoreObsConnection();
+    // force: top-level сверка могла отработать вхолостую ДО снятия блока —
+    // дедуп здесь отрезал бы единственный гарантированный повтор.
+    restoreObsConnection(false, true);
   })();
   void clearStaleQueueGuards();
 });

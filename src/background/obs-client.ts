@@ -543,9 +543,15 @@ export class ObsClient {
 
   async setCurrentScene(sceneName: string): Promise<boolean> {
     await this.request("SetCurrentProgramScene", { sceneName });
-    this.currentScene = sceneName;
-    this.notifyAll("obs_scene_changed", sceneName);
-    void this.saveConnectionState(true);
+    // Событие CurrentProgramSceneChanged обычно ОБГОНЯЕТ ответ запроса и уже
+    // разослало смену — второй notifyAll давал 2×tabs.query на каждую фазу
+    // (PERF26-17; adversarial №9: гард только в событии не дедупил типичный
+    // порядок). Рассылаем лишь если событие ещё не успело.
+    if (this.currentScene !== sceneName) {
+      this.currentScene = sceneName;
+      this.notifyAll("obs_scene_changed", sceneName);
+      void this.saveConnectionState(true);
+    }
     return true;
   }
 

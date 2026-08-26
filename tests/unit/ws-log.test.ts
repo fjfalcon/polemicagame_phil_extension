@@ -274,7 +274,7 @@ describe("хранилище", () => {
     storage.data.set(`${WS_LOG_PREFIX}b`, { at: Date.now(), frames: [{ t: 20, d: "in", m: "два" }] });
     storage.data.set(`${WS_LOG_PREFIX}a`, { at: Date.now(), frames: [{ t: 10, d: "in", m: "один" }] });
     storage.data.set("polemica:logs:content-x", { at: Date.now(), frames: [{ t: 5, d: "in", m: "чужое" }] });
-    const frames = await collectAll();
+    const { frames } = await collectAll();
     expect(frames.map(f => f.m)).toEqual(["один", "два"]);
   });
 
@@ -283,7 +283,7 @@ describe("хранилище", () => {
       at: Date.now() - WS_LOG_TTL_MS - 1000,
       frames: [{ t: 1, d: "in", m: "вчерашнее" }],
     });
-    expect(await collectAll()).toEqual([]);
+    expect((await collectAll()).frames).toEqual([]);
   });
 
   test("очистка трогает только свои ключи", async () => {
@@ -296,7 +296,7 @@ describe("хранилище", () => {
 
   test("отказ хранилища не роняет выгрузку", async () => {
     storage.get.mockRejectedValueOnce(new Error("QuotaExceeded"));
-    await expect(collectAll()).resolves.toEqual([]);
+    await expect(collectAll()).resolves.toEqual({ frames: [], dropped: 0 });
   });
 });
 

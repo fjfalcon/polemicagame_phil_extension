@@ -73,6 +73,7 @@ import { playerNotesFeature,
   throttleRebuild,
 } from "@content/features/player-notes";
 import { resetMatchBriefCache } from "@core/match-brief";
+import { releaseOwnHistory } from "@core/crossover";
 import type { Settings } from "@shared/types";
 
 const ctx = {
@@ -310,6 +311,9 @@ describe("прогрев пересечений", () => {
 
   beforeEach(async () => {
     playerNotesFeature.disable();
+    // Общий кэж своей истории (@core/crossover) — модульный синглтон:
+    // без сброса история «переезжает» между тестами.
+    releaseOwnHistory();
     seam.subs = [];
     seam.ownIdGate = null;
     serveSite();
@@ -363,17 +367,17 @@ describe("прогрев пересечений", () => {
     expect(asked, "за столом только я — тянуть нечего").toEqual([]);
   });
 
-  test("стол посчитан — своя история отпущена", async () => {
-    // Просьба владельца: держать в памяти сводку (полтора десятка чисел), а
-    // не тысячи строк истории. Наблюдаемо: подсевший позже игрок заставляет
-    // загрузить свою историю ЗАНОВО.
+  test("стол посчитан — своя история ПЕРЕИСПОЛЬЗУЕТСЯ, а не выбивается проходом", async () => {
+    // Контракт сменён 26.08.2026 (adversarial по перф-волне, №4/№5): release
+    // из 2-секундного прохода выбивал общий кэж из-под ховер-апгрейда и
+    // профильных карточек — теперь память отпускает TTL общего кэша, и
+    // подсевший позже игрок НЕ заставляет качать свою историю заново.
     table("Alpha");
     document.body.classList.add("night");
     await pass();
     expect(asked.filter((id) => id === "7"), "своя история загружена").toHaveLength(1);
 
-    // Стол прогрет целиком — проход обязан отпустить историю.
-    await pass();
+    await pass(); // стол прогрет — кэш живёт
 
     const late = document.createElement("div");
     late.className = "player";
@@ -382,8 +386,8 @@ describe("прогрев пересечений", () => {
     await pass();
     expect(
       asked.filter((id) => id === "7").length,
-      "историю отпустили — для нового игрока её пришлось взять снова",
-    ).toBe(2);
+      "для нового игрока своя история взята из общего кэша",
+    ).toBe(1);
   });
 
   test("второе наведение ЖДЁТ первый запрос, а не заводит свой", async () => {
