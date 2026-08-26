@@ -864,8 +864,18 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (!applied || applied.ok !== true) {
           // Фолбэк на прямую запись, если координатор недоступен: терять
-          // импорт из-за спящего воркера нельзя.
-          const fallbackMerged = mergeNotes(notes, incoming).merged;
+          // импорт из-за спящего воркера нельзя. Карта ПЕРЕЧИТЫВАЕТСЯ здесь
+          // же: снимок `notes` снят до диалога подтверждения, пользователь
+          // думал минуты, и игровая вкладка могла править заметки — мерж в
+          // старый снимок стирал бы её правки (ревью 26.08.2026; окно
+          // сужено с минут до миллисекунд, полностью его закрывает только
+          // координатор, которого в этой ветке и нет).
+          const { notes: freshNotes, loadFailed: freshFailed } = await loadNotes();
+          if (freshFailed) {
+            showPopupToast("Не удалось прочитать текущие заметки — импорт отменён", "error");
+            return;
+          }
+          const fallbackMerged = mergeNotes(freshNotes, incoming).merged;
           if (!(await saveNotes(fallbackMerged))) {
             showPopupToast("Не удалось сохранить заметки", "error");
             return;

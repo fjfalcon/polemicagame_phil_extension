@@ -63,7 +63,7 @@ vi.mock("@core/crossover", async (importOriginal) => {
 });
 
 // ВАЖНО: @core/dom НЕ мокается — конвейер настоящий.
-import { onDomChange } from "@core/dom";
+import { domObserver, onDomChange } from "@core/dom";
 import { log } from "@core/log";
 import { getOwnUserId } from "@core/own-user";
 import { profileCrossoverFeature, syncProfileCrossoverRoute } from "@content/features/profile-crossover";
@@ -136,7 +136,11 @@ describe("§4 fixpoint: профильные карточки", () => {
   test("чужой профиль: «Вместе с вами» рисуется и DOM затихает", async () => {
     mountProfileDom();
     window.history.replaceState(null, "", "/profile/993");
+    const before = domObserver.subscriberCount();
     profileCrossoverFeature.enable({ settings: {} } as unknown as FeatureContext);
+    // «Покрыт» в enrollment значит «сценарий гоняет ЖИВУЮ подписку»: импорт
+    // без подписки — фикция покрытия (ревью 26.08.2026).
+    expect(domObserver.subscriberCount(), "фича реально подписалась").toBe(before + 1);
     const r = await driveToFixpoint();
     expect(r.settled, `DOM не затих за ${r.rounds} раундов — цикл подписчика`).toBe(true);
     expect(document.querySelector(".pn-profile-crossover")?.textContent).toContain(
@@ -170,8 +174,10 @@ describe("§4 fixpoint: профильные карточки", () => {
   test("свой профиль: график рисуется, кроссовер уходит — фикспоинт при обеих фичах", async () => {
     mountProfileDom();
     window.history.replaceState(null, "", "/profile/13509");
+    const before = domObserver.subscriberCount();
     profileCrossoverFeature.enable({ settings: {} } as unknown as FeatureContext);
     profileMmrChartFeature.enable({ settings: {} } as unknown as FeatureContext);
+    expect(domObserver.subscriberCount(), "обе фичи реально подписались").toBe(before + 2);
     const r = await driveToFixpoint();
     expect(r.settled, `DOM не затих за ${r.rounds} раундов`).toBe(true);
     expect(document.querySelector(".pn-mmr-chart")?.textContent).toContain("Путь MMR");

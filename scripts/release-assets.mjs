@@ -89,7 +89,9 @@ async function main() {
   // дисциплину в церемонию (решение 26.08.2026).
   try {
     const ledger = await fs.readFile(path.join(root, "docs/review-ledger.md"), "utf8");
-    if (!ledger.includes(version)) {
+    // Строка ТАБЛИЦЫ, не подстрока: упоминание версии в комментарии или
+    // чужой ячейке следом не считается (ревью 26.08.2026).
+    if (!new RegExp(`^\\| ${version.replaceAll(".", "\\.")} `, "m").test(ledger)) {
       console.warn(
         `\n⚠ docs/review-ledger.md не упоминает ${version} — adversarial-волна по этому релизу не записана (или не проводилась).\n`,
       );

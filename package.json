@@ -1,6 +1,6 @@
 {
   "name": "polemica-notes",
-  "version": "9.34.0",
+  "version": "9.35.0",
   "private": true,
   "description": "Расширение для Polemica Game: статистика, заметки, OBS, Twitch",
   "type": "module",
@@ -19,10 +19,10 @@
     "lint:ext:chrome": "web-ext lint -s dist/chrome",
     "lint:ext:firefox": "web-ext lint -s dist/firefox",
     "dev:firefox": "web-ext run -s dist/firefox",
-    "sign:firefox": "web-ext sign -s dist/firefox -a dist/signed --channel unlisted",
+    "sign:firefox": "node scripts/verify-dist.mjs firefox && web-ext sign -s dist/firefox -a dist/signed --channel unlisted",
     "release:assets": "node scripts/release-assets.mjs",
     "chrome:auth": "node scripts/chrome-auth.mjs",
-    "publish:chrome": "node scripts/publish-chrome.mjs"
+    "publish:chrome": "node scripts/verify-dist.mjs chrome-zip && node scripts/publish-chrome.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",

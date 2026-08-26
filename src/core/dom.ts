@@ -74,6 +74,12 @@ class SharedDomObserver {
   private stormLogged = false;
   private onVisibility: (() => void) | null = null;
 
+  /** Число живых подписчиков — для fixpoint-харнеса («подписка реально
+   *  создавалась», ревью 26.08.2026). Не для продакшен-логики. */
+  subscriberCount(): number {
+    return this.subscribers.size;
+  }
+
   subscribe(fn: DomSubscriber): () => void {
     this.subscribers.add(fn);
     this.ensureStarted();

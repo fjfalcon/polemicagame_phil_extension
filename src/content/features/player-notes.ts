@@ -40,6 +40,7 @@ import { toggleFlipForPlayer, isPlayerFlipped, unflipAll } from "../camera-flip"
 import { getMatchId } from "../match-data";
 import { createRoleSvg } from "../role-sprite";
 import { formatCrossover } from "../crossover-view";
+import { redactNick } from "@shared/redact";
 import { escapeHtml } from "@core/escape";
 import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
 import {
@@ -1626,7 +1627,7 @@ class PlayerNotesManager {
       this.updatePlayerTooltips(username);
     } catch (e) {
       this.statsErrorAt.set(key, Date.now());
-      log.error("player-notes", `loadPlayerStats failed for ${username}`, e);
+      log.error("player-notes", `loadPlayerStats failed for ${redactNick(username)}`, e);
     } finally {
       this.statsInFlight.delete(key);
     }
@@ -2509,7 +2510,7 @@ class PlayerNotesManager {
     /** true — заметка записана; false — запись не удалась, окно закрывать нельзя. */
     const save = (): Promise<boolean> => this.enqueueNotesWrite(async (): Promise<boolean> => {
       if (!isSafeNoteKey(username)) {
-        log.warn("player-notes", "unsafe username, note not saved", username);
+        log.warn("player-notes", "unsafe username, note not saved", redactNick(username));
         return false;
       }
       const value = textarea.value.trim();
@@ -3348,7 +3349,7 @@ class PlayerNotesManager {
     try {
       const player = await findRatingPlayer(username);
       if (!player) {
-        log.warn("player-notes", `player ${username} not found in rating`);
+        log.warn("player-notes", `player ${redactNick(username)} not found in rating`);
         throw new Error("player id unresolved");
       }
       return player.user_id;
@@ -3821,7 +3822,9 @@ class PlayerNotesManager {
   private buttonsSignature(username: string, hasMedia: boolean): string {
     const s = this.settings;
     return [
-      username,
+      // Не сырой ник: sig уходит в persistent warn «шторм пересборки»
+      // (ревью 26.08.2026), а ники в файл не пишем (решение 02.08.2026).
+      redactNick(username),
       s.btn_stats_enabled === false ? 0 : 1,
       s.btn_note_enabled === false ? 0 : 1,
       s.btn_last_games_enabled === false ? 0 : 1,
