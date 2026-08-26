@@ -14,6 +14,16 @@ describe("sanitizeObsHost", () => {
   test("пустое/пробельное — пустое", () => {
     expect(sanitizeObsHost("   ")).toBe("");
   });
+  test("путь сохраняется: obs-websocket за реверс-прокси легален", () => {
+    expect(sanitizeObsHost("wss://obs.example.com/websocket?token=X")).toBe(
+      "wss://obs.example.com/websocket",
+    );
+  });
+  test("bare-host без схемы не «нормализуется» в мусор", () => {
+    // URL-парсер увидел бы схему «localhost:» — чистим руками, не трогая вид.
+    expect(sanitizeObsHost("localhost:4455")).toBe("localhost:4455");
+    expect(sanitizeObsHost("user:pass@localhost:4455?t=1")).toBe("localhost:4455");
+  });
   test("непарсибельное: userinfo и query всё равно срезаны руками", () => {
     const out = sanitizeObsHost("ws://user:pass@[битый/?token=x");
     expect(out).not.toContain("pass");

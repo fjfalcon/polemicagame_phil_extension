@@ -153,7 +153,9 @@ describe("перф-аудит 26.08.2026: исполняемые бюджеты 
     expect(dom).toContain("const MIN_FLUSH_INTERVAL_MS = 250;");
     const ws = src("src/core/ws-log.ts");
     expect(ws).toContain("export const MAX_TOTAL_CHARS = 2_000_000;");
-    expect(ws).toContain("export const PENDING_MAX_CHARS = 400_000;");
+    // 1М с 9.42.0: метрика стала сериализованной (SEC26-3/adversarial №3),
+    // прежние 400К «тел» сжимали терпимый бэклог впятеро.
+    expect(ws).toContain("export const PENDING_MAX_CHARS = 1_000_000;");
     expect(ws).toContain("export const MAX_CHUNKS = 100;");
     const pn = src("src/content/features/player-notes.ts");
     expect(pn).toContain("const WARM_PAGE_LIMIT = 200;");

@@ -6,6 +6,15 @@ const state = vi.hoisted(() => ({
   saves: 0,
 }));
 
+vi.mock("@core/env", () => ({
+  browser: {
+    storage: {
+      local: { get: vi.fn(async () => ({ pn_notes_migrated_v1: true })), set: vi.fn(async () => {}) },
+      sync: { get: vi.fn(async () => ({})) },
+    },
+    runtime: { id: "test" },
+  },
+}));
 vi.mock("@core/notes-store", () => ({
   MAX_OWN_NOTE_TEXT: 20_000,
   loadNotes: vi.fn(async () =>

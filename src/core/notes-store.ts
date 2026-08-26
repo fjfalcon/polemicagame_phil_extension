@@ -58,7 +58,7 @@ export const TAGS_KEY = "tagCustomColors";
 export const NOTES_VERSION = "1.0";
 
 /** Флаг «перенос из sync выполнен». Версионирован: следующий перенос — v2. */
-const MIGRATED_KEY = "pn_notes_migrated_v1";
+export const MIGRATED_KEY = "pn_notes_migrated_v1";
 /** Ключ заметок в совсем старых версиях расширения. */
 const LEGACY_KEY = "notes";
 
@@ -573,9 +573,11 @@ let migrationRequested = false;
 function requestMigration(): void {
   if (migrationRequested) return;
   migrationRequested = true;
-  // Динамический импорт не нужен: messaging лёгкий и без циклов.
-  void sendRuntime({ type: "notes_migrate" }).catch(() => {
-    migrationRequested = false; // фон спит — попросим при следующем load
+  // sendRuntime глотает ошибки и резолвится undefined — catch был мёртв
+  // (adversarial 27.08, №6). Смотрим на ОТВЕТ: не ok — попросим снова при
+  // следующем load (фон спал или миграция внутри упала).
+  void sendRuntime<{ ok?: boolean }>({ type: "notes_migrate" }).then((r) => {
+    if (r?.ok !== true) migrationRequested = false;
   });
 }
 

@@ -53,7 +53,7 @@ export const wsLogFeature: Feature = {
   id: "ws-log",
   settingKey: "ws_full_log_enabled",
 
-  enable(_ctx: FeatureContext) {
+  async enable(_ctx: FeatureContext) {
     skipped = 0;
     // Прибрать ЧУЖИЕ куски до первой записи: ключи именуются по сессии
     // страницы, и без этого каждый заход копил свои, а старые не удалял никто
@@ -62,7 +62,11 @@ export const wsLogFeature: Feature = {
     // Уборка чужого с ПОЛОВИННЫМ бюджетом + учёт остатка в общем потолке
     // (PERF26-4): полный бюджет с выброшенным результатом позволял двум
     // потолкам сложиться в квоте, общей с заметками.
-    void startSession();
+    // ДОЖИДАЕМСЯ: startSession сам ждёт закрытия прошлой сессии, и только
+    // после этого вешаем слушатели — кадры быстрого перевключения иначе
+    // ложились в pending СТАРОГО поколения и стирались его закрытием
+    // (adversarial 27.08, HIGH-2).
+    await startSession();
     listener = (e: MessageEvent) => onProbeMessage(e);
     window.addEventListener("message", listener);
     // «Очистить» в попапе стирает диск — наша копия модуля обязана забыть

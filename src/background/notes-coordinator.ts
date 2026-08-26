@@ -19,11 +19,13 @@
  */
 import {
   loadNotes,
+  MIGRATED_KEY,
   saveNotes,
   mergeNotes,
   normalizeNoteRecord,
   MAX_OWN_NOTE_TEXT,
 } from "@core/notes-store";
+import { browser } from "@core/env";
 import type { NotesMap, NoteRecord } from "@core/notes-store";
 import { log } from "@core/log";
 import type { NoteOp, NotesResultMsg } from "@shared/types";
@@ -72,9 +74,16 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
 
 /** Слить карту (импорт бэкапа) — тот же контракт очереди. */
 /** Разовая миграция sync→local — сериализованно, единственный писатель (SEC26-5). */
-export function migrateViaCoordinator(): Promise<void> {
+export function migrateViaCoordinator(): Promise<{ ok: boolean }> {
   return enqueue(async () => {
     await loadNotes({ persistMigration: true });
+    // Честный ответ: флаг реально выставлен? Иначе контекст-проситель
+    // считал бы миграцию сделанной и никогда бы не переспросил.
+    const bag = (await browser.storage.local.get({ [MIGRATED_KEY]: false })) as Record<
+      string,
+      unknown
+    >;
+    return { ok: bag[MIGRATED_KEY] === true };
   });
 }
 

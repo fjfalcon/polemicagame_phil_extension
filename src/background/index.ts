@@ -542,7 +542,7 @@ onMessage((msg: ExtMessage, sender) => {
     return applyNoteOps(msg.ops);
   }
   if ("type" in msg && msg.type === "notes_migrate") {
-    return migrateViaCoordinator().then(() => ({ ok: true }));
+    return migrateViaCoordinator();
   }
   if ("type" in msg && msg.type === "notes_merge") {
     return mergeNotesViaCoordinator(msg.incoming, msg.approvedReplaced);

@@ -265,9 +265,10 @@ document.addEventListener("DOMContentLoaded", () => {
     );
   });
   $("clear_ws_log")?.addEventListener("click", async () => {
-    await wsLog.clearAll();
-    // Content-контексты держат СВОЮ копию модуля с буфером/учётом (SEC26-9):
-    // без сброса их следующий flush воскресил бы «очищенные» кадры.
+    // ПОРЯДОК: сначала reset контентов — их resetBuffer поднимает поколение
+    // и убивает висящие в очереди записи; потом чистим диск. Обратный
+    // порядок оставлял окно воскрешения куском, долетевшим после remove
+    // (adversarial 27.08, №8).
     try {
       const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/*" });
       await Promise.all(
@@ -280,6 +281,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch {
       /* вкладок нет — чистить больше нечего */
     }
+    await wsLog.clearAll();
     showPopupToast("Полный лог очищен");
   });
 
@@ -739,6 +741,12 @@ document.addEventListener("DOMContentLoaded", () => {
             );
             if (!ok) for (const k of risky) delete settingsPatch[k];
           }
+          // Импорт-путь обязан пройти тот же санитайзер, что и сохранение
+          // (adversarial 27.08, HIGH-1): чужой бэкап с кредами в obs_host
+          // иначе клал их в sync до ближайшего обновления расширения.
+          if (typeof settingsPatch.obs_host === "string") {
+            settingsPatch.obs_host = sanitizeObsHost(settingsPatch.obs_host);
+          }
           // Смена адреса OBS = другой сервер: старый пароль ему не отдаём.
           if (
             typeof settingsPatch.obs_host === "string" &&
@@ -767,7 +775,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Палитра и мьюты (см. экспорт): восстанавливаем объединением, чтобы
         // импорт не стирал то, что уже есть у пользователя.
-        const applyExtras = async (): Promise<void> => {
+        const applyExtras = async (): Promise<{ marksTruncated: boolean }> => {
+          let marksTruncated = false;
           const tags = Array.isArray(data?.customTags)
             ? (data.customTags as unknown[]).filter(isSafeTag)
             : [];
@@ -778,7 +787,7 @@ document.addEventListener("DOMContentLoaded", () => {
             : [];
           const hasMarks =
             !!data?.roleMarks && typeof data.roleMarks === "object" && !Array.isArray(data.roleMarks);
-          if (!tags.length && !muted.length && !hasMarks) return;
+          if (!tags.length && !muted.length && !hasMarks) return { marksTruncated };
           try {
             const cur = (await browser.storage.local.get({
               [TAGS_KEY]: [],
@@ -824,15 +833,26 @@ document.addEventListener("DOMContentLoaded", () => {
                 const clean: Record<string, string> = {};
                 let perGame = 0;
                 for (const [player, role] of Object.entries(marks as Record<string, unknown>)) {
-                  if (perGame >= MAX_IMPORT_MARKS_PER_GAME) break;
+                  if (perGame >= MAX_IMPORT_MARKS_PER_GAME || addedBytes >= MAX_IMPORT_ROLE_BYTES) {
+                    marksTruncated = true;
+                    break;
+                  }
                   if (typeof player !== "string" || player.length > 200) continue;
                   if (typeof role !== "string" || role.length > 40) continue;
                   clean[player] = role;
                   perGame++;
                   addedBytes += player.length + role.length;
                 }
+                // Пустая игра слот не занимает (adversarial 27.08, №9).
+                if (perGame === 0) continue;
                 merged[game] = clean;
                 addedGames++;
+              }
+              if (
+                addedGames >= MAX_IMPORT_ROLE_GAMES &&
+                Object.keys(incomingMarks as Record<string, unknown>).length > addedGames
+              ) {
+                marksTruncated = true;
               }
               patch.roleMarks = merged;
             }
@@ -840,14 +860,16 @@ document.addEventListener("DOMContentLoaded", () => {
           } catch (e) {
             log.error(SCOPE, "extras import failed", e);
           }
+          return { marksTruncated };
         };
 
         if (Object.keys(incoming).length === 0) {
           const restoredSettings = await applySettings();
-          await applyExtras();
+          const extras = await applyExtras();
+          const cut = extras.marksTruncated ? " (метки ролей обрезаны потолками файла)" : "";
           showPopupToast(
             restoredSettings
-              ? `Восстановлено настроек: ${restoredSettings}. Заметок в файле нет`
+              ? `Восстановлено настроек: ${restoredSettings}. Заметок в файле нет${cut}`
               : "В файле нет заметок",
             restoredSettings ? "success" : "error",
           );
@@ -969,7 +991,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         // Настройки применяем ПОСЛЕ успешной записи заметок (находка 6).
         const restoredSettings = await applySettings();
-        await applyExtras();
+        const extras = await applyExtras();
         // Авторитетные цифры — от координатора: он считал их на свежей карте
         // (в игровой вкладке могли править заметки в эти же секунды).
         const addedFinal = applied?.added ?? fallbackCounts?.added ?? added;
@@ -977,8 +999,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const notesMsg = replacedFinal
           ? `Добавлено: ${addedFinal}, обновлено: ${replacedFinal}`
           : `Импортировано заметок: ${addedFinal}`;
+        const cutMain = extras.marksTruncated ? " (метки ролей обрезаны потолками файла)" : "";
         showPopupToast(
-          restoredSettings ? `${notesMsg}; настроек: ${restoredSettings}` : notesMsg,
+          (restoredSettings ? `${notesMsg}; настроек: ${restoredSettings}` : notesMsg) + cutMain,
         );
       } catch (e) {
         log.error(SCOPE, "import failed", e);
@@ -1394,7 +1417,14 @@ document.addEventListener("DOMContentLoaded", () => {
       // Санитайзер SEC26-1: userinfo/query отрезаются при сохранении —
       // obs_host синкается в облако и уезжает в бэкап, кредам там не место
       // (пароль — отдельное local-поле, v5 авторизуется хендшейком).
-      obs_host: sanitizeObsHost(val("obs_host", "ws://localhost:4455")),
+      obs_host: (() => {
+        const clean = sanitizeObsHost(val("obs_host", "ws://localhost:4455"));
+        // Поле отражает то, что реально сохранится: пользователь должен
+        // УВИДЕТЬ, что креды/query вычищены (adversarial 27.08, №7).
+        const el = $<HTMLInputElement>("obs_host");
+        if (el && el.value.trim() && el.value !== clean) el.value = clean;
+        return clean;
+      })(),
       obs_password: val("obs_password", ""),
       obs_floating_panel_enabled: cb("obs_floating_panel_enabled", false),
       obs_auto_mode_enabled: cb("obs_auto_mode_enabled", false),
