@@ -247,6 +247,8 @@ describe("сторож шторма пересборки кнопок (жало�
 describe("прогрев пересечений", () => {
   /** Кого спрашивали в /profile/default/get-games (userId по порядку). */
   let asked: string[] = [];
+  /** limit каждого запроса — страж мелкого прогрева (PERF26-3). */
+  let askedLimits: number[] = [];
 
   /** Стол: своя плитка + соперники, свой id известен из шапки сайта. */
   function table(...opponents: string[]): void {
@@ -272,6 +274,7 @@ describe("прогрев пересечений", () => {
 
   function serveSite(): void {
     asked = [];
+    askedLimits = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -287,7 +290,9 @@ describe("прогрев пересечений", () => {
           };
         }
         if (url.includes("/profile/default/get-games")) {
-          asked.push(new URL(url).searchParams.get("userId") ?? "");
+          const u = new URL(url);
+          asked.push(u.searchParams.get("userId") ?? "");
+          askedLimits.push(Number(u.searchParams.get("limit") ?? 0));
           return { ok: true, json: async () => ({ rows: [], totalCount: 0 }) };
         }
         return { ok: false, status: 404 };
@@ -311,6 +316,20 @@ describe("прогрев пересечений", () => {
     await playerNotesFeature.enable({
       settings: { statistics_enabled: true, btn_crossover_enabled: true } as unknown as Settings,
     });
+  });
+
+  test("прогрев тянет МЕЛКУЮ страницу — полные 2000 остаются живому ховеру (PERF26-3)", async () => {
+    table("Alpha");
+    document.body.classList.add("night");
+    await pass();
+    await vi.advanceTimersByTimeAsync(50);
+    // Все ночные запросы историй — с малым limit: стол завсегдатаев ночью
+    // стоил до 4×2000 строк на игрока.
+    const gameLimits = askedLimits.filter((l) => l > 0);
+    expect(gameLimits.length).toBeGreaterThan(0);
+    for (const l of gameLimits) expect(l).toBeLessThanOrEqual(2000); // своя история — полная (общий кэш)
+    const theirLimit = askedLimits[askedLimits.length - 1];
+    expect(theirLimit, "чужая история в прогреве — мелкая страница").toBe(200);
   });
 
   test("днём прогрев молчит", async () => {

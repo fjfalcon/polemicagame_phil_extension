@@ -42,8 +42,10 @@ const storage = browser.storage.local as unknown as {
 };
 
 import {
+  MAX_CHUNKS,
   MAX_FRAME_CHARS,
   MAX_TOTAL_CHARS,
+  PENDING_MAX_CHARS,
   WS_LOG_PREFIX,
   WS_LOG_TTL_MS,
   clearAll,
@@ -53,6 +55,8 @@ import {
   isGameFrame,
   record,
   resetBuffer,
+  startSession,
+  droppedCount,
   sweepStorage,
   sanitizeFrame,
   size,
@@ -138,6 +142,97 @@ describe("буфер", () => {
     ]);
     expect(text).toMatch(/<< от сервера/);
     expect(text).toMatch(/>> к серверу/);
+  });
+});
+
+describe("PERF26-4: учёт, backpressure, поколение (перф-аудит 26.08.2026)", () => {
+  const frame = (chars: number) => "42[\"x\"," + "a".repeat(Math.max(0, chars - 10)) + "]";
+
+  test("чужие куски после startSession входят в общий потолок", async () => {
+    // Прошлая сессия оставила полкапа — новой доступна только вторая половина,
+    // раньше счётчик стартовал с нуля и суммарно копилось два потолка.
+    storage.data.set(`${WS_LOG_PREFIX}old:0`, {
+      at: Date.now(),
+      frames: [{ t: 1, d: "in", m: "x".repeat(Math.floor(MAX_TOTAL_CHARS / 2)) }],
+    });
+    await startSession();
+    // Пишем свою половину + кусок сверх — вытеснение обязано начаться,
+    // хотя СВОЙ storedChars ещё далёк от MAX_TOTAL_CHARS.
+    const chunkSize = 200_000;
+    const own = Math.ceil(MAX_TOTAL_CHARS / 2 / chunkSize) + 1;
+    for (let i = 0; i < own; i++) {
+      record("in", frame(3900));
+      // добить кусок до порога и сбросить
+      for (let j = 0; j < Math.ceil(chunkSize / 3900); j++) record("in", frame(3900));
+      await flushNow();
+    }
+    const totalStored = [...storage.data.entries()]
+      .filter(([k]) => k.startsWith(WS_LOG_PREFIX))
+      .reduce((n, [, v]) => {
+        const fr = (v as { frames: Array<{ m: string }> }).frames;
+        return n + fr.reduce((a, f) => a + f.m.length, 0);
+      }, 0);
+    expect(totalStored, "суммарно — не больше общего потолка (с зазором кусок)").toBeLessThan(
+      MAX_TOTAL_CHARS + 220_000,
+    );
+  });
+
+  test("цепочка записи не растёт бесконечно при висящем хранилище", async () => {
+    // Storage завис: первый set никогда не завершается — партии копились бы
+    // в замыканиях цепочки без предела (PERF26-4, механизм 2).
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    storage.set.mockImplementation(async (items: Record<string, unknown>) => {
+      await gate;
+      for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
+    });
+    // Каждый цикл переваливает порог куска → авто-flushNow → партия в цепочку.
+    const perFrame = MAX_FRAME_CHARS;
+    const framesPerChunk = Math.ceil(200_000 / perFrame) + 1;
+    const chunksToTry = Math.ceil(PENDING_MAX_CHARS / 200_000) + 3;
+    for (let c = 0; c < chunksToTry; c++) {
+      for (let i = 0; i < framesPerChunk; i++) record("in", frame(perFrame + 100));
+    }
+    expect(droppedCount(), "лишние партии отброшены, цепочка ограничена").toBeGreaterThan(0);
+    release();
+    await flushNow();
+    storage.set.mockReset();
+    storage.set.mockImplementation(async (items: Record<string, unknown>) => {
+      for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
+    });
+  });
+
+  test("капельный поток не плодит ключи сверх MAX_CHUNKS", async () => {
+    for (let i = 0; i < MAX_CHUNKS + 30; i++) {
+      record("in", frame(100));
+      await flushNow(); // каждый «5-секундный» сброс — отдельный ключ
+    }
+    const keys = [...storage.data.keys()].filter((k) => k.startsWith(WS_LOG_PREFIX));
+    expect(keys.length).toBeLessThanOrEqual(MAX_CHUNKS);
+  });
+
+  test("поколение: выключение во время висящей записи не воскрешает сессию", async () => {
+    // Storage «медленный»: задерживаем set вручную.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    storage.set.mockImplementationOnce(async (items: Record<string, unknown>) => {
+      await gate;
+      for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
+    });
+    record("in", frame(500));
+    const inflight = flushNow();
+    resetBuffer(); // настройку выключили, пока запись стояла
+    release();
+    await inflight;
+    // Кусок прошлой жизни не должен остаться на диске задним числом.
+    const keys = [...storage.data.keys()].filter((k) => k.startsWith(WS_LOG_PREFIX));
+    expect(keys, "диск чист от прошлой жизни").toEqual([]);
+    // Гигиена: gen-гейт мог НЕ израсходовать mockImplementationOnce — съев
+    // отказ в соседнем тесте (пойман прогоном всего файла).
+    storage.set.mockReset();
+    storage.set.mockImplementation(async (items: Record<string, unknown>) => {
+      for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
+    });
   });
 });
 

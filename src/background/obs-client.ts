@@ -477,11 +477,18 @@ export class ObsClient {
 
   private handleEvent(eventData: any): void {
     switch (eventData.eventType) {
-      case "CurrentProgramSceneChanged":
-        this.currentScene = eventData.eventData.sceneName;
+      case "CurrentProgramSceneChanged": {
+        const name = eventData.eventData.sceneName;
+        // Эхо нашего же setCurrentScene: state уже применён и разослан —
+        // второй notifyAll давал 2×tabs.query и 2N сообщений вкладкам на
+        // каждую смену фазы (PERF26-17). Внешняя смена на ту же сцену —
+        // no-op и для нас, и для подписчиков.
+        if (name === this.currentScene) break;
+        this.currentScene = name;
         this.notifyAll("obs_scene_changed", this.currentScene);
         void this.saveConnectionState(true);
         break;
+      }
       case "SceneListChanged":
       case "SceneNameChanged":
       case "SceneCreated":

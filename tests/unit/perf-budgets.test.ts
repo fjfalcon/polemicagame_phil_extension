@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("@core/env", () => ({
@@ -30,6 +33,8 @@ import {
   classifyPlayerMutations,
   shouldRunMutationPass,
 } from "../../src/content/features/player-notes";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 function rec(init: {
   target: Node;
@@ -133,6 +138,103 @@ describe("PERF-10: скрытая вкладка не теряет flush за з
       expect(seen.length).toBeGreaterThan(before + 1);
     } finally {
       unsub();
+    }
+  });
+});
+
+describe("перф-аудит 26.08.2026: исполняемые бюджеты (PERF26-6)", () => {
+  const src = (rel: string) => fs.readFileSync(path.join(ROOT, rel), "utf8");
+
+  test("горячие константы запинены: смена = осознанное решение, не дрейф", () => {
+    // Ложнозелёные из отчёта: MAX_PENDING=400000 или MIN_FLUSH_INTERVAL_MS=10
+    // не ронял ни один тест.
+    const dom = src("src/core/dom.ts");
+    expect(dom).toContain("const MAX_PENDING = 4000;");
+    expect(dom).toContain("const MIN_FLUSH_INTERVAL_MS = 250;");
+    const ws = src("src/core/ws-log.ts");
+    expect(ws).toContain("export const MAX_TOTAL_CHARS = 2_000_000;");
+    expect(ws).toContain("export const PENDING_MAX_CHARS = 400_000;");
+    expect(ws).toContain("export const MAX_CHUNKS = 100;");
+    const pn = src("src/content/features/player-notes.ts");
+    expect(pn).toContain("const WARM_PAGE_LIMIT = 200;");
+    expect(pn).toContain("const ACTIVE_GAMES_TTL_MS = 15_000;");
+    const ss = src("src/content/panels/session-stats-panel.ts");
+    expect(ss).toContain("const REFRESH_MS = 3 * 60_000;");
+    expect(ss).toContain("const SESSION_PAGE_LIMIT = 200;");
+    const pc = src("src/content/features/profile-crossover.ts");
+    expect(pc).toContain("setTimeout(r, 350)");
+  });
+
+  test("«/api/games» НИКОГДА не перекрывает нерешённый запрос (PERF26-8)", async () => {
+    const { fetchActiveGames, resetActiveGamesCacheForTest } = await import(
+      "../../src/content/features/player-notes"
+    );
+    resetActiveGamesCacheForTest();
+    vi.useFakeTimers();
+    try {
+      let resolveFirst: (v: unknown) => void = () => {};
+      const gate = new Promise((r) => (resolveFirst = r));
+      const fetchMock = vi.fn(() => gate as Promise<Response>);
+      vi.stubGlobal("fetch", fetchMock);
+
+      const p1 = fetchActiveGames();
+      // TTL (15 с) давно вышел, а запрос ВСЁ ЕЩЁ висит — второго быть не должно.
+      await vi.advanceTimersByTimeAsync(16_000);
+      const p2 = fetchActiveGames();
+      expect(p2, "нерешённый запрос не перекрывается").toBe(p1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // Развязка: TTL стартует ОТ завершения.
+      resolveFirst({ ok: true, json: async () => [] });
+      await vi.advanceTimersByTimeAsync(1);
+      const p3 = fetchActiveGames();
+      expect(p3, "внутри TTL от развязки — тот же результат").toBe(p1);
+      await vi.advanceTimersByTimeAsync(16_000);
+      const p4 = fetchActiveGames();
+      expect(p4, "после TTL — новый запрос").not.toBe(p1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+      resetActiveGamesCacheForTest();
+    }
+  });
+
+  test("поздний reject старого запроса не стирает маркер нового (путь P3 закрыт)", async () => {
+    const { fetchActiveGames, resetActiveGamesCacheForTest } = await import(
+      "../../src/content/features/player-notes"
+    );
+    resetActiveGamesCacheForTest();
+    vi.useFakeTimers();
+    try {
+      let rejectFirst: (e: unknown) => void = () => {};
+      let resolveSecond: (v: unknown) => void = () => {};
+      const first = new Promise((_r, rj) => (rejectFirst = rj));
+      const second = new Promise((r) => (resolveSecond = r));
+      const fetchMock = vi
+        .fn()
+        .mockReturnValueOnce(first as Promise<Response>)
+        .mockReturnValueOnce(second as Promise<Response>);
+      vi.stubGlobal("fetch", fetchMock);
+
+      const p1 = fetchActiveGames();
+      p1.catch(() => {}); // reject ниже не должен уронить тест unhandled'ом
+      rejectFirst(new Error("сеть моргнула"));
+      await vi.advanceTimersByTimeAsync(1); // маркер очищен ошибкой — легально
+      const p2 = fetchActiveGames();
+      expect(p2).not.toBe(p1);
+      // Пока P2 летит, ПОЗДНИЙ хвост P1 уже отработал — identity-гейт не дал
+      // ему стереть маркер P2: третьего запроса нет.
+      await vi.advanceTimersByTimeAsync(16_000);
+      const p3 = fetchActiveGames();
+      expect(p3, "нерешённый P2 не перекрыт").toBe(p2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      resolveSecond({ ok: true, json: async () => [] });
+      await vi.advanceTimersByTimeAsync(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+      resetActiveGamesCacheForTest();
     }
   });
 });

@@ -319,6 +319,44 @@ export async function fetchHistory(
 }
 
 /** Самая старая дата в истории — граница, глубже которой искать нечего. */
+// ─────────────── общий кэш СВОЕЙ истории (PERF26-3) ───────────────
+//
+// До 26.08.2026 своя история жила в трёх независимых кэшах (ховер
+// player-notes, карточка профиля, график) и скачивалась до трёх раз за
+// десять минут — по 4 страницы × 2000 строк каждая. Кэш один, потребители
+// делят и данные, и in-flight.
+
+export const OWN_HISTORY_TTL_MS = 10 * 60_000;
+
+let ownHistory: { id: string; at: number; data: History } | null = null;
+let ownHistoryInFlight: { id: string; p: Promise<History | null> } | null = null;
+
+export function getOwnHistory(myId: number | string): Promise<History | null> {
+  const id = String(myId);
+  if (ownHistory && ownHistory.id === id && Date.now() - ownHistory.at < OWN_HISTORY_TTL_MS) {
+    return Promise.resolve(ownHistory.data);
+  }
+  if (ownHistoryInFlight && ownHistoryInFlight.id === id) return ownHistoryInFlight.p;
+  const p = fetchHistory(myId)
+    .then((h) => {
+      if (h) ownHistory = { id, at: Date.now(), data: h };
+      return h;
+    })
+    .finally(() => {
+      if (ownHistoryInFlight && ownHistoryInFlight.p === p) ownHistoryInFlight = null;
+    });
+  ownHistoryInFlight = { id, p };
+  return p;
+}
+
+/**
+ * Отпустить строки истории (у завсегдатая — мегабайты): сводки уже
+ * посчитаны и лежат в кэшах потребителей. Летящий запрос не трогаем.
+ */
+export function releaseOwnHistory(): void {
+  if (!ownHistoryInFlight) ownHistory = null;
+}
+
 export function oldestDate(rows: GameRow[]): string | undefined {
   let oldest: string | undefined;
   for (const r of rows) {

@@ -23,7 +23,8 @@ import {
   completeHistory,
   crossGames,
   fetchFirstPage,
-  fetchHistory,
+  getOwnHistory,
+  releaseOwnHistory,
   oldestDate,
   type Crossover,
   type History,
@@ -62,24 +63,6 @@ let hiddenFor: string | null = null;
 
 const crossCache = new Map<string, { at: number; ttl: number; data: Crossover | null }>();
 const inFlight = new Map<string, Promise<Crossover | null>>();
-let myHistory: { at: number; data: History } | null = null;
-let myHistoryInFlight: Promise<History | null> | null = null;
-
-/** Своя история — одна на все профили и дорогая; кэш + дедупликация. */
-async function getMyHistory(myId: number): Promise<History | null> {
-  if (myHistory && Date.now() - myHistory.at < GOOD_TTL_MS) return myHistory.data;
-  if (myHistoryInFlight) return myHistoryInFlight;
-  const p = fetchHistory(myId)
-    .then((h) => {
-      if (h) myHistory = { at: Date.now(), data: h };
-      return h;
-    })
-    .finally(() => {
-      myHistoryInFlight = null;
-    });
-  myHistoryInFlight = p;
-  return p;
-}
 
 async function computeCrossover(profileId: string, myId: number): Promise<Crossover | null> {
   const hit = crossCache.get(profileId);
@@ -89,7 +72,7 @@ async function computeCrossover(profileId: string, myId: number): Promise<Crosso
   const p = (async () => {
     try {
       // Обе истории едут одновременно (урок ховера: ждать по очереди — вдвое дольше).
-      const [mine, first] = await Promise.all([getMyHistory(myId), fetchFirstPage(profileId)]);
+      const [mine, first] = await Promise.all([getOwnHistory(myId), fetchFirstPage(profileId)]);
       if (!mine || !first) {
         crossCache.set(profileId, { at: Date.now(), ttl: BAD_TTL_MS, data: null });
         return null;
@@ -217,7 +200,6 @@ export const profileCrossoverFeature: Feature = {
     removeBlock();
     crossCache.clear();
     inFlight.clear();
-    myHistory = null;
-    myHistoryInFlight = null;
+    releaseOwnHistory();
   },
 };

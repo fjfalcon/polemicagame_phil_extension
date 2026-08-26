@@ -28,6 +28,8 @@ import {
   oldestDate,
     type Crossover,
   type History,
+  getOwnHistory,
+  releaseOwnHistory,
 } from "@core/crossover";
 import { fetchFirstKilled } from "@core/match-brief";
 import { getOwnUserId, ownNameFromTable, rememberOwnUserId } from "@core/own-user";
@@ -41,6 +43,9 @@ import { getMatchId } from "../match-data";
 import { createRoleSvg } from "../role-sprite";
 import { formatCrossover } from "../crossover-view";
 import { redactNick } from "@shared/redact";
+
+/** Мелкая страница прогрева пересечений: свежий отрезок вместо всей истории. */
+const WARM_PAGE_LIMIT = 200;
 import { escapeHtml } from "@core/escape";
 import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
 import {
@@ -203,24 +208,42 @@ let ratingListCache: RatingPlayer[] | null = null;
 let ratingListFetchedAt = 0;
 let ratingListInFlight: Promise<RatingPlayer[]> | null = null;
 
-function fetchActiveGames(): Promise<any[]> {
+/** Тестовый шов perf-бюджета «/api/games never-overlap» (PERF26-8). */
+export function resetActiveGamesCacheForTest(): void {
+  activeGamesPromise = null;
+  activeGamesFetchedAt = 0;
+}
+
+export function fetchActiveGames(): Promise<any[]> {
   const now = Date.now();
-  if (activeGamesPromise && now - activeGamesFetchedAt < ACTIVE_GAMES_TTL_MS) {
+  // Нерешённый запрос не перекрывается НИКОГДА (бюджет «never overlap»,
+  // перф-аудит 06.08; дыра PERF26-8): TTL заводится только с момента
+  // РАЗВЯЗКИ промиса, а не старта — долгий запрос не порождает второй.
+  if (activeGamesPromise && (activeGamesFetchedAt === 0 || now - activeGamesFetchedAt < ACTIVE_GAMES_TTL_MS)) {
     return activeGamesPromise;
   }
-  activeGamesFetchedAt = now;
-  activeGamesPromise = fetch("https://game.polemicagame.com/api/games")
+  activeGamesFetchedAt = 0; // 0 = «в полёте»: TTL стартует по завершении
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  const p: Promise<any[]> = fetch("https://game.polemicagame.com/api/games", {
+    signal: controller.signal,
+  })
     .then(async (response) => {
       if (!response.ok) throw new Error(`active games API error: ${response.status}`);
       const data: unknown = await response.json();
       if (!Array.isArray(data)) throw new Error("active games API returned invalid data");
+      if (activeGamesPromise === p) activeGamesFetchedAt = Date.now(); // TTL — от развязки
       return data;
     })
     .catch((e) => {
-      activeGamesPromise = null; // ошибку не кэшируем
+      // Identity-гейт: поздний reject СТАРОГО запроса не должен стирать
+      // маркер нового (PERF26-8: открывал путь третьему параллельному).
+      if (activeGamesPromise === p) activeGamesPromise = null; // ошибку не кэшируем
       throw e;
-    });
-  return activeGamesPromise;
+    })
+    .finally(() => clearTimeout(timeout));
+  activeGamesPromise = p;
+  return p;
 }
 
 function fetchRatingList(): Promise<RatingPlayer[]> {
@@ -455,7 +478,7 @@ class PlayerNotesManager {
    * `ttl` у записи свой: удачу держим долго (см. CROSSOVER_TTL_MS), а неудачу
    * — коротко, иначе сетевая икота замораживала бы «не удалось» на полчаса.
    */
-  private crossoverCache = new Map<string, { at: number; ttl: number; data: Crossover | null }>();
+  private crossoverCache = new Map<string, { at: number; ttl: number; data: Crossover | null; shallow?: boolean }>();
   private crossoverInFlight = new Map<string, Promise<Crossover | null | undefined>>();
   /** Прогрев занят одним игроком — по одному за проход, без залпа. */
   private warmBusy = false;
@@ -482,10 +505,7 @@ class PlayerNotesManager {
    * столько, сколько нужно: как только сводки по всем плиткам готовы,
    * releaseMyHistory() отпускает её (у завсегдатая это тысячи строк).
    */
-  private myHistory: History | null = null;
-  private myHistoryAt = 0;
   /** Своя история в полёте: прогрев и наведение мыши не тянут её дважды. */
-  private myHistoryInFlight: Promise<History | null> | null = null;
   /** Тултипы, живущие порталом в body (для уборки осиротевших). */
   private portaledTooltips = new Set<HTMLElement>();
   /** Снятые в этой вкладке мьюты — не воскрешаем их при слиянии с диском. */
@@ -738,9 +758,7 @@ class PlayerNotesManager {
     this.lastGamesInFlight.clear();
     this.crossoverCache.clear();
     this.crossoverInFlight.clear();
-    this.myHistory = null;
-    this.myHistoryAt = 0;
-    this.myHistoryInFlight = null;
+    releaseOwnHistory();
     this.warmBusy = false;
     this.warmStopped = false;
     this.statsErrorAt.clear();
@@ -3366,25 +3384,9 @@ class PlayerNotesManager {
    * кнопками за столом: она одна и та же, а весит несколько сотен строк.
    */
   private getMyHistory(myId: number | string): Promise<History | null> {
-    if (this.myHistory && Date.now() - this.myHistoryAt < STATS_TTL_MS) {
-      return Promise.resolve(this.myHistory);
-    }
-    // Дедупликация: прогрев и наведение мыши стартуют одновременно, а история
-    // у завсегдатая — мегабайты. Второй такой запрос не нужен никому.
-    if (this.myHistoryInFlight) return this.myHistoryInFlight;
-    const inFlight = fetchHistory(myId)
-      .then((history) => {
-        if (history) {
-          this.myHistory = history;
-          this.myHistoryAt = Date.now();
-        }
-        return history;
-      })
-      .finally(() => {
-        this.myHistoryInFlight = null;
-      });
-    this.myHistoryInFlight = inFlight;
-    return inFlight;
+    // Общий кэш @core/crossover (PERF26-3): та же история нужна карточке
+    // профиля — раньше каждая качала свою копию.
+    return getOwnHistory(myId);
   }
 
   /**
@@ -3392,9 +3394,7 @@ class PlayerNotesManager {
    * Пересечения переживают её в кэше — там уже готовые числа.
    */
   private releaseMyHistory(): void {
-    if (!this.myHistory || this.myHistoryInFlight) return;
-    this.myHistory = null;
-    this.myHistoryAt = 0;
+    releaseOwnHistory();
   }
 
   /**
@@ -3427,7 +3427,7 @@ class PlayerNotesManager {
     // и фоновые запросы ему ни к чему.
     if (this.warmStopped || this.warmBusy || !isNightNow()) return;
     this.warmBusy = true;
-    void this.getCrossover(pending[0])
+    void this.getCrossover(pending[0], true)
       .then((data) => {
         if (data === undefined) {
           this.warmStopped = true;
@@ -3447,19 +3447,33 @@ class PlayerNotesManager {
    * иначе. `null` — не удалось загрузить историю; пустая сводка читалась бы
    * как «вы никогда не играли вместе», а это другое утверждение.
    */
-  private getCrossover(username: string): Promise<Crossover | null | undefined> {
+  private getCrossover(
+    username: string,
+    /** Ночной прогрев: мелкая сводка первой страницей (PERF26-3) — полный
+     *  многостраничный заход остаётся живому ховеру. */
+    warm = false,
+  ): Promise<Crossover | null | undefined> {
     const key = username.toLowerCase();
     const hit = this.crossoverCache.get(key);
-    if (hit && Date.now() - hit.at < hit.ttl) return Promise.resolve(hit.data);
+    if (hit && Date.now() - hit.at < hit.ttl) {
+      // Мелкий прогревочный кэш ховеру не отдаём — апгрейдим до полного.
+      if (!(hit.shallow && !warm)) return Promise.resolve(hit.data);
+    }
     const inFlight = this.crossoverInFlight.get(key);
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      if (warm) return inFlight;
+      // Летит прогрев? Дождаться и перечитать: либо кэш уже полный, либо
+      // shallow-хит выше отправит на полный заход (второй виток в кэш
+      // не зациклится — non-shallow вернётся сразу).
+      return inFlight.then(() => this.getCrossover(username));
+    }
     // Промис кладётся в реестр СИНХРОННО, до первого await. Раньше метод
     // успевал сходить за своим id между проверкой реестра и записью в него, и
     // два наведения подряд заводили каждое свою пару историй (замечание
     // владельца 13.08.2026). Повторное наведение обязано ЖДАТЬ первый запрос,
     // а новый запускать только если тот провалился — за это отвечает кэш
     // неудачи с коротким TTL.
-    const promise = this.loadCrossover(username, key).finally(() => {
+    const promise = this.loadCrossover(username, key, warm).finally(() => {
       this.crossoverInFlight.delete(key);
     });
     this.crossoverInFlight.set(key, promise);
@@ -3470,6 +3484,7 @@ class PlayerNotesManager {
   private async loadCrossover(
     username: string,
     key: string,
+    shallow = false,
   ): Promise<Crossover | null | undefined> {
     const myId = await this.myUserId();
     // Свой профиль неизвестен — это не результат, кэшировать нечего.
@@ -3482,13 +3497,22 @@ class PlayerNotesManager {
       // первая нужна всегда. Ожидание было ровно вдвое длиннее необходимого.
       const theirs = (async () => {
         const id = await this.resolveUserId(username, key);
-        return { id, first: await fetchFirstPage(id) };
+        // Прогрев берёт МЕЛКУЮ первую страницу: стол из десяти завсегдатаев
+        // ночью стоил до 4 страниц × 2000 строк на каждого (PERF26-3). К утру
+        // сводка готова по свежему отрезку, а полная глубина докачивается
+        // при живом ховере.
+        return { id, first: await fetchFirstPage(id, shallow ? WARM_PAGE_LIMIT : undefined) };
       })();
       const [mine, start] = await Promise.all([this.getMyHistory(myId), theirs]);
       let data: Crossover | null = null;
       if (mine && start.first) {
-        const full = await completeHistory(start.id, start.first, oldestDate(mine.rows));
-        data = crossGames(mine.rows, full.rows, mine.truncated || full.truncated);
+        if (shallow) {
+          const truncated = start.first.total > start.first.rows.length;
+          data = crossGames(mine.rows, start.first.rows, mine.truncated || truncated);
+        } else {
+          const full = await completeHistory(start.id, start.first, oldestDate(mine.rows));
+          data = crossGames(mine.rows, full.rows, mine.truncated || full.truncated);
+        }
       }
       // Кэшируем и неудачу: иначе каждый повторный наведённый курсор гнал бы
       // пару историй заново (урок кэша последних игр, находка 7). Но держим
@@ -3497,6 +3521,7 @@ class PlayerNotesManager {
         at: Date.now(),
         ttl: data ? CROSSOVER_TTL_MS : STATS_TTL_MS,
         data,
+        shallow: shallow && data !== null,
       });
       return data;
     } catch (e) {

@@ -46,6 +46,18 @@ export const WS_LOG_TTL_MS = 24 * 60 * 60 * 1000;
  */
 export const MAX_FRAME_CHARS = 4000;
 export const MAX_TOTAL_CHARS = 2_000_000;
+/**
+ * Потолок НЕзаписанной очереди (перф-аудит 26.08.2026, PERF26-4): при
+ * медленном хранилище приход кадров обгоняет запись, и очередь без предела
+ * росла бы бесконечно. Свежие кадры дороже: переполнение отбрасывает
+ * старейшие из очереди.
+ */
+export const PENDING_MAX_CHARS = 400_000;
+/**
+ * Потолок числа КЛЮЧЕЙ: капельный поток писал кусок раз в 5 с — до 2160
+ * ключей за вечер при соблюдённом символьном потолке (PERF26-4, механизм 3).
+ */
+export const MAX_CHUNKS = 100;
 
 /** Кадры, которые не пишем: медиа-сигналинг (см. шапку). */
 const SKIP_EVENTS = ["janus_message"];
@@ -96,7 +108,24 @@ let seq = 0;
 /** Уже записанные куски этой вкладки — в порядке появления. */
 let chunks: Array<{ key: string; chars: number }> = [];
 let storedChars = 0;
+/** Сколько символов лежит в кусках ПРОШЛЫХ сессий после уборки: они входят
+ *  в общий потолок (PERF26-4, механизм 1 — раньше «свой» счётчик стартовал
+ *  с нуля и суммарный объём доходил до двух потолков). */
+let foreignChars = 0;
 let recorded = 0;
+/** Отброшено кадров переполненной очередью — честная строка в файле. */
+let droppedByBackpressure = 0;
+/** Символы, стоящие в ЦЕПОЧКЕ записи (захвачены замыканиями writeChunk):
+ *  именно она растёт без предела при медленном хранилище — pending режет
+ *  порог CHUNK_CHARS сам (PERF26-4, механизм 2). */
+let chainBacklogChars = 0;
+/**
+ * Поколение сессии записи: resetBuffer() его инкрементирует, и висящие в
+ * цепочке записи прошлой жизни не касаются ни диска, ни учёта (PERF26-4:
+ * disable сбрасывал счётчики до завершения цепочки, а тот же SESSION_ID
+ * переиспользовал ключи).
+ */
+let generation = 0;
 /** Хранилище отказало даже после уборки — до конца сессии не пишем. */
 let stopped = false;
 
@@ -118,6 +147,21 @@ export function record(dir: "in" | "out", raw: unknown): boolean {
 /** Сколько кадров записано за сессию — для тестов и строки в логе. */
 export function size(): number {
   return recorded;
+}
+
+/** Отброшено переполненной очередью — для строки в выгрузке. */
+export function droppedCount(): number {
+  return droppedByBackpressure;
+}
+
+/**
+ * Старт сессии записи: уборка чужого с ПОЛОВИННЫМ бюджетом и учёт остатка
+ * в общем потолке. Раньше enable звал sweepStorage() с полным бюджетом и
+ * выбрасывал результат — старые сессии удерживали до 2М, текущая писала
+ * свои 2М поверх (PERF26-4, механизм 1).
+ */
+export async function startSession(): Promise<void> {
+  foreignChars = await sweepStorage(Math.floor(MAX_TOTAL_CHARS / 2));
 }
 
 function scheduleFlush(): void {
@@ -146,17 +190,35 @@ export function flushNow(): Promise<void> {
   pendingChars = 0;
   // Записи — строго по очереди: иначе учёт занятого места отставал бы от
   // факта, а вытеснение старого — от учёта.
+  // Backpressure: хранилище отстаёт от потока — новые партии отбрасываем,
+  // не ставя в цепочку (замыкания копили бы кадры без предела). Старое в
+  // цепочке дороже нового: оно ближе к началу истории разбора.
+  if (chainBacklogChars > PENDING_MAX_CHARS) {
+    if (droppedByBackpressure === 0) {
+      log.warn(SCOPE, "хранилище не успевает за потоком кадров — новые партии отбрасываются");
+    }
+    droppedByBackpressure += frames.length;
+    return flushChain;
+  }
+  const gen = generation;
+  chainBacklogChars += chars;
   flushChain = flushChain.then(
-    () => writeChunk(frames, chars),
-    () => writeChunk(frames, chars),
+    () => writeChunk(frames, chars, gen),
+    () => writeChunk(frames, chars, gen),
   );
+  flushChain = flushChain.finally(() => {
+    if (gen === generation) chainBacklogChars -= chars;
+  });
   return flushChain;
 }
 
 let flushChain: Promise<void> = Promise.resolve();
 
-async function writeChunk(frames: WsFrame[], chars: number): Promise<void> {
-  const key = `${WS_LOG_PREFIX}${SESSION_ID}:${seq++}`;
+async function writeChunk(frames: WsFrame[], chars: number, gen: number): Promise<void> {
+  // Сессию записи выключили, пока кусок стоял в очереди, — прошлой жизни
+  // на диске и в учёте делать нечего.
+  if (gen !== generation) return;
+  const key = `${WS_LOG_PREFIX}${SESSION_ID}:${gen}-${seq++}`;
   try {
     await browser.storage.local.set({ [key]: { at: Date.now(), frames } });
   } catch (e) {
@@ -173,10 +235,25 @@ async function writeChunk(frames: WsFrame[], chars: number): Promise<void> {
       return;
     }
   }
+  if (gen !== generation) {
+    // Выключили, пока ждали storage: кусок уже на диске — убираем и выходим,
+    // счётчики новой жизни не трогаем.
+    try {
+      await browser.storage.local.remove(key);
+    } catch {
+      /* приберёт sweepStorage следующей сессии */
+    }
+    return;
+  }
   chunks.push({ key, chars });
   storedChars += chars;
   // Потолок держим удалением самых старых кусков — по одному ключу за раз.
-  while (storedChars > MAX_TOTAL_CHARS && chunks.length > 1) {
+  // Чужой остаток (foreignChars) входит в общий потолок, а MAX_CHUNKS
+  // ограничивает ЧИСЛО ключей (капельный поток, PERF26-4 механизм 3).
+  while (
+    (foreignChars + storedChars > MAX_TOTAL_CHARS || chunks.length > MAX_CHUNKS) &&
+    chunks.length > 1
+  ) {
     const oldest = chunks.shift();
     if (!oldest) break;
     storedChars -= oldest.chars;
@@ -190,6 +267,7 @@ async function writeChunk(frames: WsFrame[], chars: number): Promise<void> {
 
 /** Забыть накопленное в памяти (при выключении настройки). */
 export function resetBuffer(): void {
+  generation++; // висящая цепочка прошлой жизни больше не пишет и не считает
   stopped = false;
   pending = [];
   pendingChars = 0;
@@ -197,6 +275,9 @@ export function resetBuffer(): void {
   seq = 0;
   chunks = [];
   storedChars = 0;
+  foreignChars = 0;
+  droppedByBackpressure = 0;
+  chainBacklogChars = 0;
   if (flushTimer) {
     clearTimeout(flushTimer);
     flushTimer = null;
@@ -302,6 +383,9 @@ export function formatFrames(frames: WsFrame[]): string {
     "Polemica Notes — полный лог общения с сервером",
     `выгружено: ${new Date().toISOString()}`,
     `кадров: ${frames.length}`,
+    ...(droppedByBackpressure > 0
+      ? [`ВНИМАНИЕ: ${droppedByBackpressure} кадров отброшено переполненной очередью — лог неполный`]
+      : []),
     "медиа (janus/SDP/ICE) и ключи сессии в файл не попадают",
     "",
   ].join("\n");

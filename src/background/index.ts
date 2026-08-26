@@ -719,7 +719,10 @@ const WAKE_RECONCILE_DEDUPE_MS = 30_000;
 
 function restoreObsConnection(probe = false): void {
   void enqueueObs(async () => {
-    if (probe && Date.now() - lastReconcileAt < WAKE_RECONCILE_DEDUPE_MS) return;
+    // Дедуп «одна сверка на пробуждение» — для ЛЮБОГО пути (PERF26-12):
+    // top-level инкарнации + onStartup ставили ДВЕ сверки подряд, и при
+    // недоступном хосте очередь держалась до 20 секунд двумя connect'ами.
+    if (Date.now() - lastReconcileAt < WAKE_RECONCILE_DEDUPE_MS) return;
     try {
       await reconcileObsConnection(probe);
     } finally {

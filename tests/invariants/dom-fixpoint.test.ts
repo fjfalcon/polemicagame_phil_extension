@@ -44,7 +44,8 @@ vi.mock("@core/crossover", async (importOriginal) => {
   const orig = await importOriginal<typeof import("@core/crossover")>();
   return {
     ...orig,
-    fetchHistory: vi.fn(async () => ({
+    releaseOwnHistory: vi.fn(),
+    getOwnHistory: vi.fn(async () => ({
       rows: [{ id: 10, role: "civilian", win: true, mmrAfter: 100, mmrDiff: 5 }],
       truncated: false,
     })),

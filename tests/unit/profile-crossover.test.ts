@@ -34,7 +34,8 @@ vi.mock("@core/crossover", async (importOriginal) => {
   return {
     ...orig,
     // Сеть фейковая, счёт (crossGames/oldestDate) — настоящий.
-    fetchHistory: vi.fn(async () => ({
+    releaseOwnHistory: vi.fn(),
+    getOwnHistory: vi.fn(async () => ({
       rows: [
         { id: 10, role: "civilian", win: true },
         { id: 11, role: "mafia", win: false },
