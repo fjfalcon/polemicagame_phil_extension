@@ -183,7 +183,7 @@ describe("AGENTS §4 source safety", () => {
       }
     }
     expect(owners, "§4.1: multiple observers recreate self-sustaining document-wide DOM loops").toEqual([
-      "src/core/dom.ts:83",
+      "src/core/dom.ts:88",
     ]);
   });
 

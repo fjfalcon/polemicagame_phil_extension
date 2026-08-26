@@ -4,6 +4,7 @@
  * заметный оверхед на активной игре. Теперь один наблюдатель с подписчиками и debounce.
  */
 import { log } from "./log";
+import { isGameRoomPath } from "@shared/routes";
 
 /** Надёжный клик: нативный .click() + синтетическое событие как запасной путь. */
 export function safeClick(el: Element): boolean {
@@ -67,6 +68,10 @@ class SharedDomObserver {
   private timerId: ReturnType<typeof setTimeout> | null = null;
   private lastSlowLog = 0;
   private lastFlushAt = 0;
+  /** Начало непрерывной серии проходов подряд (шторм); 0 — затишье было. */
+  private busySince = 0;
+  /** Штормовое предупреждение — раз на страницу (латч). */
+  private stormLogged = false;
   private onVisibility: (() => void) | null = null;
 
   subscribe(fn: DomSubscriber): () => void {
@@ -147,9 +152,43 @@ class SharedDomObserver {
     }
   }
 
+  /**
+   * Сторож затишья (26.08.2026): вне игровой комнаты DOM обязан затихать.
+   * В комнате мутации не прекращаются штатно (таймеры сайта), но на тихих
+   * маршрутах (профиль, поиск вне очереди) минутный безостановочный поток
+   * проходов — почти наверняка цикл нашего же подписчика «запись → мутация →
+   * запись» (класс блокера профильных карточек). Ловим его в ЖИВОМ логе,
+   * а не только в тестовом харнесе.
+   */
+  private trackStorm(startedAt: number, prevFlushAt: number): void {
+    const gap = startedAt - prevFlushAt;
+    // Отрицательный gap — прыжок часов (сон системы, тестовые часы): серию
+    // начинаем заново, иначе busySince остаётся несведённым и сторож глохнет.
+    const continuous = prevFlushAt > 0 && gap >= 0 && gap <= MIN_FLUSH_INTERVAL_MS * 4;
+    if (!continuous) {
+      this.busySince = startedAt;
+      return;
+    }
+    if (this.busySince === 0) this.busySince = prevFlushAt;
+    if (
+      !this.stormLogged &&
+      this.busySince > 0 &&
+      startedAt - this.busySince > 60_000 &&
+      !isGameRoomPath(location.pathname)
+    ) {
+      this.stormLogged = true;
+      log.warn(
+        "dom",
+        "поток мутаций не затихает дольше минуты вне комнаты — возможен цикл DOM-подписчика",
+      );
+    }
+  }
+
   private flush() {
     this.scheduled = false;
+    const prevFlushAt = this.lastFlushAt;
     this.lastFlushAt = performance.now();
+    this.trackStorm(this.lastFlushAt, prevFlushAt);
     const batch = this.pending;
     this.pending = [];
     if (this.dropped) {
@@ -190,6 +229,7 @@ class SharedDomObserver {
     this.scheduled = false;
     this.pending = [];
     this.dropped = 0;
+    this.busySince = 0;
   }
 }
 
