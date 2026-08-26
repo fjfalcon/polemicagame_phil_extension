@@ -138,6 +138,134 @@ function savePrefs(p: PanelPrefs): void {
   }
 }
 
+// ─────────────── история чата поверх перезагрузки ───────────────
+
+/**
+ * Анонимный IRC Twitch бэклога не отдаёт: после F5 приходят только новые
+ * сообщения, и стример терял контекст разговора (просьба владельца
+ * 26.08.2026). Буфер панели поэтому сохраняется в sessionStorage ВКЛАДКИ:
+ * переживает перезагрузку и жёсткие переходы в той же вкладке, а с её
+ * закрытием испаряется — вчерашний чат не воскресает, и сообщения зрителей
+ * не оседают на диске навсегда (в отличие от localStorage).
+ *
+ * sessionStorage принадлежит странице — источник недоверенный, как и prefs
+ * выше: каждое поле при чтении санитизируется заново (карта хранилища,
+ * AGENTS.md §5). Цвет уходит в inline-style, бейджи в HTML — поэтому цвет
+ * строго #rrggbb, бейджи только из нашего словаря BADGE_ICONS.
+ */
+const HISTORY_KEY = "fp:twitch-panel:history";
+/** Потолок длины одного сообщения при сохранении (IRC-строка и так ~500). */
+export const HISTORY_MSG_MAX = 600;
+/** Сырой JSON больше этого — мусор или атака на парсер, не читаем вовсе. */
+const HISTORY_RAW_MAX = 400_000;
+/** Дроссель записи: чат строчит часто, диск дёргаем не чаще раза в 2 с. */
+const HISTORY_SAVE_MS = 2000;
+
+/** Бейджи → наши эмодзи-префиксы (константы, в HTML попадают только они). */
+const BADGE_ICONS: Record<string, string> = {
+  broadcaster: "🎥",
+  moderator: "🛡",
+  vip: "💎",
+  subscriber: "★",
+  founder: "★",
+};
+
+/** Известные значки бейджей — единственные строки, допущенные в HTML. */
+const KNOWN_BADGES = new Set(Object.values(BADGE_ICONS));
+
+/**
+ * Сериализация буфера. Системные строки («Подключились…») не сохраняем:
+ * после восстановления они врали бы о состоянии соединения — шов истории
+ * отмечает отдельный разделитель при восстановлении.
+ */
+export function serializeChatHistory(channel: string, messages: ChatMessage[]): string {
+  const chat = messages
+    .filter((m) => m.type === "chat")
+    .slice(-MAX_MESSAGES)
+    .map((m) => ({
+      username: (m.username ?? "").slice(0, 100),
+      color: m.color,
+      badges: m.badges?.filter((b) => KNOWN_BADGES.has(b)).slice(0, 5),
+      message: m.message.slice(0, HISTORY_MSG_MAX),
+      timestamp: m.timestamp.getTime(),
+      mention: m.mention === true,
+    }));
+  return JSON.stringify({ channel, messages: chat });
+}
+
+/**
+ * Парсер восстановления. Экспорт — тестовый шов: property-тесты кормят его
+ * враждебным содержимым (по паттерну loadPrefs). Битая запись отбрасывается
+ * ЦЕЛИКОМ, а не «чинится»: недоверенному вводу полусмысла не даём.
+ */
+export function parseChatHistory(raw: string | null, channel: string): ChatMessage[] {
+  if (!raw || raw.length > HISTORY_RAW_MAX || !channel) return [];
+  let data: unknown = null;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const own = (o: object, k: string): unknown =>
+    Object.hasOwn(o, k) ? (o as Record<string, unknown>)[k] : undefined;
+  // История чужого канала не подмешивается: сменили канал — начали с чистого.
+  if (own(data, "channel") !== channel) return [];
+  const list = own(data, "messages");
+  if (!Array.isArray(list)) return [];
+  const now = Date.now();
+  const out: ChatMessage[] = [];
+  for (const item of list.slice(-MAX_MESSAGES)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const username = own(item, "username");
+    const message = own(item, "message");
+    const timestamp = own(item, "timestamp");
+    if (typeof username !== "string" || username.length > 100) continue;
+    if (typeof message !== "string" || message.length > HISTORY_MSG_MAX) continue;
+    // Метка из будущего или доисторическая — запись битая, не «поправимая».
+    if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) continue;
+    if (timestamp <= 0 || timestamp > now + 60_000) continue;
+    const rawColor = own(item, "color");
+    const rawBadges = own(item, "badges");
+    out.push({
+      username,
+      message,
+      color: typeof rawColor === "string" && /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : undefined,
+      badges: Array.isArray(rawBadges)
+        ? rawBadges.filter((b): b is string => typeof b === "string" && KNOWN_BADGES.has(b)).slice(0, 5)
+        : undefined,
+      mention: own(item, "mention") === true,
+      timestamp: new Date(timestamp),
+      type: "chat",
+    });
+  }
+  return out;
+}
+
+function loadChatHistory(channel: string): ChatMessage[] {
+  try {
+    return parseChatHistory(sessionStorage.getItem(HISTORY_KEY), channel);
+  } catch {
+    return []; // приватный режим — sessionStorage может кидаться
+  }
+}
+
+function saveChatHistoryNow(channel: string, messages: ChatMessage[]): void {
+  try {
+    sessionStorage.setItem(HISTORY_KEY, serializeChatHistory(channel, messages));
+  } catch {
+    /* квота / приватный режим — история просто не переживёт перезагрузку */
+  }
+}
+
+function clearChatHistory(): void {
+  try {
+    sessionStorage.removeItem(HISTORY_KEY);
+  } catch {
+    /* см. выше */
+  }
+}
+
 /** Дефолтная палитра цветов ников Twitch — когда стример не выбрал свой. */
 const NICK_COLORS = [
   "#FF4500",
@@ -224,6 +352,53 @@ class TwitchChatPanel extends FloatingPanel {
   /** Панель смонтирована и видима (не hide()). */
   get isShown(): boolean {
     return this.isMounted && this.root.style.display !== "none";
+  }
+
+  // ── история поверх перезагрузки ──
+
+  private historyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Дроссельная запись буфера в sessionStorage (trailing — финал не теряется). */
+  private scheduleHistorySave(): void {
+    if (this.historyTimer) return;
+    this.historyTimer = setTimeout(() => {
+      this.historyTimer = null;
+      saveChatHistoryNow(channelName, this.messages);
+    }, HISTORY_SAVE_MS);
+  }
+
+  /** Немедленная запись: pagehide/disable могут не дождаться дросселя. */
+  flushHistoryNow(): void {
+    if (this.historyTimer) {
+      clearTimeout(this.historyTimer);
+      this.historyTimer = null;
+    }
+    saveChatHistoryNow(channelName, this.messages);
+  }
+
+  /**
+   * Засеять буфер восстановленной историей. Только в пустую панель и до
+   * живого чата: сеять поверх пришедших сообщений значит перемешать порядок.
+   */
+  seedHistory(restored: ChatMessage[]): void {
+    if (restored.length === 0 || this.messages.length > 0) return;
+    this.messages = [
+      ...restored,
+      { message: "⟲ история восстановлена", timestamp: new Date(), type: "system" },
+    ];
+    this.renderMessages();
+  }
+
+  /**
+   * Смена канала: буфер и сохранённая история старого канала обнуляются —
+   * иначе следующая запись увезла бы чужие сообщения под ключ нового канала.
+   */
+  resetForChannel(): void {
+    this.messages = [];
+    this.unseen = 0;
+    this.atBottom = true;
+    this.renderMessages();
+    this.flushHistoryNow();
   }
 
   constructor() {
@@ -348,6 +523,7 @@ class TwitchChatPanel extends FloatingPanel {
     if (this.messages.length > MAX_MESSAGES) this.messages.shift();
     if (!this.atBottom) this.bumpUnseen();
     this.appendLastMessage();
+    this.scheduleHistorySave();
   }
 
   addSystemMessage(message: string): void {
@@ -747,6 +923,7 @@ let channelName = "";
 
 let unsubMessage: (() => void) | null = null;
 let unsubDom: (() => void) | null = null;
+let onPageHideFlush: (() => void) | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 /** Признак намеренного отключения — чтобы не переподключаться после disconnect(). */
 let intentionalClose = false;
@@ -853,7 +1030,12 @@ let gameUiVisible = false;
 let panelWanted = true;
 
 function ensurePanel(): TwitchChatPanel {
-  if (!panel) panel = new TwitchChatPanel();
+  if (!panel) {
+    panel = new TwitchChatPanel();
+    // Восстановление истории — при СОЗДАНИИ панели, не при show(): show
+    // дёргается на каждом переходе, а сеять можно только в пустой буфер.
+    panel.seedHistory(loadChatHistory(channelName));
+  }
   return panel;
 }
 
@@ -1184,15 +1366,6 @@ function parseTags(raw: string | undefined): Record<string, string> {
   return out;
 }
 
-/** Бейджи → наши эмодзи-префиксы (константы, в HTML попадают только они). */
-const BADGE_ICONS: Record<string, string> = {
-  broadcaster: "🎥",
-  moderator: "🛡",
-  vip: "💎",
-  subscriber: "★",
-  founder: "★",
-};
-
 function parseBadges(raw: string | undefined): string[] {
   if (!raw) return [];
   const out: string[] = [];
@@ -1250,11 +1423,17 @@ function handleControlMessage(msg: TwitchControlMsg): void {
         showPanel();
       }
       break;
-    case "twitch_connect":
-      if (msg.channel) channelName = normalizeChannel(msg.channel);
+    case "twitch_connect": {
+      const next = msg.channel ? normalizeChannel(msg.channel) : channelName;
+      if (next !== channelName) {
+        channelName = next;
+        panel?.resetForChannel();
+        if (!panel) clearChatHistory();
+      }
       reconnectAttempts = 0; // явное действие пользователя — свежий лимит попыток
       connectToTwitch();
       break;
+    }
     case "twitch_disconnect":
       disconnect();
       break;
@@ -1290,6 +1469,11 @@ export const twitchPanelFeature: TwitchFeature = {
     unsubMessage = onMessage((msg) => {
       if (isTwitchControlMsg(msg)) handleControlMessage(msg);
     });
+
+    // Дроссель записи истории может не дожить до конца страницы — флаш на
+    // pagehide (тот же урок, что log.flushNow у freeze-watch).
+    onPageHideFlush = () => panel?.flushHistoryNow();
+    window.addEventListener("pagehide", onPageHideFlush);
 
     // Слежение за игровым интерфейсом (порт MutationObserver-логики).
     //
@@ -1332,6 +1516,9 @@ export const twitchPanelFeature: TwitchFeature = {
     const next = normalizeChannel(ctx.settings.twitch_channel_name || "");
     if (next !== channelName) {
       channelName = next;
+      // Историю старого канала не тащим под новый ключ — буфер с нуля.
+      panel?.resetForChannel();
+      if (!panel) clearChatHistory();
       reconnectAttempts = 0; // сменили канал — свежий лимит попыток
       // Переподключение к новому каналу (или отключение, если канал убрали).
       if (channelName && gameUiVisible) connectToTwitch();
@@ -1348,6 +1535,14 @@ export const twitchPanelFeature: TwitchFeature = {
 
   disable() {
     disconnect();
+
+    // Сохранить до unmount: выключение фичи не должно стирать историю —
+    // повторное включение в той же вкладке восстановит разговор.
+    panel?.flushHistoryNow();
+    if (onPageHideFlush) {
+      window.removeEventListener("pagehide", onPageHideFlush);
+      onPageHideFlush = null;
+    }
 
     if (unsubMessage) {
       unsubMessage();

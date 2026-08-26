@@ -80,7 +80,7 @@ vi.mock("@core/FloatingPanel", () => ({
 }));
 
 import type { FeatureContext } from "@core/feature";
-import { twitchPanelFeature } from "@content/panels/twitch-panel";
+import { parseChatHistory, serializeChatHistory, twitchPanelFeature } from "@content/panels/twitch-panel";
 
 type Handler = ((e: unknown) => void) | null;
 
@@ -385,5 +385,59 @@ describe("TW-P7: бюджет подписчика видимости", () => {
 
     expect(qsa.n).toBeGreaterThanOrEqual(3);
     expect(qsa.n).toBeLessThanOrEqual(12);
+  });
+});
+
+describe("история чата поверх перезагрузки (просьба 26.08.2026)", () => {
+  const KEY = "fp:twitch-panel:history";
+  const privmsg = (text: string): string =>
+    `@display-name=Viewer :viewer!v@v.tmi.twitch.tv PRIVMSG #streamer :${text}`;
+
+  test("восстановленная история и новые сообщения сохраняются вместе", () => {
+    sessionStorage.setItem(
+      KEY,
+      serializeChatHistory("streamer", [
+        { username: "old", message: "из прошлой сессии", timestamp: new Date(), type: "chat" },
+      ]),
+    );
+    enableFeature();
+    const ws = lastSocket();
+    ws.emitOpen();
+    ws.onmessage?.({ data: privmsg("свежее") });
+
+    vi.advanceTimersByTime(2100); // дроссель записи
+    const saved = parseChatHistory(sessionStorage.getItem(KEY), "streamer");
+    // «из прошлой сессии» здесь доказывает, что панель ЗАСЕЯЛАСЬ восстановленным:
+    // сохранение сериализует буфер панели, а не старый sessionStorage.
+    expect(saved.map((m) => m.message)).toEqual(["из прошлой сессии", "свежее"]);
+  });
+
+  test("pagehide сохраняет немедленно — дроссель может не дожить до конца страницы", () => {
+    sessionStorage.removeItem(KEY);
+    enableFeature();
+    const ws = lastSocket();
+    ws.emitOpen();
+    ws.onmessage?.({ data: privmsg("последнее слово") });
+
+    window.dispatchEvent(new Event("pagehide")); // БЕЗ прокрутки таймеров
+    const saved = parseChatHistory(sessionStorage.getItem(KEY), "streamer");
+    expect(saved.map((m) => m.message)).toEqual(["последнее слово"]);
+  });
+
+  test("смена канала обнуляет буфер: чужие сообщения не уезжают под новый ключ", () => {
+    sessionStorage.removeItem(KEY);
+    enableFeature();
+    const ws = lastSocket();
+    ws.emitOpen();
+    ws.onmessage?.({ data: privmsg("чат старого канала") });
+    vi.advanceTimersByTime(2100);
+
+    twitchPanelFeature.update?.({
+      settings: { twitch_chat_enabled: true, twitch_channel_name: "other" },
+    } as unknown as FeatureContext);
+
+    const raw = sessionStorage.getItem(KEY);
+    expect(parseChatHistory(raw, "other")).toEqual([]);
+    expect(parseChatHistory(raw, "streamer")).toEqual([]);
   });
 });

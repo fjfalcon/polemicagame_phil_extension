@@ -324,7 +324,7 @@ src/
 | local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |
 | localStorage страницы | fp:*, polemica:loglevel/buflevel | панели/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник. `polemica:update*` больше НЕ используются (переехали в local, 8.1.44) |
-| sessionStorage страницы | pn_flipped_players, pn_requeue_pending, pn_postgame_pending | camera-flip (перевороты на игру), queue-requeue (одноразовый мост «комната распущена → поиск», TTL 45с) и postgame-search (мост «клик „В поиск" после игры → выйти из игры и нажать „Играть"», тот же формат/TTL). Недоверенный источник: значения валидируются при чтении, подделка сайтом не даёт привилегий |
+| sessionStorage страницы | pn_flipped_players, pn_requeue_pending, pn_postgame_pending, fp:twitch-panel:history | camera-flip (перевороты на игру), queue-requeue (одноразовый мост «комната распущена → поиск», TTL 45с) и postgame-search (мост «клик „В поиск" после игры → выйти из игры и нажать „Играть"», тот же формат/TTL); twitch-panel (история чата поверх F5, 9.29.0 — чат-строки без системных, привязана к каналу, санитизация parseChatHistory). Недоверенный источник: значения валидируются при чтении, подделка сайтом не даёт привилегий |
 
 ### Что попадает в файл лога (решения владельца, 02.08.2026)
 
