@@ -26,8 +26,12 @@ let got;
 if (target === "chrome-zip") {
   const zip = path.join(root, "dist/polemica-chrome.zip");
   if (!fs.existsSync(zip)) fail("dist/polemica-chrome.zip отсутствует");
-  const raw = execFileSync("unzip", ["-p", zip, "manifest.json"], { encoding: "utf8" });
-  got = JSON.parse(raw).version;
+  try {
+    const raw = execFileSync("unzip", ["-p", zip, "manifest.json"], { encoding: "utf8" });
+    got = JSON.parse(raw).version;
+  } catch {
+    fail("dist/polemica-chrome.zip не читается (битый архив или нет manifest.json)");
+  }
 } else if (target === "firefox") {
   const mf = path.join(root, "dist/firefox/manifest.json");
   if (!fs.existsSync(mf)) fail("dist/firefox/manifest.json отсутствует");

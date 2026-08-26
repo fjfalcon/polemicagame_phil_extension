@@ -862,6 +862,7 @@ document.addEventListener("DOMContentLoaded", () => {
           showPopupToast("Не удалось прочитать текущие заметки — импорт отменён", "error");
           return;
         }
+        let fallbackCounts: { added: number; replaced: number } | null = null;
         if (!applied || applied.ok !== true) {
           // Фолбэк на прямую запись, если координатор недоступен: терять
           // импорт из-за спящего воркера нельзя. Карта ПЕРЕЧИТЫВАЕТСЯ здесь
@@ -875,19 +876,35 @@ document.addEventListener("DOMContentLoaded", () => {
             showPopupToast("Не удалось прочитать текущие заметки — импорт отменён", "error");
             return;
           }
-          const fallbackMerged = mergeNotes(freshNotes, incoming).merged;
-          if (!(await saveNotes(fallbackMerged))) {
+          const freshMerge = mergeNotes(freshNotes, incoming);
+          // Согласие давалось на цифры СТАРОГО снимка; если за время диалога
+          // затираемых стало больше (правки игровой вкладки) — спросить ещё
+          // раз, а не менять больше подтверждённого (adversarial 26.08.2026).
+          if (freshMerge.replaced > replaced) {
+            const okFresh = await popupConfirm(
+              `Пока вы подтверждали, заметки менялись: импорт теперь изменит ` +
+                `${freshMerge.replaced} существующих (было ${replaced}).\n\nПродолжить?`,
+              "Импортировать",
+            );
+            if (!okFresh) {
+              showPopupToast("Импорт отменён");
+              return;
+            }
+          }
+          if (!(await saveNotes(freshMerge.merged))) {
             showPopupToast("Не удалось сохранить заметки", "error");
             return;
           }
+          // Честные цифры фолбэка — от свежего мержа, не от снимка.
+          fallbackCounts = { added: freshMerge.added, replaced: freshMerge.replaced };
         }
         // Настройки применяем ПОСЛЕ успешной записи заметок (находка 6).
         const restoredSettings = await applySettings();
         await applyExtras();
         // Авторитетные цифры — от координатора: он считал их на свежей карте
         // (в игровой вкладке могли править заметки в эти же секунды).
-        const addedFinal = applied?.added ?? added;
-        const replacedFinal = applied?.replaced ?? replaced;
+        const addedFinal = applied?.added ?? fallbackCounts?.added ?? added;
+        const replacedFinal = applied?.replaced ?? fallbackCounts?.replaced ?? replaced;
         const notesMsg = replacedFinal
           ? `Добавлено: ${addedFinal}, обновлено: ${replacedFinal}`
           : `Импортировано заметок: ${addedFinal}`;

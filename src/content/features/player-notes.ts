@@ -3811,7 +3811,13 @@ class PlayerNotesManager {
     const { allowed, state, stormed } = throttleRebuild(this.rebuildCounts.get(key), Date.now());
     this.rebuildCounts.set(key, state);
     if (stormed) {
-      log.warn("player-notes", "шторм пересборки кнопок игрока — пауза; состав ряда:", sig);
+      // Ник в sig редактируется В ТОЧКЕ ЛОГА: сам sig обязан остаться сырым
+      // (identity гейта пересборки), а ники в файл не пишем (02.08.2026).
+      log.warn(
+        "player-notes",
+        "шторм пересборки кнопок игрока — пауза; состав ряда:",
+        sig.replace(username, redactNick(username)),
+      );
       // Сброс НЕМЕДЛЕННО: если вкладка сейчас встанет, отложенный сброс до
       // диска не доедет, и разбирать снова будет нечего.
       log.flushNow();
@@ -3822,9 +3828,11 @@ class PlayerNotesManager {
   private buttonsSignature(username: string, hasMedia: boolean): string {
     const s = this.settings;
     return [
-      // Не сырой ник: sig уходит в persistent warn «шторм пересборки»
-      // (ревью 26.08.2026), а ники в файл не пишем (решение 02.08.2026).
-      redactNick(username),
+      // СЫРОЙ ник намеренно: sig — identity для гейта пересборки кнопок, и
+      // хэш здесь дал бы детерминированные коллизии → «кнопки прежнего
+      // игрока» → заметка молча не тому (adversarial 26.08.2026, №1).
+      // В persistent-лог sig не уходит: точка логирования редактирует сама.
+      username,
       s.btn_stats_enabled === false ? 0 : 1,
       s.btn_note_enabled === false ? 0 : 1,
       s.btn_last_games_enabled === false ? 0 : 1,

@@ -22,7 +22,16 @@ describe("персистентный журнал без сырых ников",
     const fs = await import("node:fs");
     const src = fs.readFileSync("src/content/features/player-notes.ts", "utf8");
     // Страж-грep: интерполяция сырого username в log.* — регресс правила.
-    const raw = src.match(/log\.(warn|error|info)\([^)]*\$\{username\}/g) ?? [];
-    expect(raw, "сырой ник в persistent-логе — верни redactNick").toEqual([]);
+    // Два канала: интерполяция ${username} и сырой отдельный аргумент
+    // «, username)» / «, username,» (adversarial 26.08.2026: первый фикс
+    // ловил только интерполяцию). Известные ограничения: другие имена
+    // переменных, заранее собранные строки, конкатенация — точечный страж,
+    // не доказательство; полный ответ — промт №5 п.3 при волнах.
+    const calls = src.match(/log\.(warn|error|info)\((?:[^;]|\n)*?\);/g) ?? [];
+    const leaky = calls.filter((c) => {
+      const bare = c.replaceAll("redactNick(username)", ""); // обёрнутый — легален
+      return /\$\{username\}/.test(bare) || /[,(]\s*username\s*[,)]/.test(bare);
+    });
+    expect(leaky, "сырой ник в persistent-логе — верни redactNick").toEqual([]);
   });
 });

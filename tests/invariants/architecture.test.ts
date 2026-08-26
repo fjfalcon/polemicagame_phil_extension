@@ -179,11 +179,15 @@ describe("AGENTS §4 source safety", () => {
     for (const file of sourceFiles()) {
       const source = read(file);
       for (const match of source.matchAll(/new\s+MutationObserver\s*\(/g)) {
-        owners.push(`${file}:${lineOf(source, match.index)}`);
+        void match;
+        owners.push(file);
       }
     }
+    // Пин ФАЙЛА, не номера строки: точный номер смещался трижды за день
+    // 26.08.2026 и тренировал рефлекс «поправь число» (adversarial №5) —
+    // единственность наблюдателя это не защищало лучше, чем список файлов.
     expect(owners, "§4.1: multiple observers recreate self-sustaining document-wide DOM loops").toEqual([
-      "src/core/dom.ts:94",
+      "src/core/dom.ts",
     ]);
   });
 

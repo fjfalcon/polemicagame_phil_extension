@@ -14,7 +14,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 
 /** Срезать // и /* … *​/ — упоминание в комментарии не считается кодом. */
 function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+    // Хвостовой комментарий (не URL: перед // нет двоеточия/кавычки).
+    .replace(/([^:"'])\/\/.*$/gm, "$1");
 }
 
 /**
