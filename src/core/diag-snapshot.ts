@@ -21,7 +21,7 @@ export function formatSettings(settings: Settings): string[] {
       if (key === "obs_password") return `${key}: ${value ? "<задан>" : "<пуст>"}`;
       // В адресе OBS бывают логин/пароль/токены — в снимок только хост
       // (то же правило safeEndpoint, что в логе OBS; ревью 26.08.2026).
-      if (key === "obs_host") return `${key}: ${safeEndpoint(String(value ?? ""))}`;
+      if (key === "obs_host") return `${key}: ${value ? safeEndpoint(String(value)) : "<пуст>"}`;
       return `${key}: ${JSON.stringify(value)}`;
     });
 }
@@ -34,8 +34,8 @@ export interface StorageMetric {
 
 /**
  * Метрики storage.local: размер по группам, содержимое не раскрывается.
- * Заметки — одной строкой «N шт, X КБ»; журнал — своей группой; прочие
- * pn_/obs_-ключи перечисляются поимённо (их значения — техфлаги, не тексты).
+ * Заметки — одной строкой «N шт, X КБ»; журнал — своей группой; ВСЕ прочие
+ * ключи local перечисляются поимённо, но только имя+размер — значений нет.
  */
 export function storageMetrics(all: Record<string, unknown>): StorageMetric[] {
   const size = (v: unknown): number => {

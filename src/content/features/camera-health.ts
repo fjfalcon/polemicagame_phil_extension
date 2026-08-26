@@ -82,10 +82,14 @@ export function isDeadTrack(track: TrackLike | undefined): boolean {
  * разборе не хуже: «оборвалось у плитки 5» сопоставимо со стримом.
  */
 export function tileLabel(tile: HTMLElement): string {
-  let i = Array.from(document.querySelectorAll<HTMLElement>(SITE.playerDesktop)).indexOf(tile);
-  // Фолбэк на голый .player: наблюдаемые camera-health плитки не обязаны
-  // совпадать со строгим селектором стола (мобильная разметка, зритель).
-  if (i < 0) i = Array.from(document.querySelectorAll<HTMLElement>(".player")).indexOf(tile);
+  // Родной номер места сайта — он же виден на стриме, стабилен на всю игру
+  // и не зависит от порядка/пересборки DOM (adversarial 26.08.2026: индекс
+  // querySelectorAll менялся между «оборвалось» и «ожило» при пересборке
+  // стола и нумеровал судью по другому списку, чем игроков).
+  const seat = tile.querySelector(SITE.playerNumber)?.textContent?.trim();
+  if (seat && /^\d{1,2}$/.test(seat)) return `место ${seat}`;
+  // Фолбэк — индекс по ЕДИНОМУ списку .player (не по двум разным).
+  const i = Array.from(document.querySelectorAll<HTMLElement>(".player")).indexOf(tile);
   return i >= 0 ? `плитка ${i + 1}` : "плитка ?";
 }
 

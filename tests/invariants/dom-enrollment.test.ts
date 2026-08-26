@@ -12,14 +12,28 @@ import { describe, expect, test } from "vitest";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-/** Файлы src/content/**, реально зовущие onDomChange(. */
+/** Срезать // и /* … *​/ — упоминание в комментарии не считается кодом. */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
+/**
+ * Файлы src/content/**, реально зовущие onDomChange( в КОДЕ (не в
+ * комментариях — adversarial 26.08.2026, обход №2). Известное ограничение:
+ * подписку через обёртку с другим именем статический скан не увидит —
+ * обёрток сейчас нет, появление новой = правка @core/dom, которую сторожит
+ * §4.1-пин единственного MutationObserver.
+ */
 function domSubscribers(): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
     for (const name of fs.readdirSync(dir)) {
       const p = path.join(dir, name);
       if (fs.statSync(p).isDirectory()) walk(p);
-      else if (name.endsWith(".ts") && fs.readFileSync(p, "utf8").includes("onDomChange(")) {
+      else if (
+        name.endsWith(".ts") &&
+        stripComments(fs.readFileSync(p, "utf8")).includes("onDomChange(")
+      ) {
         out.push(path.relative(ROOT, p));
       }
     }
@@ -28,16 +42,20 @@ function domSubscribers(): string[] {
   return out.sort();
 }
 
-/** Покрытие определяется МЕХАНИЧЕСКИ: файл упомянут в харнесе импортом. */
+/**
+ * Покрытие — только ЖИВОЙ import-стейтмент в харнесе: закомментированный
+ * импорт и vi.mock(«путь») покрытием не считаются (adversarial 26.08.2026,
+ * обход №1).
+ */
 function coveredByFixpoint(): Set<string> {
-  const harness = fs.readFileSync(
-    path.join(ROOT, "tests/invariants/dom-fixpoint.test.ts"),
-    "utf8",
+  const harness = stripComments(
+    fs.readFileSync(path.join(ROOT, "tests/invariants/dom-fixpoint.test.ts"), "utf8"),
   );
   const covered = new Set<string>();
   for (const file of domSubscribers()) {
     const moduleName = path.basename(file, ".ts");
-    if (harness.includes(`/${moduleName}"`)) covered.add(file);
+    const importRe = new RegExp(`^import[^;]*from "[^"]*/${moduleName}";`, "m");
+    if (importRe.test(harness)) covered.add(file);
   }
   return covered;
 }
@@ -49,11 +67,11 @@ function coveredByFixpoint(): Set<string> {
  */
 const EXEMPT: Record<string, string> = {
   "src/content/features/auto-start.ts":
-    "подписчик кликает по кнопкам сайта (safeClick), собственных узлов не пишет",
+    "кликает по кнопкам сайта и мутирует стили ролей через applyRolePhase — с латч-гейтами применённого состояния; своих узлов не создаёт",
   "src/content/features/camera-health.ts":
     "бейдж/кнопка пишутся с маркер-гейтами (data-атрибуты), покрыто идемпотентность-тестами файла",
   "src/content/features/controls-safety.ts":
-    "перестановка контролов сторожится сравнением текущего порядка (идемпотентный якорь)",
+    "держит <style> (сравнение textContent перед записью) и классы-метки с contains-гейтами; узлы не переставляет",
   "src/content/features/hotkey-hints.ts":
     "подпись клавиши пишется только при отличии текста (сравнение перед записью)",
   "src/content/features/match-stats.ts":
@@ -67,7 +85,7 @@ const EXEMPT: Record<string, string> = {
   "src/content/features/queue-guard.ts":
     "подписчик читает состояние очереди и шлёт сообщения фону, DOM не пишет",
   "src/content/features/queue-peek.ts":
-    "плашка очереди обновляется только при смене текста (сравнение перед записью)",
+    "гейты: существование кнопки, позиция у якоря, сравнение style.display перед записью",
   "src/content/features/queue-requeue.ts":
     "подписчик детектит развал лобби и кликает, собственных узлов не пишет",
   "src/content/features/role-faker.ts":
@@ -75,9 +93,9 @@ const EXEMPT: Record<string, string> = {
   "src/content/features/role-marker.ts":
     "paintKey-гейт: маркер пишется только при смене ключа вида (роль+режим)",
   "src/content/features/tooltip.ts":
-    "подписчик только чистит СВОИ осиротевшие тултипы (удаление уже отсутствующего идемпотентно)",
+    "чистит свои осиротевшие тултипы + enhanceTooltip пишет removeAttribute(title) под WeakSet-гейтом processed",
   "src/content/panels/obs-panel.ts":
-    "детектор фаз читает DOM; панель живёт в body и из подписчика не пересоздаётся",
+    "детектор фаз читает DOM; записи стилей ролей и показ панели — под латчами (lastAppliedRoleVisibility, isVisible) и дебаунсом 500 мс",
   "src/content/panels/twitch-panel.ts":
     "сверка видимости дебаунсится и вызывает show/hide только на смене состояния (гейт isShown)",
 };

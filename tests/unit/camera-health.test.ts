@@ -176,9 +176,15 @@ describe("метка обрыва", () => {
     expect(after.some((c) => c.includes("ожило") && c.includes("плитка"))).toBe(true);
     // Номер места, НЕ ник: ники в персистящийся лог не пишутся (решение
     // владельца 02.08.2026; ревью 26.08.2026).
-    const label = tileLabel(document.querySelector("#p0") as HTMLElement);
-    expect(label).toMatch(/^плитка \d+$/);
-    expect(label).not.toContain("Petya");
+    const tile = document.querySelector("#p0") as HTMLElement;
+    // Основной путь — РОДНОЙ номер места сайта (он же виден на стриме и
+    // стабилен при пересборке стола).
+    tile.insertAdjacentHTML("afterbegin", '<div class="player-number">5</div>');
+    expect(tileLabel(tile)).toBe("место 5");
+    // Фолбэк без номера — позиционный индекс по единому списку .player.
+    tile.querySelector(".player-number")?.remove();
+    expect(tileLabel(tile)).toMatch(/^плитка \d+$/);
+    expect(tileLabel(tile)).not.toContain("Petya");
   });
 
   test("метка идемпотентна: второй проход не плодит вторую", () => {
