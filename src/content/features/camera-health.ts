@@ -446,7 +446,26 @@ class CameraHealth {
       this.reconnecting = false;
       this.stage = null;
       this.syncButton();
-      const reason = typeof d.reason === "string" ? d.reason : "unknown";
+      // reason приходит из МИРА СТРАНИЦЫ (postMessage — недоверенный источник,
+      // AGENTS §5): в persistent-лог — только известные коды, чужой текст
+      // сводится к метке с длиной (ревью 26.08.2026).
+      const KNOWN_REASONS = new Set([
+        "vue_root_not_found",
+        "media_room_not_found",
+        "media_not_connected",
+        "update_streams_missing",
+        "create_media_room_missing",
+        "game_id_missing",
+        "recreate_failed",
+        "unknown",
+      ]);
+      const rawReason = typeof d.reason === "string" ? d.reason : "unknown";
+      // threw:<текст ошибки> несёт чужую строку — оставляем только маркер.
+      const reason = KNOWN_REASONS.has(rawReason)
+        ? rawReason
+        : rawReason.startsWith("threw:")
+          ? "threw"
+          : `unrecognized(${rawReason.length})`;
       log.warn(SCOPE, `шаг ${step} не удался: ${reason}`);
       log.flushNow();
       showToast(

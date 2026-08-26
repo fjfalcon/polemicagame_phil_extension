@@ -109,7 +109,9 @@ describe("AGENTS §4 storage and data ownership", () => {
       // Reviewed compatibility fallback for a stale live content realm after update.
       "src/content/features/player-notes.ts": 1,
       // Reviewed popup import fallback when the background coordinator has no receiver.
-      "src/popup/index.ts": 1,
+      // Фолбэк импорта вынесен в тестируемый модуль (9.36.0) — тот же
+      // reviewed-путь, та же единственная запись.
+      "src/popup/import-fallback.ts": 1,
     };
     expect(counted, "§4.3: new whole-map writer bypasses the single background queue").toEqual(allowed);
   });

@@ -41,6 +41,7 @@ import {
   TAGS_KEY,
   MAX_IMPORT_ENTRIES,
 } from "@core/notes-store";
+import { runImportFallback } from "./import-fallback";
 
 /** Сколько игр с метками ролей принимаем из чужого файла (у фичи лимит 50). */
 const MAX_IMPORT_ROLE_GAMES = 50;
@@ -863,40 +864,41 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
         let fallbackCounts: { added: number; replaced: number } | null = null;
-        if (!applied || applied.ok !== true) {
-          // Фолбэк на прямую запись, если координатор недоступен: терять
-          // импорт из-за спящего воркера нельзя. Карта ПЕРЕЧИТЫВАЕТСЯ здесь
-          // же: снимок `notes` снят до диалога подтверждения, пользователь
-          // думал минуты, и игровая вкладка могла править заметки — мерж в
-          // старый снимок стирал бы её правки (ревью 26.08.2026; окно
-          // сужено с минут до миллисекунд, полностью его закрывает только
-          // координатор, которого в этой ветке и нет).
-          const { notes: freshNotes, loadFailed: freshFailed } = await loadNotes();
-          if (freshFailed) {
+        if (applied && applied.ok === false) {
+          // Координатор ЖИВ и честно сказал «запись не удалась» (хранилище).
+          // Прямая запись отсюда обходила бы его очередь и гонялась бы с ней
+          // (ревью 26.08.2026, №2) — а упало бы то же хранилище. Не пишем.
+          showPopupToast("Не удалось сохранить заметки — хранилище отказало", "error");
+          return;
+        }
+        if (!applied) {
+          // Фолбэк на прямую запись — ТОЛЬКО когда координатор не ответил
+          // (спящий воркер, старая вкладка): терять импорт нельзя.
+          // Оркестрация петли перечитываний/согласий — в import-fallback.ts,
+          // под поведенческими тестами.
+          const result = await runImportFallback(incoming as NotesMap, replaced, {
+            loadNotes,
+            saveNotes,
+            confirmMore: (fresh, approved) =>
+              popupConfirm(
+                `Пока вы подтверждали, заметки менялись: импорт теперь изменит ` +
+                  `${fresh} существующих (было ${approved}).\n\nПродолжить?`,
+                "Импортировать",
+              ),
+          });
+          if (result.status === "read_failed") {
             showPopupToast("Не удалось прочитать текущие заметки — импорт отменён", "error");
             return;
           }
-          const freshMerge = mergeNotes(freshNotes, incoming);
-          // Согласие давалось на цифры СТАРОГО снимка; если за время диалога
-          // затираемых стало больше (правки игровой вкладки) — спросить ещё
-          // раз, а не менять больше подтверждённого (adversarial 26.08.2026).
-          if (freshMerge.replaced > replaced) {
-            const okFresh = await popupConfirm(
-              `Пока вы подтверждали, заметки менялись: импорт теперь изменит ` +
-                `${freshMerge.replaced} существующих (было ${replaced}).\n\nПродолжить?`,
-              "Импортировать",
-            );
-            if (!okFresh) {
-              showPopupToast("Импорт отменён");
-              return;
-            }
+          if (result.status === "cancelled") {
+            showPopupToast("Импорт отменён");
+            return;
           }
-          if (!(await saveNotes(freshMerge.merged))) {
+          if (result.status === "save_failed") {
             showPopupToast("Не удалось сохранить заметки", "error");
             return;
           }
-          // Честные цифры фолбэка — от свежего мержа, не от снимка.
-          fallbackCounts = { added: freshMerge.added, replaced: freshMerge.replaced };
+          fallbackCounts = { added: result.added, replaced: result.replaced };
         }
         // Настройки применяем ПОСЛЕ успешной записи заметок (находка 6).
         const restoredSettings = await applySettings();

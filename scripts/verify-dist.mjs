@@ -41,4 +41,22 @@ if (target === "chrome-zip") {
 }
 
 if (got !== want) fail(`версия артефакта ${got} ≠ package.json ${want} — артефакт устарел`);
-console.log(`✓ verify-dist: ${target} = ${got}`);
+
+// Штамп gated-прогона: версия могла совпасть, а исходники — уехать
+// (same-version stale, ревью 26.08.2026). HEAD штампа обязан равняться
+// текущему; грязное дерево — предупреждение, не блок (соло-компромисс).
+const stampPath = path.join(root, "dist/.gate-stamp.json");
+if (!fs.existsSync(stampPath)) fail("dist/.gate-stamp.json отсутствует — артефакт собран мимо release:assets");
+let stamp;
+try {
+  stamp = JSON.parse(fs.readFileSync(stampPath, "utf8"));
+} catch {
+  fail("dist/.gate-stamp.json не читается");
+}
+if (stamp.version !== want) fail(`штамп гейта от версии ${stamp.version} — прогони release:assets заново`);
+const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+if (stamp.gitHead !== head) {
+  fail(`артефакт собран на ${String(stamp.gitHead).slice(0, 7)}, HEAD сейчас ${head.slice(0, 7)} — исходники уехали`);
+}
+if (stamp.dirty) console.warn("⚠ verify-dist: артефакт собирался с незакоммиченными правками (штамп dirty).");
+console.log(`✓ verify-dist: ${target} = ${got}, gated-прогон на ${head.slice(0, 7)}`);

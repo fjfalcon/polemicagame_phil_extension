@@ -5,6 +5,7 @@
     "paths": {
       "@core/*": ["src/core/*"],
       "@shared/*": ["src/shared/*"],
+      "@popup/*": ["src/popup/*"],
       "@content/*": ["src/content/*"]
     },
     "noEmit": true

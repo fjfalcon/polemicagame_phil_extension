@@ -100,6 +100,17 @@ async function main() {
     console.warn("\n⚠ docs/review-ledger.md отсутствует — леджер волн не ведётся.\n");
   }
 
+  // Штамп gated-прогона (ревью 26.08.2026): verify-dist сверяет, что
+  // публикуемый артефакт собран ИМЕННО этим прогоном на текущем HEAD —
+  // same-version stale dist больше не проходит publish/sign молча.
+  const gitHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "";
+  await fs.writeFile(
+    path.join(dist, ".gate-stamp.json"),
+    JSON.stringify({ version, gitHead, dirty, builtAt: new Date().toISOString() }, null, 2),
+  );
+  if (dirty) console.warn("\n⚠ Рабочее дерево грязное: артефакт собран с незакоммиченными правками.\n");
+
   const assets = [
     await zipTarget("chrome", "polemica-chrome.zip"),
     await zipTarget("firefox", "polemica-firefox.zip"),

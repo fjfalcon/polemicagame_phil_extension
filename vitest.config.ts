@@ -7,6 +7,7 @@ export default defineConfig({
       "@core": fileURLToPath(new URL("./src/core", import.meta.url)),
       "@shared": fileURLToPath(new URL("./src/shared", import.meta.url)),
       "@content": fileURLToPath(new URL("./src/content", import.meta.url)),
+      "@popup": fileURLToPath(new URL("./src/popup", import.meta.url)),
     },
   },
   test: {

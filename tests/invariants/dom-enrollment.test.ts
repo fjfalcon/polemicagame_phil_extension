@@ -80,11 +80,11 @@ const EXEMPT: Record<string, { count: number; reason: string }> = {
   "src/content/features/match-stats.ts":
     { count: 1, reason: "обогащение таблицы разбора однократное, помечено классом-маркером; route-lifecycle гасит повтор" },
   "src/content/features/nick-plate.ts":
-    { count: 1, reason: "paintNickEl — эталон идемпотентности §4.1 (сравнение data-маркера перед записью)" },
+    { count: 1, reason: "syncOpenAttrs пишет open-атрибут только при расхождении с Set opened (сравнение перед записью); гейты compactOn/childList" },
   "src/content/features/player-notes.ts":
     { count: 1, reason: "страховочный проход целиком на маркер-гейтах (data-pn-*); кандидат №1 на сценарий при следующем касании файла" },
   "src/content/features/postgame-search.ts":
-    { count: 1, reason: "подписчик кликает по кнопкам сайта, собственных узлов не пишет" },
+    { count: 1, reason: "tick() машины кликает по кнопкам сайта и может показать тост (общий core-тост, не пер-батч); собственных узлов в страницу не пишет" },
   "src/content/features/queue-guard.ts":
     { count: 1, reason: "подписчик читает состояние очереди и шлёт сообщения фону, DOM не пишет" },
   "src/content/features/queue-peek.ts":

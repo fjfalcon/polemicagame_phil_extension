@@ -1,0 +1,110 @@
+/**
+ * Оркестрация фолбэка импорта заметок (ревью 26.08.2026, №2/№3): петля
+ * «перечитать → мерж → согласие при росте → перечитать СНОВА → записать».
+ * Мутационные стражи: запись мержа, посчитанного ДО диалога, — потеря
+ * параллельных правок; пропуск согласия при росте — правки без спроса.
+ */
+import { describe, expect, test, vi } from "vitest";
+
+vi.mock("@core/env", () => ({
+  browser: {
+    storage: {
+      local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
+      sync: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
+      onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
+    },
+    runtime: { id: "test" },
+  },
+}));
+vi.mock("@core/log", () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+import { MAX_CONFIRMS, runImportFallback } from "@popup/import-fallback";
+import type { NotesMap } from "@core/notes-store";
+
+/** Заметка с меткой времени: свежая побеждает существующую (иначе mergeNotes
+ *  оставил бы старую и replaced не рос). */
+const note = (text: string, timestamp = 2_000_000_000_000) => ({ text, timestamp });
+const incoming: NotesMap = { "u:1": note("новая заметка про первого") };
+
+/** Депы с программируемой последовательностью карт на каждое перечитывание. */
+function deps(maps: NotesMap[], overrides: Partial<Parameters<typeof runImportFallback>[2]> = {}) {
+  let reads = 0;
+  const saved: NotesMap[] = [];
+  const d = {
+    loadNotes: vi.fn(async () => ({ notes: maps[Math.min(reads++, maps.length - 1)] })),
+    saveNotes: vi.fn(async (m: NotesMap) => {
+      saved.push(m);
+      return true;
+    }),
+    confirmMore: vi.fn(async () => true),
+    ...overrides,
+  };
+  return { d, saved };
+}
+
+describe("петля фолбэка импорта", () => {
+  test("карта не менялась — одна запись, без лишних вопросов", async () => {
+    const { d, saved } = deps([{}]);
+    const r = await runImportFallback(incoming, 0, d);
+    expect(r).toEqual({ status: "saved", added: 1, replaced: 0 });
+    expect(d.confirmMore).not.toHaveBeenCalled();
+    expect(saved[0]["u:1"]).toMatchObject({ text: "новая заметка про первого" });
+  });
+
+  test("рост затираемых → согласие → ПЕРЕЧИТАННАЯ карта пишется, не додиалоговая", async () => {
+    // Первое чтение: игровая вкладка уже написала u:1 (replaced=1 > 0).
+    // Пока пользователь жал «да», она написала ещё и u:2 — второе чтение.
+    const first: NotesMap = { "u:1": note("правка вкладки", 1) };
+    const second: NotesMap = { "u:1": note("правка вкладки", 1), "u:2": note("свежая заметка вкладки", 1) };
+    const { d, saved } = deps([first, second]);
+    const r = await runImportFallback(incoming, 0, d);
+    expect(d.confirmMore).toHaveBeenCalledWith(1, 0);
+    expect(r.status).toBe("saved");
+    // Мутант «писать мерж до диалога» терял бы u:2.
+    expect(saved[0]["u:2"], "правка за время диалога пережила запись").toMatchObject({
+      text: "свежая заметка вкладки",
+    });
+  });
+
+  test("отказ в диалоге — ничего не записано", async () => {
+    const { d, saved } = deps([{ "u:1": note("правка вкладки", 1) }], {
+      confirmMore: vi.fn(async () => false),
+    });
+    const r = await runImportFallback(incoming, 0, d);
+    expect(r).toEqual({ status: "cancelled" });
+    expect(saved).toHaveLength(0);
+  });
+
+  test("карта растёт бесконечно — после MAX_CONFIRMS согласий пишем без пинг-понга", async () => {
+    // Каждое перечитывание приносит новый затираемый ключ.
+    const maps: NotesMap[] = Array.from({ length: MAX_CONFIRMS + 2 }, (_, i) => {
+      const m: NotesMap = {};
+      for (let k = 0; k <= i; k++) m[`u:${k + 1}`] = note(`правка ${k}`, 1);
+      return m;
+    });
+    const grow: NotesMap = {};
+    for (let k = 1; k <= MAX_CONFIRMS + 2; k++) grow[`u:${k}`] = note(`импорт ${k}`);
+    const { d, saved } = deps(maps);
+    const r = await runImportFallback(grow, 0, d);
+    expect(r.status).toBe("saved");
+    expect(d.confirmMore).toHaveBeenCalledTimes(MAX_CONFIRMS);
+    expect(saved).toHaveLength(1);
+  });
+
+  test("чтение упало — отказ без записи (не пишем поверх непрочитанного)", async () => {
+    const { d, saved } = deps([{}], {
+      loadNotes: vi.fn(async () => ({ notes: {}, loadFailed: true })),
+    });
+    const r = await runImportFallback(incoming, 0, d);
+    expect(r).toEqual({ status: "read_failed" });
+    expect(saved).toHaveLength(0);
+  });
+
+  test("запись упала — честный save_failed", async () => {
+    const { d } = deps([{}], { saveNotes: vi.fn(async () => false) });
+    const r = await runImportFallback(incoming, 0, d);
+    expect(r).toEqual({ status: "save_failed" });
+  });
+});
