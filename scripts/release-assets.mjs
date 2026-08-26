@@ -74,9 +74,12 @@ async function main() {
   run("npx", ["tsc", "-p", "tests/tsconfig.json", "--noEmit"]);
   run("npm", ["test"]);
   run("npm", ["run", "build"]);
-  // web-ext lint — после сборки (линтует dist). Warnings не блокируют
-  // (32 известных про innerHTML), errors — блокируют (ненулевой exit).
-  run("npm", ["run", "lint:ext:chrome"]);
+  // web-ext lint — после сборки, ТОЛЬКО firefox-таргет: web-ext — линтер
+  // Firefox, и на хромовом манифесте он всегда «падал» на service_worker
+  // (гейт поймал это в первый же прогон 26.08.2026 — прежняя ручная
+  // проверка прятала exit-код за пайпом в tail). Chrome-манифест валидирует
+  // сам CWS при загрузке. Warnings не блокируют (32 известных про
+  // innerHTML), errors — блокируют.
   run("npm", ["run", "lint:ext:firefox"]);
 
   // Мягкий след adversarial-контура: леджер волн должен упоминать текущую
