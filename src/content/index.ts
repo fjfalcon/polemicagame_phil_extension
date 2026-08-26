@@ -41,6 +41,7 @@ import { wsLogFeature } from "./features/ws-log";
 import { controlsSafetyFeature } from "./features/controls-safety";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { sessionStatsFeature } from "./panels/session-stats-panel";
+import { profileCrossoverFeature, profileIdFromPath, syncProfileCrossoverRoute } from "./features/profile-crossover";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
 const manager = new FeatureManager().register(
@@ -69,6 +70,7 @@ const manager = new FeatureManager().register(
   obsPanelFeature,
   twitchPanelFeature,
   sessionStatsFeature,
+  profileCrossoverFeature,
 );
 
 function setupUrlRouter(extensionEnabledAtBoot: boolean): void {
@@ -93,6 +95,7 @@ function setupUrlRouter(extensionEnabledAtBoot: boolean): void {
       location.pathname === "/game-search" || location.pathname.startsWith("/game-search/");
     syncQueueGuardRoute(onSearch);
     syncConnectionDiagRoute(onSearch);
+    syncProfileCrossoverRoute(profileIdFromPath(location.pathname));
     if (matchId !== lastMatchId) {
       lastMatchId = matchId;
       // Мастер-выключатель: не качаем страницу матча впустую — все
