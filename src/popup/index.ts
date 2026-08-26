@@ -20,6 +20,12 @@ import {
   onSettingsChanged,
   DEFAULT_SETTINGS,
 } from "@core/settings";
+import {
+  formatMetrics as formatDiagMetrics,
+  formatSettings as formatDiagSettings,
+  section as diagSection,
+  storageMetrics as diagStorageMetrics,
+} from "@core/diag-snapshot";
 import { formatKeyCode, isModifierCode } from "@core/keyboard";
 // Список углов — общий с content-скриптом (см. shared/nick-plate).
 import { PLATE_POSITIONS } from "@shared/nick-plate";
@@ -115,9 +121,67 @@ document.addEventListener("DOMContentLoaded", () => {
   if (verEl) verEl.textContent = `v${browser.runtime.getManifest().version}`;
 
   // ───────────────────────── Логи: скачать / очистить ─────────────────────────
+  /**
+   * Диагностический снимок состояния для шапки экспорта (26.08.2026):
+   * настройки (без секретов), метрики хранилища (без содержимого), статус
+   * OBS, состояние вкладок сайта. Каждая секция падает поодиночке — снимок
+   * не имеет права сломать экспорт лога.
+   */
+  const collectDiagSnapshot = async (): Promise<string> => {
+    const parts: string[] = [];
+    try {
+      parts.push(diagSection("Настройки", formatDiagSettings(await getSettings())));
+    } catch (e) {
+      parts.push(diagSection("Настройки", [`<не собрались: ${(e as Error).message}>`]));
+    }
+    try {
+      const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
+      parts.push(diagSection("Хранилище (local)", formatDiagMetrics(diagStorageMetrics(all))));
+    } catch (e) {
+      parts.push(diagSection("Хранилище (local)", [`<не собралось: ${(e as Error).message}>`]));
+    }
+    try {
+      const st = (await sendOBSCommand("get_status")) as {
+        connected?: boolean;
+        scenes?: unknown[];
+        currentScene?: string | null;
+      };
+      parts.push(
+        diagSection("OBS", [
+          `подключён: ${st?.connected ? "да" : "нет"}`,
+          `сцен: ${st?.scenes?.length ?? 0}, текущая: ${st?.currentScene ?? "—"}`,
+        ]),
+      );
+    } catch (e) {
+      parts.push(diagSection("OBS", [`статус недоступен: ${(e as Error).message}`]));
+    }
+    try {
+      const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/*" });
+      const answers = await Promise.all(
+        tabs.map(async (t) => {
+          if (t.id == null) return null;
+          try {
+            const r = (await browser.tabs.sendMessage(t.id, { type: "diag_state" })) as {
+              path?: string;
+              active?: string[];
+            } | null;
+            return r ? `${r.path}: ${r.active?.join(", ") || "<ничего>"}` : `вкладка ${t.id}: не ответила`;
+          } catch {
+            return `вкладка ${t.id}: не ответила (осиротела?)`;
+          }
+        }),
+      );
+      parts.push(diagSection("Вкладки сайта (активные фичи)", answers.filter(Boolean) as string[]));
+    } catch (e) {
+      parts.push(diagSection("Вкладки сайта (активные фичи)", [`<не собрались: ${(e as Error).message}>`]));
+    }
+    return parts.join("\n") + "\n";
+  };
+
   $("download_logs")?.addEventListener("click", async () => {
     const entries = await log.collectAll();
     const complete = log.isComplete();
+    const snapshot = await collectDiagSnapshot();
     const head = [
       `Polemica Notes ${browser.runtime.getManifest().version}`,
       `UA: ${navigator.userAgent}`,
@@ -127,6 +191,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // как по нему начнут делать выводы (аудит наблюдаемости, LOG-1).
       `complete: ${complete ? "yes" : "NO — часть записей потеряна, storage.local отказал"}`,
       "",
+      snapshot,
     ].join("\n");
     const body = entries
       .map((e) => `${new Date(e.t).toISOString()} [${e.c}/${e.l}] ${e.s}: ${e.m}`)

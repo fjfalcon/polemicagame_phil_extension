@@ -334,9 +334,15 @@ export interface ObsRoomProbeMsg {
   type: "obs_room_probe";
 }
 
+/** Попап спрашивает вкладку её состояние для диагностического снимка. */
+export interface DiagStateMsg {
+  type: "diag_state";
+}
+
 export type ExtMessage =
   | ObsCommandMsg
   | ObsRoomProbeMsg
+  | DiagStateMsg
   | ObsEventMsg
   | UpdateNotesSettingsMsg
   | TwitchControlMsg

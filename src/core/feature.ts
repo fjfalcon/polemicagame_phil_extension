@@ -34,6 +34,11 @@ export class FeatureManager {
   private queue: Promise<void> = Promise.resolve();
   private coalesceTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** Активные фичи — для диагностического снимка (26.08.2026). */
+  activeIds(): string[] {
+    return [...this.active].sort();
+  }
+
   register(...f: Feature[]): this {
     this.features.push(...f);
     return this;

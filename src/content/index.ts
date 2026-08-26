@@ -45,6 +45,7 @@ import { profileCrossoverFeature, profileIdFromPath, syncProfileCrossoverRoute }
 import { profileMmrChartFeature, syncProfileMmrRoute } from "./features/profile-mmr-chart";
 import { obsRecordFeature, syncObsRecordRoute } from "./features/obs-record";
 import { obsClipFeature } from "./features/obs-clip";
+import { contractWatchFeature, syncContractWatchRoute } from "./features/contract-watch";
 import { isGameRoomPath } from "@shared/routes";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
@@ -78,6 +79,7 @@ const manager = new FeatureManager().register(
   profileMmrChartFeature,
   obsRecordFeature,
   obsClipFeature,
+  contractWatchFeature,
 );
 
 function setupUrlRouter(extensionEnabledAtBoot: boolean): void {
@@ -105,6 +107,7 @@ function setupUrlRouter(extensionEnabledAtBoot: boolean): void {
     syncProfileCrossoverRoute(profileIdFromPath(location.pathname));
     syncProfileMmrRoute(profileIdFromPath(location.pathname));
     syncObsRecordRoute(isGameRoomPath(location.pathname));
+    syncContractWatchRoute(isGameRoomPath(location.pathname));
     if (matchId !== lastMatchId) {
       lastMatchId = matchId;
       // Мастер-выключатель: не качаем страницу матча впустую — все
@@ -252,6 +255,10 @@ onMessage((msg) => {
   // от включённых фич — правду о вкладке знает только она (§4.10).
   if ("type" in msg && msg.type === "obs_room_probe") {
     return Promise.resolve({ inRoom: isGameRoomPath(location.pathname) });
+  }
+  // Снимок состояния вкладки для диагностики (попап, экспорт лога).
+  if ("type" in msg && msg.type === "diag_state") {
+    return Promise.resolve({ path: location.pathname, active: manager.activeIds() });
   }
   return undefined;
 });

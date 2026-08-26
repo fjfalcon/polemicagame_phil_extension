@@ -436,6 +436,13 @@ describe("§4.7 lifecycle heuristic", () => {
         "+1 таймер (9.23.1) — шаги лесенки ставят setTimeout трижды при одном clearTimeout-поле verdictTimer, " +
         "каждый прежний таймер снимается перед новым и в disable()",
     },
+    "src/content/features/contract-watch.ts": {
+      listeners: 0,
+      timers: 1,
+      reason:
+        "два setTimeout (роут и enable-в-комнате) пишут ОДИН хендл settleTimer, " +
+        "который гасится общим cancelSettle в disable() и на каждом переходе (9.33.0)",
+    },
     "src/content/features/profile-crossover.ts": {
       listeners: 0,
       timers: 1,
