@@ -18,6 +18,15 @@ export interface Settings {
   statistics_enabled: boolean;
   /** Панель «Мой вечер»: игры сессии с ролью и ±MMR. */
   session_stats_enabled: boolean;
+  /** График «Путь MMR» на своём профиле. */
+  profile_mmr_chart_enabled: boolean;
+  /** Автозапись игр в OBS: вход в комнату — StartRecord, выход — StopRecord. */
+  obs_auto_record_enabled: boolean;
+  /** «Клип момента»: SaveReplayBuffer по клавише/кнопке. */
+  obs_clip_enabled: boolean;
+  obs_clip_hotkey_code: string;
+  /** Длина буфера повторов, минут. */
+  obs_clip_minutes: number;
   match_page_stats_enabled: boolean;
   /** Вид страницы разбора матча: hints | legend | classic. */
   match_stats_view: string;
@@ -158,11 +167,22 @@ export interface ObsConnectionState extends ObsSceneData {
 /** popup → background: команды OBS. */
 export interface ObsCommandMsg {
   type: "obs_command";
-  command: "connect" | "disconnect" | "get_status" | "set_scene" | "get_scenes";
+  command:
+    | "connect"
+    | "disconnect"
+    | "get_status"
+    | "set_scene"
+    | "get_scenes"
+    | "record_start"
+    | "record_stop"
+    | "replay_save"
+    | "replay_setup";
   data?: {
     url?: string;
     password?: string;
     sceneName?: string;
+    /** replay_setup: длина буфера повторов в секундах. */
+    seconds?: number;
     /** true — сцену переключает САМ пользователь (клик в панели): такая
      *  команда всегда проходит и забирает владение автосценой этой вкладке. */
     manual?: boolean;

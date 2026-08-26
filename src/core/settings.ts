@@ -21,6 +21,11 @@ export const DEFAULT_SETTINGS: Settings = {
   show_roles: true,
   statistics_enabled: true,
   session_stats_enabled: false,
+  profile_mmr_chart_enabled: true,
+  obs_auto_record_enabled: false,
+  obs_clip_enabled: false,
+  obs_clip_hotkey_code: "F9",
+  obs_clip_minutes: 1,
   match_page_stats_enabled: true,
   match_stats_view: "hints",
   // "default" теперь БЕЛАЯ (просьба владельца 13.08.2026). Прежний тёмно-синий

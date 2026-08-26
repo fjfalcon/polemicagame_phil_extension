@@ -376,6 +376,9 @@
             <div class="row"><span>Окно «Мой вечер» (игры сессии, ±MMR)</span>
                 <label class="switch"><input type="checkbox" id="session_stats_enabled"><span class="slider"></span></label>
             </div>
+            <div class="row"><span>График «Путь MMR» на своём профиле</span>
+                <label class="switch"><input type="checkbox" id="profile_mmr_chart_enabled" checked><span class="slider"></span></label>
+            </div>
             <div class="row"><span>Показывать MMR</span>
                 <label class="switch"><input type="checkbox" id="show_mmr" checked><span class="slider"></span></label>
             </div>
@@ -486,6 +489,21 @@
                         <select id="obs_night_scene" class="inp"><option value="">Выберите сцену</option></select>
                     </div>
                     <div class="note-box">🎯 Сцены переключаются автоматически при смене времени суток в игре</div>
+                </div>
+                <div class="row" style="margin-top:6px;"><span>Автозапись игр<span class="hint">вход в комнату включает запись в OBS, выход — останавливает. Каждая игра — отдельный файл. Запись, начатую вручную, расширение не трогает</span></span>
+                    <label class="switch"><input type="checkbox" id="obs_auto_record_enabled"><span class="slider"></span></label>
+                </div>
+                <div class="row"><span>Клипы (Replay Buffer)<span class="hint">клавиша сохраняет последние N минут эфира в файл. Буфер повторов должен быть включён в настройках вывода OBS</span></span>
+                    <label class="switch"><input type="checkbox" id="obs_clip_enabled"><span class="slider"></span></label>
+                </div>
+                <div class="row"><span>— Длина клипа</span>
+                    <select id="obs_clip_minutes" class="sel"><option value="1" selected>1 мин</option><option value="2">2 мин</option><option value="3">3 мин</option><option value="5">5 мин</option><option value="10">10 мин</option></select>
+                </div>
+                <div class="row"><span>— Клавиша клипа</span>
+                    <button id="obs_clip_hotkey_code" class="btn-key">F9</button>
+                </div>
+                <div class="btn-row">
+                    <button id="obs_save_clip" class="btn btn-ok">🎬 Сохранить клип</button>
                 </div>
                 <div class="note-box">💡 Плавающая панель работает только на странице игры</div>
             </div>

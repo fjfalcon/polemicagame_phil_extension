@@ -862,6 +862,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let roleHideCode = "KeyD";
   let rolePeekCode = "KeyV";
   let outcryCode = "KeyC";
+  let clipCode = "F9";
   // Свой цвет кнопок: живёт в замыкании, как хоткеи — <input type=color>
   // больше нет, а source of truth для сохранения нужен один.
   let currentButtonColor = "#ffd54f";
@@ -894,6 +895,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Тот же механизм захвата клавиши, что и у ролевых: живёт в замыкании, а не
   // в input.value, иначе чужое изменение откатывалось бы первым же тумблером.
   setupRoleKey("outcry_hotkey_code", () => outcryCode, (c) => (outcryCode = c));
+  setupRoleKey("obs_clip_hotkey_code", () => clipCode, (c) => (clipCode = c));
 
   // ───────────────────────── Загрузка настроек в контролы ─────────────────────────
   /**
@@ -950,12 +952,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (typeof patch.hotkey_role_hide === "string") roleHideCode = patch.hotkey_role_hide;
     if (typeof patch.hotkey_role_peek === "string") rolePeekCode = patch.hotkey_role_peek;
     if (typeof patch.outcry_hotkey_code === "string") outcryCode = patch.outcry_hotkey_code;
+    if (typeof patch.obs_clip_hotkey_code === "string") clipCode = patch.obs_clip_hotkey_code;
     if (
       patch.hotkey_role_fake ||
       patch.hotkey_role_reset ||
       patch.hotkey_role_hide ||
       patch.hotkey_role_peek ||
-      patch.outcry_hotkey_code
+      patch.outcry_hotkey_code ||
+      patch.obs_clip_hotkey_code
     ) {
       roleKeyRenders.forEach((r) => r());
     }
@@ -983,6 +987,7 @@ document.addEventListener("DOMContentLoaded", () => {
     roleHideCode = items.hotkey_role_hide || "KeyD";
     rolePeekCode = items.hotkey_role_peek || "KeyV";
     outcryCode = items.outcry_hotkey_code || "KeyC";
+    clipCode = items.obs_clip_hotkey_code || "F9";
     roleKeyRenders.forEach((r) => r());
     const set = (id: string, val: boolean) => {
       const el = $<HTMLInputElement>(id);
@@ -1074,6 +1079,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (sel) sel.value = readControlPosition(kind, (items as unknown as Record<string, unknown>)[`ctl_pos_${kind}`]);
     }
     set("outcry_hotkey_enabled", items.outcry_hotkey_enabled);
+    set("obs_auto_record_enabled", items.obs_auto_record_enabled);
+    set("obs_clip_enabled", items.obs_clip_enabled);
+    set("profile_mmr_chart_enabled", items.profile_mmr_chart_enabled);
+    const clipMin = $<HTMLSelectElement>("obs_clip_minutes");
+    if (clipMin) clipMin.value = String(items.obs_clip_minutes || 1);
     set("hotkey_hints_enabled", items.hotkey_hints_enabled);
     set("f5_refresh_fix_enabled", items.f5_refresh_fix_enabled);
     set("update_check_enabled", items.update_check_enabled);
@@ -1203,9 +1213,14 @@ document.addEventListener("DOMContentLoaded", () => {
       hotkey_role_peek: rolePeekCode,
       outcry_hotkey_enabled: cb("outcry_hotkey_enabled", false),
       outcry_hotkey_code: outcryCode,
+      obs_auto_record_enabled: cb("obs_auto_record_enabled", false),
+      obs_clip_enabled: cb("obs_clip_enabled", false),
+      obs_clip_hotkey_code: clipCode,
+      obs_clip_minutes: Number($<HTMLSelectElement>("obs_clip_minutes")?.value) || 1,
       hotkey_hints_enabled: cb("hotkey_hints_enabled", true),
       statistics_enabled: cb("statistics_enabled", true),
       session_stats_enabled: cb("session_stats_enabled", false),
+      profile_mmr_chart_enabled: cb("profile_mmr_chart_enabled", true),
       match_page_stats_enabled: cb("match_page_stats_enabled", true),
       match_stats_view: $<HTMLSelectElement>("match_stats_view")?.value || "hints",
       stats_button_theme: ($<HTMLSelectElement>("stats_button_theme")?.value || "default"),
@@ -1283,6 +1298,10 @@ document.addEventListener("DOMContentLoaded", () => {
     "pause_hotkey_enabled",
     "statistics_enabled",
     "session_stats_enabled",
+    "profile_mmr_chart_enabled",
+    "obs_auto_record_enabled",
+    "obs_clip_enabled",
+    "obs_clip_minutes",
     "match_page_stats_enabled",
     "stats_button_theme",
     "match_stats_view",
@@ -1652,6 +1671,26 @@ document.addEventListener("DOMContentLoaded", () => {
     const showFloatingPanel = $<HTMLButtonElement>("show_floating_panel");
     const hideFloatingPanel = $<HTMLButtonElement>("hide_floating_panel");
 
+    // «Сохранить клип» — тот же путь, что у клавиши: replay_save в фон.
+    const saveClipBtn = $<HTMLButtonElement>("obs_save_clip");
+    if (saveClipBtn) {
+      saveClipBtn.addEventListener("click", async () => {
+        const original = saveClipBtn.textContent;
+        saveClipBtn.disabled = true;
+        try {
+          await sendOBSCommand("replay_save");
+          saveClipBtn.textContent = "✓ Клип сохранён";
+        } catch (e) {
+          saveClipBtn.textContent = "✗ " + ((e as Error).message || "не удалось");
+        } finally {
+          setTimeout(() => {
+            saveClipBtn.textContent = original;
+            saveClipBtn.disabled = false;
+          }, 2500);
+        }
+      });
+    }
+
     if (obsEnabled) {
       obsEnabled.addEventListener("change", async (e) => {
         const enabled = (e.target as HTMLInputElement).checked;
@@ -1789,7 +1828,7 @@ document.addEventListener("DOMContentLoaded", () => {
    * Команда OBS в background. Разворачивает ответ { success, data, error }.
    */
   async function sendOBSCommand(
-    command: "connect" | "disconnect" | "get_status" | "set_scene" | "get_scenes",
+    command: "connect" | "disconnect" | "get_status" | "set_scene" | "get_scenes" | "replay_save",
     data: { url?: string; password?: string; sceneName?: string } = {},
   ): Promise<unknown> {
     const response = await sendRuntime<{ success: boolean; data?: unknown; error?: string }>({

@@ -548,6 +548,58 @@ export class ObsClient {
     return true;
   }
 
+  // ── запись и буфер повторов (стримерский пакет 26.08.2026) ──
+
+  /** Идёт ли сейчас запись в OBS. */
+  async isRecording(): Promise<boolean> {
+    const res = await this.request<{ outputActive?: boolean }>("GetRecordStatus");
+    return res?.outputActive === true;
+  }
+
+  async startRecord(): Promise<void> {
+    await this.request("StartRecord");
+  }
+
+  /** Останавливает запись; OBS возвращает путь готового файла (если отдал). */
+  async stopRecord(): Promise<string | null> {
+    const res = await this.request<{ outputPath?: string }>("StopRecord");
+    return typeof res?.outputPath === "string" ? res.outputPath : null;
+  }
+
+  /** Активен ли буфер повторов (Replay Buffer). */
+  async isReplayBufferActive(): Promise<boolean> {
+    const res = await this.request<{ outputActive?: boolean }>("GetReplayBufferStatus");
+    return res?.outputActive === true;
+  }
+
+  async startReplayBuffer(): Promise<void> {
+    await this.request("StartReplayBuffer");
+  }
+
+  async stopReplayBuffer(): Promise<void> {
+    await this.request("StopReplayBuffer");
+  }
+
+  async saveReplayBuffer(): Promise<void> {
+    await this.request("SaveReplayBuffer");
+  }
+
+  async getProfileParameter(category: string, name: string): Promise<string | null> {
+    const res = await this.request<{ parameterValue?: string | null }>("GetProfileParameter", {
+      parameterCategory: category,
+      parameterName: name,
+    });
+    return typeof res?.parameterValue === "string" ? res.parameterValue : null;
+  }
+
+  async setProfileParameter(category: string, name: string, value: string): Promise<void> {
+    await this.request("SetProfileParameter", {
+      parameterCategory: category,
+      parameterName: name,
+      parameterValue: value,
+    });
+  }
+
   private sceneData(): ObsSceneData {
     return { scenes: this.scenes, currentScene: this.currentScene };
   }

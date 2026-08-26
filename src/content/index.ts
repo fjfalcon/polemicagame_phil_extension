@@ -42,6 +42,10 @@ import { controlsSafetyFeature } from "./features/controls-safety";
 import { obsPanelFeature } from "./panels/obs-panel";
 import { sessionStatsFeature } from "./panels/session-stats-panel";
 import { profileCrossoverFeature, profileIdFromPath, syncProfileCrossoverRoute } from "./features/profile-crossover";
+import { profileMmrChartFeature, syncProfileMmrRoute } from "./features/profile-mmr-chart";
+import { obsRecordFeature, syncObsRecordRoute } from "./features/obs-record";
+import { obsClipFeature } from "./features/obs-clip";
+import { isGameRoomPath } from "@shared/routes";
 import { twitchPanelFeature } from "./panels/twitch-panel";
 
 const manager = new FeatureManager().register(
@@ -71,6 +75,9 @@ const manager = new FeatureManager().register(
   twitchPanelFeature,
   sessionStatsFeature,
   profileCrossoverFeature,
+  profileMmrChartFeature,
+  obsRecordFeature,
+  obsClipFeature,
 );
 
 function setupUrlRouter(extensionEnabledAtBoot: boolean): void {
@@ -96,6 +103,8 @@ function setupUrlRouter(extensionEnabledAtBoot: boolean): void {
     syncQueueGuardRoute(onSearch);
     syncConnectionDiagRoute(onSearch);
     syncProfileCrossoverRoute(profileIdFromPath(location.pathname));
+    syncProfileMmrRoute(profileIdFromPath(location.pathname));
+    syncObsRecordRoute(isGameRoomPath(location.pathname));
     if (matchId !== lastMatchId) {
       lastMatchId = matchId;
       // Мастер-выключатель: не качаем страницу матча впустую — все
