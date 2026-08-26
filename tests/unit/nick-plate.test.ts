@@ -217,7 +217,8 @@ describe("гармошка по клику", () => {
     expect(sitePreview).toHaveBeenCalledTimes(1);
   });
 
-  test("выключенная настройка: клики целиком сайтовые", () => {
+  test("модель 26.08.2026: клик по номеру сворачивает и при ВЫКЛЮЧЕННОМ дефолте", () => {
+    // Настройка — только стартовое состояние стола; механика клика всегда.
     table();
     const sitePreview = vi.fn();
     infoAt(0).addEventListener("click", sitePreview);
@@ -226,21 +227,55 @@ describe("гармошка по клику", () => {
       settings: { compact_nicknames_enabled: false } as Settings,
     });
     numberAt(0).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(sitePreview).toHaveBeenCalledTimes(1);
+    expect(sitePreview, "клик по номеру наш, до превью сайта не доходит").not.toHaveBeenCalled();
+    expect(infoAt(0).getAttribute("data-pn-nick"), "исключение к развёрнутому дефолту").toBe(
+      "closed",
+    );
+    // Второй клик возвращает дефолт.
+    numberAt(0).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(infoAt(0).hasAttribute("data-pn-nick")).toBe(false);
+  });
+
+  test("тумблер дефолта СБРАСЫВАЕТ ручные исключения: состояние ставится единым", () => {
+    table();
+    nickPlateFeature.enable(ctx); // дефолт свёрнут
+    numberAt(0).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(infoAt(0).getAttribute("data-pn-nick")).toBe("open");
+    nickPlateFeature.update?.({
+      settings: { compact_nicknames_enabled: false } as Settings,
+    });
+    expect(infoAt(0).hasAttribute("data-pn-nick"), "исключение прошлого дефолта снято").toBe(
+      false,
+    );
+  });
+
+  test("закрытое исключение переживает пересборку плитки (childList-ресинк)", () => {
+    table();
+    nickPlateFeature.enable({
+      settings: { compact_nicknames_enabled: false } as Settings,
+    });
+    numberAt(0).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(infoAt(0).getAttribute("data-pn-nick")).toBe("closed");
+    infoAt(0).removeAttribute("data-pn-nick"); // Vue пересоздал узел
+    domSubscriberRaw?.([{ type: "childList" } as unknown as MutationRecord]);
+    expect(infoAt(0).getAttribute("data-pn-nick"), "тик вернул исключение").toBe("closed");
   });
 });
 
 describe("угол плашки", () => {
   const css = () => styleEl()?.textContent || "";
 
-  test("«как на сайте» не создаёт ни классов, ни стилей — фича бесплатна в дефолте", () => {
+  test("«как на сайте»: классов на <html> нет; стили есть только ради клика", () => {
+    // Модель 26.08.2026: клик-сворачивание всегда доступно, поэтому <style>
+    // (курсор + правила исключений) инжектится и в дефолте — но корневых
+    // классов нет, и внешний вид стола не тронут.
     table();
     nickPlateFeature.enable({
       settings: { compact_nicknames_enabled: false, nick_plate_position: "default" } as Settings,
     });
-    expect(styleEl(), "нечего применять — нечего и инжектить").toBeNull();
     expect(document.documentElement.className).toBe("");
+    expect(styleEl(), "стили клика присутствуют").not.toBeNull();
+    expect(css()).toContain("cursor: pointer");
   });
 
   test.each(["top-left", "top-right", "bottom-right"])(
@@ -311,17 +346,17 @@ describe("угол плашки", () => {
     expect(css()).not.toMatch(/\.pn-nick-pos-bottom-right \.player:not\(:has/);
   });
 
-  test("угол «снизу слева» вообще ничего не добавляет — там вид сайта", () => {
+  test("угол «снизу слева» не вешает позиционных классов — вид сайта", () => {
     table();
     nickPlateFeature.enable(posCtx("default"));
-    expect(styleEl()).toBeNull();
+    // Стили клика есть всегда (модель 26.08), а классов позиции нет.
+    expect(document.documentElement.className).toBe("");
   });
 
   test("мусор в настройке — угол сайта, а не пустой экран", () => {
     table();
     nickPlateFeature.enable(posCtx("нет-такого-угла"));
     expect(document.documentElement.className).toBe("");
-    expect(styleEl()).toBeNull();
   });
 
   test("смена угла на лету: старый класс снимается, новый встаёт", () => {
@@ -332,12 +367,11 @@ describe("угол плашки", () => {
     expect(document.documentElement.classList.contains("pn-nick-pos-bottom-right")).toBe(true);
   });
 
-  test("выключение угла возвращает вид сайта", () => {
+  test("выключение угла возвращает вид сайта (классы сняты)", () => {
     table();
     nickPlateFeature.enable(posCtx("top-right"));
     nickPlateFeature.update?.(posCtx("default"));
     expect(document.documentElement.className).toBe("");
-    expect(styleEl(), "стили без надобности не висят").toBeNull();
   });
 
   test("сворачивание и угол независимы: работают вместе", () => {
@@ -352,20 +386,19 @@ describe("угол плашки", () => {
     expect(document.documentElement.classList.contains("pn-nick-pos-bottom-right")).toBe(true);
   });
 
-  test("выключение сворачивания на лету снимает развороты и перехват", () => {
+  test("выключение дефолта на лету снимает исключения; клик остаётся нашим", () => {
     table();
     nickPlateFeature.enable(ctx);
     numberAt(0).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(infoAt(0).getAttribute("data-pn-nick")).toBe("open");
 
-    const sitePreview = vi.fn();
-    infoAt(0).addEventListener("click", sitePreview);
     nickPlateFeature.update?.({
       settings: { compact_nicknames_enabled: false, nick_plate_position: "default" } as Settings,
     });
-    expect(infoAt(0).hasAttribute("data-pn-nick"), "развороты сняты").toBe(false);
+    expect(infoAt(0).hasAttribute("data-pn-nick"), "исключения сняты").toBe(false);
+    // Модель 26.08: механика клика не выключается вместе с дефолтом.
     numberAt(0).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(sitePreview, "клик снова принадлежит сайту").toHaveBeenCalledTimes(1);
+    expect(infoAt(0).getAttribute("data-pn-nick"), "клик по-прежнему наш").toBe("closed");
   });
 });
 

@@ -28,14 +28,18 @@
  *    Для верхних углов держим отступ вниз: там уже живут меню сайта
  *    (готовность слева, фолы и «…» справа), и лезть под них нельзя.
  *
- * Индивидуальный разворот ника живёт в модульном Set позиций, а в DOM
- * попадает атрибутом `data-pn-nick` — идемпотентно и только при изменении.
- * Vue перерисовкой атрибут снять может, следующий тик вернёт.
+ * МОДЕЛЬ С 26.08.2026 (просьба владельца): клик по номеру сворачивает и
+ * разворачивает ник ВСЕГДА, а настройка «Сворачивать ники» задаёт лишь
+ * ДЕФОЛТ стола (всё свёрнуто / всё развёрнуто). Клики копят ИСКЛЮЧЕНИЯ к
+ * дефолту (Set id), в DOM исключение попадает атрибутом `data-pn-nick`
+ * («open» при свёрнутом дефолте, «closed» при развёрнутом) — идемпотентно
+ * и только при изменении; Vue перерисовкой атрибут снять может, тик вернёт.
+ * Переключение настройки СБРАСЫВАЕТ исключения: тумблер честно ставит
+ * единое состояние, а не «дефолт поверх ручных».
  *
- * Переключение — клик по НОМЕРУ, перехваченный в capture с остановкой
- * всплытия: у плашки висит сайтовый onClick (превью игрока), и без этого
- * каждое сворачивание открывало бы чужое окно. Перехват работает ТОЛЬКО
- * при включённом сворачивании — выключил, и клики снова целиком сайтовые.
+ * Клик перехватывается в capture с остановкой всплытия: у плашки висит
+ * сайтовый onClick (превью игрока). Перехват — только на НОМЕРЕ: клик по
+ * имени/аватару остаётся целиком сайтовым.
  */
 import { onDomChange } from "@core/dom";
 import { OWN, SITE } from "@core/selectors";
@@ -64,8 +68,9 @@ const TOP_OFFSET = "3.25rem";
 /** Отступ сайта от края плитки — повторяем, чтобы углы выглядели родными. */
 const EDGE = "0.625rem";
 
-/** Позиции (id игрока из класса `player-N`), развёрнутые вручную. */
-const opened = new Set<string>();
+/** Исключения к дефолту (id из класса `player-N`): при свёрнутом дефолте —
+ *  развёрнутые вручную, при развёрнутом — свёрнутые вручную. */
+const exceptions = new Set<string>();
 
 let settings: Settings | null = null;
 let unsubscribe: (() => void) | null = null;
@@ -74,8 +79,14 @@ let clickListener: ((e: Event) => void) | null = null;
 let appliedCompact = false;
 let appliedPosition: PlatePosition = "default";
 
-function compactOn(): boolean {
+/** Дефолт стола: true — все свёрнуты (настройка «Сворачивать ники»). */
+function defaultCollapsed(): boolean {
   return settings?.compact_nicknames_enabled === true;
+}
+
+/** Значение атрибута для исключения при текущем дефолте. */
+function exceptionAttr(): "open" | "closed" {
+  return defaultCollapsed() ? "open" : "closed";
 }
 
 /**
@@ -177,8 +188,24 @@ function styleText(): string {
       max-width: 240px !important;
       opacity: 1;
     }
-    /* Номер — ручка гармошки: показываем это курсором. */
-    .${ROOT_CLASS} .player__info ${SITE.playerNumber} { cursor: pointer; }
+    /* Индивидуально свёрнутый ник при РАЗВЁРНУТОМ дефолте: те же правила
+       сворачивания, но по атрибуту-исключению, без корневого класса. */
+    .player__info[${OPEN_ATTR}="closed"] {
+      gap: 0 !important;
+      padding-right: 0.25rem !important;
+      transition: gap .18s ease, padding-right .18s ease;
+    }
+    .player__info[${OPEN_ATTR}="closed"] .info__name,
+    .player__info[${OPEN_ATTR}="closed"] .info__sub,
+    .player__info[${OPEN_ATTR}="closed"] .info__prime {
+      max-width: 0 !important;
+      opacity: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      transition: max-width .18s ease, opacity .14s ease;
+    }
+    /* Номер — ручка гармошки ВСЕГДА (клик работает независимо от дефолта). */
+    .player__info ${SITE.playerNumber} { cursor: pointer; }
 ${PLATE_POSITIONS.map(positionCss).join("")}
   `;
 }
@@ -200,15 +227,16 @@ function syncStyles(needed: boolean): void {
   document.head.appendChild(style);
 }
 
-/** Привести атрибуты плашек к состоянию Set. Идемпотентно (§4 п.1). */
+/** Привести атрибуты плашек к Set исключений. Идемпотентно (§4 п.1). */
 function syncOpenAttrs(): void {
+  const attr = exceptionAttr();
   for (const info of Array.from(document.querySelectorAll<HTMLElement>(SITE.playerInfo))) {
     const numberEl = info.querySelector(SITE.playerNumber);
     const id = numberEl ? playerIdFromNumberEl(numberEl) : null;
-    const shouldOpen = id !== null && opened.has(id);
-    const isOpen = info.getAttribute(OPEN_ATTR) === "open";
-    if (shouldOpen === isOpen) continue;
-    if (shouldOpen) info.setAttribute(OPEN_ATTR, "open");
+    const wanted = id !== null && exceptions.has(id) ? attr : null;
+    const current = info.getAttribute(OPEN_ATTR);
+    if (wanted === current) continue;
+    if (wanted) info.setAttribute(OPEN_ATTR, wanted);
     else info.removeAttribute(OPEN_ATTR);
   }
 }
@@ -233,14 +261,15 @@ function syncRootClasses(compact: boolean, position: PlatePosition): void {
 
 /** Привести всё к текущим настройкам. Идемпотентна, зовётся и из update(). */
 function applyState(): void {
-  const compact = compactOn();
+  const compact = defaultCollapsed();
   const position = readPlatePosition(settings?.nick_plate_position);
-  const needed = compact || position !== "default";
-  syncStyles(needed);
+  // Стили нужны всегда: клик-сворачивание доступно независимо от дефолта.
+  syncStyles(true);
   syncRootClasses(compact, position);
-  if (!compact) {
-    // Свёрнутых больше нет — и разворачивать нечего.
-    opened.clear();
+  if (compact !== appliedCompact) {
+    // Тумблер честно ставит ЕДИНОЕ состояние: ручные исключения прошлого
+    // дефолта в новом теряют смысл (модель 26.08.2026).
+    exceptions.clear();
     clearOpenAttrs();
   } else {
     syncOpenAttrs();
@@ -248,7 +277,14 @@ function applyState(): void {
   if (compact !== appliedCompact || position !== appliedPosition) {
     appliedCompact = compact;
     appliedPosition = position;
-    log.info(SCOPE, "плашка игрока:", compact ? "ник свёрнут" : "ник целиком", "| угол:", position);
+    log.info(
+      SCOPE,
+      "плашка игрока: дефолт",
+      compact ? "свёрнут" : "развёрнут",
+      "(клик по номеру переключает)",
+      "| угол:",
+      position,
+    );
   }
 }
 
@@ -262,20 +298,20 @@ export const nickPlateFeature: Feature = {
   enable(ctx: FeatureContext) {
     settings = ctx.settings;
     clickListener = (e: Event) => {
-      if (!compactOn()) return;
+      // Клик работает ВСЕГДА (модель 26.08.2026): настройка — только дефолт.
       if (!(e.target instanceof Element)) return;
       const hit = resolveToggleTarget(e.target);
       if (!hit) return;
       // Гасим ДО сайта: на плашке висит его собственный onClick (превью
-      // игрока), и без этого каждое сворачивание открывало бы чужое окно.
+      // игрока), и без этого каждое переключение открывало бы чужое окно.
       e.preventDefault();
       e.stopPropagation();
-      if (opened.has(hit.id)) {
-        opened.delete(hit.id);
+      if (exceptions.has(hit.id)) {
+        exceptions.delete(hit.id);
         hit.info.removeAttribute(OPEN_ATTR);
       } else {
-        opened.add(hit.id);
-        hit.info.setAttribute(OPEN_ATTR, "open");
+        exceptions.add(hit.id);
+        hit.info.setAttribute(OPEN_ATTR, exceptionAttr());
       }
     };
     document.addEventListener("click", clickListener, true);
@@ -286,7 +322,7 @@ export const nickPlateFeature: Feature = {
       // class/style), снять атрибут может только пересоздание узла, то есть
       // childList. Атрибутные батчи (таймеры, индикаторы речи) — большинство
       // на игровой странице, и они нам не интересны (ревью 08.08.2026).
-      if (!compactOn() || opened.size === 0) return;
+      if (exceptions.size === 0) return;
       for (const record of records) {
         if (record.type === "childList") {
           syncOpenAttrs();
@@ -309,7 +345,7 @@ export const nickPlateFeature: Feature = {
       document.removeEventListener("click", clickListener, true);
       clickListener = null;
     }
-    opened.clear();
+    exceptions.clear();
     clearOpenAttrs();
     syncRootClasses(false, "default");
     syncStyles(false);
