@@ -20,7 +20,7 @@ vi.mock("@core/log", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { MAX_CONFIRMS, runCoordinatorImport, runImportFallback } from "@popup/import-fallback";
+import { MAX_CONFIRMS, classifyMergeResponse, runCoordinatorImport, runImportFallback } from "@popup/import-fallback";
 import type { NotesMap } from "@core/notes-store";
 
 /** Заметка с меткой времени: свежая побеждает существующую (иначе mergeNotes
@@ -151,5 +151,37 @@ describe("петля согласия координаторного пути", 
     // Мутант «вернуть додиалоговый baseline» заставлял бы фолбэк
     // переспрашивать уже одобренное (adversarial 26.08.2026, №5).
     expect(r).toEqual({ status: "done", applied: undefined, approved: 7 });
+  });
+});
+
+describe("классификация ответа координатора (fail-closed, шестая волна)", () => {
+  test("успех — только строгий ok:true с конечными неотрицательными числами", () => {
+    expect(classifyMergeResponse({ ok: true, added: 0, replaced: 0 })).toBe("success");
+    expect(classifyMergeResponse({ ok: true, added: 3, replaced: 1 })).toBe("success");
+  });
+  test("malformed НЕ уходит ни в успех, ни в прямую запись — отказ", () => {
+    for (const bad of [
+      {},
+      { ok: "true" },
+      { ok: 1 },
+      { ok: true }, // без чисел
+      { ok: true, added: Number.NaN, replaced: 0 },
+      { ok: true, added: -1, replaced: 0 },
+      { ok: false },
+    ]) {
+      expect(classifyMergeResponse(bad as never)).toBe("refused");
+    }
+  });
+  test("фолбэк — только на мёртвый фон; read_failed — свой класс", () => {
+    expect(classifyMergeResponse(undefined)).toBe("dead");
+    expect(classifyMergeResponse({ ok: false, reason: "read_failed" })).toBe("read_failed");
+  });
+  test("consent_exceeded с мусорным replaced не рождает диалог с мусором", async () => {
+    const merge = vi.fn().mockResolvedValue({ ok: false, reason: "consent_exceeded", replaced: Number.NaN });
+    const confirmMore = vi.fn(async () => true);
+    const r = await runCoordinatorImport(0, { merge, confirmMore });
+    expect(confirmMore, "диалога не было").not.toHaveBeenCalled();
+    expect(r.status).toBe("done");
+    expect(classifyMergeResponse((r as { applied?: never }).applied)).toBe("refused");
   });
 });

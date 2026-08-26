@@ -41,7 +41,7 @@ import {
   TAGS_KEY,
   MAX_IMPORT_ENTRIES,
 } from "@core/notes-store";
-import { runCoordinatorImport, runImportFallback } from "./import-fallback";
+import { classifyMergeResponse, runCoordinatorImport, runImportFallback } from "./import-fallback";
 
 /** Сколько игр с метками ролей принимаем из чужого файла (у фичи лимит 50). */
 const MAX_IMPORT_ROLE_GAMES = 50;
@@ -881,30 +881,21 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
         let applied = coord.applied;
-        if (applied?.reason === "read_failed") {
-          // Координатор ОСОЗНАННО отказал (не смог прочитать карту) — писать
-          // напрямую нельзя, это обход защиты «не поверх непрочитанного».
+        // Fail-closed классификация ответа (import-fallback.ts, под тестами):
+        // фолбэк — ТОЛЬКО на мёртвый фон; malformed — отказ, не прямая запись.
+        const verdict = classifyMergeResponse(applied);
+        if (verdict === "read_failed") {
           showPopupToast("Не удалось прочитать текущие заметки — импорт отменён", "error");
           return;
         }
-        let fallbackCounts: { added: number; replaced: number } | null = null;
-        if (applied && applied.ok === false) {
-          // Координатор ЖИВ и честно сказал «запись не удалась» (хранилище).
-          // Прямая запись отсюда обходила бы его очередь и гонялась бы с ней
-          // (ревью 26.08.2026, №2) — а упало бы то же хранилище. Не пишем.
-          showPopupToast("Не удалось сохранить заметки — хранилище отказало", "error");
+        if (verdict === "refused") {
+          showPopupToast("Не удалось сохранить заметки — импорт не применён", "error");
           return;
         }
-        if (!applied || applied.ok !== true) {
-          // Фолбэк на прямую запись — когда координатор не ответил ИЛИ ответил
-          // невнятно ({}, ok:"false" — не строгий true): malformed-ответ
-          // раньше читался как успех без единой записи (ревью 26.08.2026).
-          // Невнятный ответ обнуляем: его числа не должны побеждать честные
-          // цифры фолбэка в тосте (adversarial, №2).
+        let fallbackCounts: { added: number; replaced: number } | null = null;
+        if (verdict === "dead") {
+          // Фолбэк на прямую запись — фон не ответил (спящий воркер).
           applied = undefined;
-          // (спящий воркер, старая вкладка): терять импорт нельзя.
-          // Оркестрация петли перечитываний/согласий — в import-fallback.ts,
-          // под поведенческими тестами.
           const result = await runImportFallback(incoming as NotesMap, coord.approved, {
             loadNotes,
             saveNotes,

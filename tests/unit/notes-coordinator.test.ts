@@ -78,10 +78,14 @@ describe("notes background coordinator", () => {
     expect(state.saves).toBe(1);
   });
 
-  test("без approvedReplaced (старый вызыватель) — прежнее поведение", async () => {
+  test("FAIL-CLOSED: без предела согласия мерж не выполняется (bad_request)", async () => {
+    // Шестая волна 26.08.2026: отсутствующий/битый предел раньше молча
+    // выключал границу согласия — теперь это отказ без записи.
     state.notes = { "u:1": { text: "старая" } };
-    const result = await mergeNotesViaCoordinator({ "u:1": { text: "новая" } });
-    expect(result.ok).toBe(true);
-    expect(state.saves).toBe(1);
+    for (const bad of [undefined, Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      const result = await mergeNotesViaCoordinator({ "u:1": { text: "новая" } }, bad as never);
+      expect(result).toEqual({ ok: false, reason: "bad_request" });
+    }
+    expect(state.saves, "ни одной записи").toBe(0);
   });
 });

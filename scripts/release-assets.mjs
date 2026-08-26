@@ -165,8 +165,18 @@ async function main() {
 
   console.log("\n✓ Файлы релиза:");
   for (const a of assets) console.log("  " + path.relative(root, a));
+  const hasXpi = assets.some((a) => a.endsWith(".xpi"));
+  if (!hasXpi) {
+    // Команду релиза без XPI НЕ печатаем: скопировать её и уехать без
+    // подписи слишком легко (ревью 26.08.2026, хвост №2 шестой волны).
+    console.error(
+      "\n✖ XPI отсутствует — команда релиза не напечатана. Подпиши (amo.env) и повтори.\n",
+    );
+    process.exitCode = 1;
+    return;
+  }
   console.log(
-    `\nДальше:\n  gh release create v${version} ${assets
+    `\nДальше (перед этим: npm run release:check):\n  gh release create v${version} ${assets
       .map((a) => path.relative(root, a))
       .join(" ")} --title "…" -F -\n`,
   );

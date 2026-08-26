@@ -78,6 +78,35 @@ export type CoordinatorImportResult =
  * и malformed) отдаётся вызывающему вместе с итоговым approved — фолбэк
  * стартует с него, а не с додиалогового baseline (№5).
  */
+/**
+ * Строгая классификация ответа координатора (fail-closed, шестая волна):
+ *  • "success" — только ok===true с конечными неотрицательными added/replaced;
+ *  • "dead" — undefined: фон не ответил, единственный случай для фолбэка;
+ *  • "read_failed" — фолбэк запрещён (не пишем поверх непрочитанного);
+ *  • "refused" — всё остальное: явный отказ И malformed ({}, ok:"false",
+ *    ok:true без чисел). Malformed при, возможно, живом координаторе в
+ *    прямую запись НЕ уходит — гонка с его очередью хуже несохранённого
+ *    импорта, который можно повторить.
+ */
+export function classifyMergeResponse(
+  applied: NotesResultMsg | undefined,
+): "success" | "dead" | "read_failed" | "refused" {
+  if (applied === undefined) return "dead";
+  if (applied.reason === "read_failed") return "read_failed";
+  if (
+    applied.ok === true &&
+    typeof applied.added === "number" &&
+    Number.isFinite(applied.added) &&
+    applied.added >= 0 &&
+    typeof applied.replaced === "number" &&
+    Number.isFinite(applied.replaced) &&
+    applied.replaced >= 0
+  ) {
+    return "success";
+  }
+  return "refused";
+}
+
 export async function runCoordinatorImport(
   approvedReplaced: number,
   deps: CoordinatorImportDeps,
@@ -87,12 +116,19 @@ export async function runCoordinatorImport(
   for (;;) {
     const applied = await deps.merge(approved);
     if (applied?.ok === false && applied.reason === "consent_exceeded") {
+      const fresh = applied.replaced;
+      // Жёсткая проверка payload (fail-closed): consent_exceeded без
+      // валидного replaced — malformed, наружу как есть (классификатор
+      // отправит его в refused, не в новый диалог с мусорными числами).
+      if (typeof fresh !== "number" || !Number.isFinite(fresh) || fresh < 0) {
+        return { status: "done", applied, approved };
+      }
       if (confirms >= MAX_CONFIRMS) return { status: "unstable" };
       confirms++;
-      if (!(await deps.confirmMore(applied.replaced ?? 0, approved))) {
+      if (!(await deps.confirmMore(fresh, approved))) {
         return { status: "cancelled" };
       }
-      approved = applied.replaced ?? approved;
+      approved = fresh;
       continue;
     }
     return { status: "done", applied, approved };

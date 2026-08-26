@@ -19,7 +19,13 @@ describe("SSR страницы матча", () => {
     try {
       const res = await fetchWithRetry("https://polemicagame.com/match/314446");
       if (!res.ok) skip(`match page HTTP ${res.status}`);
-      html = await res.text();
+      try {
+        html = await res.text();
+      } catch (error) {
+        // Обрыв посреди тела — транспорт, не дрейф (шестая волна).
+        skip(`site unavailable: обрыв тела (${String(error)})`);
+        return;
+      }
     } catch (error) {
       if (error instanceof TransientNetworkError) skip(`site unavailable: ${error}`);
       throw error;

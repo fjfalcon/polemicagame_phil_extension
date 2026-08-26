@@ -82,13 +82,19 @@ export function mergeNotesViaCoordinator(
     // Граница согласия и на координаторном пути (ревью 26.08.2026): цифры
     // диалога считались по снимку попапа, а карта здесь свежая — замен
     // больше одобренного не пишем, возвращаем свежие числа для нового вопроса.
-    // Валидация с провода: NaN молча выключал бы гейт, отрицательное —
-    // отказывало пустому мержу (adversarial 26.08.2026, №4).
-    const approved =
-      typeof approvedReplaced === "number" && Number.isFinite(approvedReplaced) && approvedReplaced >= 0
-        ? approvedReplaced
-        : undefined;
-    if (approved !== undefined && replaced > approved) {
+    // FAIL-CLOSED (ревью 26.08.2026, шестая волна): предел согласия
+    // ОБЯЗАТЕЛЕН. Отсутствующий/NaN/отрицательный раньше молча выключал
+    // границу согласия — теперь это отказ, а не мерж без предела.
+    // Единственный штатный отправитель notes_merge — попап этой же версии
+    // (MV3 обновляется атомарно), он предел шлёт всегда.
+    if (
+      typeof approvedReplaced !== "number" ||
+      !Number.isFinite(approvedReplaced) ||
+      approvedReplaced < 0
+    ) {
+      return { ok: false, reason: "bad_request" };
+    }
+    if (replaced > approvedReplaced) {
       return { ok: false, reason: "consent_exceeded", added, replaced };
     }
     if (!added && !replaced) return { ok: true, added: 0, replaced: 0 };

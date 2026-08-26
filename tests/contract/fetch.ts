@@ -40,7 +40,17 @@ export async function fetchWithRetry(url: string, attempts = 3): Promise<Respons
 export async function download(url: string): Promise<Download> {
   const response = await fetchWithRetry(url);
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  // Обрыв ПОСРЕДИ чтения тела (ECONNRESET после заголовков) — транспорт,
+  // не дрейф контракта: краснеть должен только содержательный drift
+  // (ревью 26.08.2026, шестая волна). Статусные ошибки выше остаются
+  // красными осознанно: 404 бандла — это и есть сигнал «сайт переехал».
+  let buffer: ArrayBuffer;
+  try {
+    buffer = await response.arrayBuffer();
+  } catch (error) {
+    throw new TransientNetworkError(`${url}: обрыв при чтении тела (${String(error)})`);
+  }
+  const bytes = new Uint8Array(buffer);
   return {
     text: new TextDecoder().decode(bytes),
     sha256: createHash("sha256").update(bytes).digest("hex"),

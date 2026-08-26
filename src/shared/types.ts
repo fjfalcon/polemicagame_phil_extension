@@ -269,7 +269,7 @@ export interface NotesResultMsg {
   ok: boolean;
   /** Почему отказ. read_failed — писать нельзя, фолбэк запрещён;
    *  consent_exceeded — замен больше одобренного, нужен новый вопрос. */
-  reason?: "read_failed" | "consent_exceeded";
+  reason?: "read_failed" | "consent_exceeded" | "bad_request";
   notes?: Record<string, unknown>;
   added?: number;
   replaced?: number;

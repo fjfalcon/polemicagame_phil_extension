@@ -37,8 +37,13 @@ if (target === "chrome-zip") {
   const mf = path.join(root, "dist/firefox/manifest.json");
   if (!fs.existsSync(mf)) fail("dist/firefox/manifest.json отсутствует");
   got = JSON.parse(fs.readFileSync(mf, "utf8")).version;
+} else if (target === "release") {
+  // Финальный preflight перед gh release: ВСЕ артефакты против штампа —
+  // подмена файла между release:assets и ручным gh release create ловится
+  // (ревью 26.08.2026, хвост №2 шестой волны).
+  got = want; // версии сверяются ниже штампом и manifest-проверками таргетов
 } else {
-  fail(`неизвестный таргет «${target}» (chrome-zip | firefox)`);
+  fail(`неизвестный таргет «${target}» (chrome-zip | firefox | release)`);
 }
 
 if (got !== want) fail(`версия артефакта ${got} ≠ package.json ${want} — артефакт устарел`);
@@ -74,6 +79,21 @@ if (target === "chrome-zip") {
   if (sha !== stamp.firefoxTreeSha256) {
     fail("dist/firefox изменился после gated-прогона (build мимо гейта?) — пересобери");
   }
+}
+if (target === "release") {
+  const checks = [
+    ["dist/polemica-chrome.zip", stamp.chromeZipSha256],
+    ["dist/polemica-firefox.zip", stamp.firefoxZipSha256],
+    [`dist/polemica-notes-firefox-${want}.xpi`, stamp.xpiSha256],
+  ];
+  for (const [rel, expected] of checks) {
+    const p = path.join(root, rel);
+    if (!expected) fail(`${rel}: в штампе нет хэша — прогони release:assets (с подписью)`);
+    if (!fs.existsSync(p)) fail(`${rel} отсутствует`);
+    if (fileSha256(p) !== expected) fail(`${rel} изменился после gated-прогона — пересобери`);
+  }
+  const tree = treeSha256(path.join(root, "dist/firefox"));
+  if (tree !== stamp.firefoxTreeSha256) fail("dist/firefox изменился после gated-прогона");
 }
 if (stamp.dirty) console.warn("⚠ verify-dist: артефакт собирался с незакоммиченными правками (штамп dirty).");
 console.log(`✓ verify-dist: ${target} = ${got}, gated-прогон на ${head.slice(0, 7)}`);
