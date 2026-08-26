@@ -42,9 +42,14 @@ import {
   MAX_IMPORT_ENTRIES,
 } from "@core/notes-store";
 import { classifyMergeResponse, runCoordinatorImport, runImportFallback } from "./import-fallback";
+import { sanitizeObsHost } from "@shared/safe-endpoint";
 
 /** Сколько игр с метками ролей принимаем из чужого файла (у фичи лимит 50). */
 const MAX_IMPORT_ROLE_GAMES = 50;
+/** Потолок меток в одной игре: за столом 10–12 человек, не десятки тысяч. */
+const MAX_IMPORT_MARKS_PER_GAME = 40;
+/** Совокупный потолок байт импорта меток — квота общая с заметками (SEC26-6). */
+const MAX_IMPORT_ROLE_BYTES = 100_000;
 
 /** Потолок размера файла бэкапа (наши 200 заметок ≈ 40 КБ). */
 const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
@@ -61,6 +66,12 @@ const OPERATIONAL_KEYS = [
   "twitch_chat_enabled",
   "enable_role_faker",
   "disable_webcam_clicks",
+  // SEC26-8/2 (26.08.2026): авто-действия и сетевые/OBS-операции, которые
+  // чужой бэкап не должен включать без явного согласия.
+  "skip_start_screen_enabled",
+  "obs_auto_record_enabled",
+  "obs_clip_enabled",
+  "ws_full_log_enabled",
 ] as const;
 
 const OPERATIONAL_LABELS: Record<string, string> = {
@@ -74,6 +85,10 @@ const OPERATIONAL_LABELS: Record<string, string> = {
   twitch_chat_enabled: "подключение к чату Twitch",
   enable_role_faker: "подмена роли",
   disable_webcam_clicks: "блокировка кликов по камерам",
+  skip_start_screen_enabled: "автоклик стартового экрана игры",
+  obs_auto_record_enabled: "автозапись игр в OBS",
+  obs_clip_enabled: "клипы OBS (настройка и запуск Replay Buffer)",
+  ws_full_log_enabled: "полный лог общения с сервером (пишет чат и роли на диск)",
 };
 import type { NotesMap } from "@core/notes-store";
 import {
@@ -251,6 +266,20 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("clear_ws_log")?.addEventListener("click", async () => {
     await wsLog.clearAll();
+    // Content-контексты держат СВОЮ копию модуля с буфером/учётом (SEC26-9):
+    // без сброса их следующий flush воскресил бы «очищенные» кадры.
+    try {
+      const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/*" });
+      await Promise.all(
+        tabs
+          .filter((t) => t.id != null)
+          .map((t) =>
+            browser.tabs.sendMessage(t.id as number, { type: "ws_log_reset" }).catch(() => undefined),
+          ),
+      );
+    } catch {
+      /* вкладок нет — чистить больше нечего */
+    }
     showPopupToast("Полный лог очищен");
   });
 
@@ -781,17 +810,26 @@ document.addEventListener("DOMContentLoaded", () => {
               // тысячи ключей в storage.local, квота которого общая с
               // заметками (ревью аудита lifecycle, находка 3).
               let addedGames = 0;
+              // Агрегатные потолки (SEC26-6): пер-ключевые лимиты не мешали
+              // одной «игре» нести десятки тысяч записей и съесть остаток
+              // квоты, общей с заметками.
+              let addedBytes = 0;
               for (const [game, marks] of Object.entries(incomingMarks as Record<string, unknown>)) {
                 if (addedGames >= MAX_IMPORT_ROLE_GAMES) break;
+                if (addedBytes >= MAX_IMPORT_ROLE_BYTES) break;
                 if (typeof game !== "string" || game.length > 200) continue;
                 if (!marks || typeof marks !== "object" || Array.isArray(marks)) continue;
                 if (game in merged) continue;
                 // Значения — только строки-идентификаторы ролей.
                 const clean: Record<string, string> = {};
+                let perGame = 0;
                 for (const [player, role] of Object.entries(marks as Record<string, unknown>)) {
+                  if (perGame >= MAX_IMPORT_MARKS_PER_GAME) break;
                   if (typeof player !== "string" || player.length > 200) continue;
                   if (typeof role !== "string" || role.length > 40) continue;
                   clean[player] = role;
+                  perGame++;
+                  addedBytes += player.length + role.length;
                 }
                 merged[game] = clean;
                 addedGames++;
@@ -1353,7 +1391,10 @@ document.addEventListener("DOMContentLoaded", () => {
         autoHideRolesEnabled && cb("role_phase_auto_switch_enabled", false),
       // OBS
       obs_enabled: cb("obs_enabled", false),
-      obs_host: val("obs_host", "ws://localhost:4455"),
+      // Санитайзер SEC26-1: userinfo/query отрезаются при сохранении —
+      // obs_host синкается в облако и уезжает в бэкап, кредам там не место
+      // (пароль — отдельное local-поле, v5 авторизуется хендшейком).
+      obs_host: sanitizeObsHost(val("obs_host", "ws://localhost:4455")),
       obs_password: val("obs_password", ""),
       obs_floating_panel_enabled: cb("obs_floating_panel_enabled", false),
       obs_auto_mode_enabled: cb("obs_auto_mode_enabled", false),

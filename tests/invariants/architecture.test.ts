@@ -128,7 +128,9 @@ describe("AGENTS §4 storage and data ownership", () => {
     expect(violations, "§4.3: notes belong in storage.local; sync is a frozen read-only bridge").toEqual([]);
 
     const notesStore = read("src/core/notes-store.ts");
-    expect(count(notesStore, /browser\.storage\.sync\.get\s*\(/g)).toBe(1);
+    // 2 чтения (оба read-only): migrateFromSync (координатор, с записью в
+    // local) и migratedView (вид в памяти для не-координаторов, SEC26-5).
+    expect(count(notesStore, /browser\.storage\.sync\.get\s*\(/g)).toBe(2);
     expect(count(notesStore, /browser\.storage\.local\.set\s*\(/g)).toBeGreaterThanOrEqual(3);
   });
 

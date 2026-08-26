@@ -13,6 +13,7 @@
  */
 import { browser } from "./env";
 import { log } from "./log";
+import { sendRuntime } from "./messaging";
 
 export type NoteRecord = {
   text: string;
@@ -437,7 +438,15 @@ export function canonicalNoteKey(key: string): string {
   return `${ID_KEY_PREFIX}${norm}`;
 }
 
-/** Разовый перенос заметок из storage.sync. Ошибка не выставляет флаг — повторим позже. */
+/**
+ * Разовый перенос заметок из storage.sync. Ошибка не выставляет флаг — повторим позже.
+ *
+ * ЗАПИСЬ МИГРАЦИИ — ТОЛЬКО ИЗ КООРДИНАТОРА (SEC26-5): раньше её мог начать
+ * любой контекст из loadNotes(), и снапшот L0, взятый до ожидания sync.get,
+ * затирал целую карту поверх параллельной правки координатора. Контенты и
+ * попап получают ОБЪЕДИНЁННЫЙ ВИД В ПАМЯТИ (без записи) и просят фон
+ * выполнить перенос сериализованно.
+ */
 async function migrateFromSync(
   localNotes: NotesMap,
   localTags: string[],
@@ -498,7 +507,10 @@ async function migrateFromSync(
 }
 
 /** Прочитать заметки и палитру меток (с разовым переносом из sync). */
-export async function loadNotes(): Promise<{
+export async function loadNotes(opts?: {
+  /** Разрешить ЗАПИСЬ миграции sync→local. Только координатор (SEC26-5). */
+  persistMigration?: boolean;
+}): Promise<{
   notes: NotesMap;
   customTags: string[];
   /** true = чтение упало и notes ПУСТАЯ НЕ ПОТОМУ, что заметок нет. Писать поверх НЕЛЬЗЯ. */
@@ -514,7 +526,13 @@ export async function loadNotes(): Promise<{
     const notes = (local[NOTES_KEY] as NotesMap) || {};
     const customTags = Array.isArray(local[TAGS_KEY]) ? (local[TAGS_KEY] as string[]) : [];
 
-    if (!local[MIGRATED_KEY]) return await migrateFromSync(notes, customTags);
+    if (!local[MIGRATED_KEY]) {
+      if (opts?.persistMigration) return await migrateFromSync(notes, customTags);
+      // Вид в памяти + просьба фону мигрировать (SEC26-5). Отказ доставки
+      // не страшен: следующий loadNotes попросит снова.
+      requestMigration();
+      return await migratedView(notes, customTags);
+    }
     return { notes, customTags };
   } catch (e) {
     log.error("notes", "load failed", e);
@@ -522,6 +540,43 @@ export async function loadNotes(): Promise<{
     // поверх непрочитанного диска = потеря всех заметок.
     return { notes: {}, customTags: [], loadFailed: true };
   }
+}
+
+/** Объединённый ВИД (local + sync-мост) без единой записи — для не-координаторов. */
+async function migratedView(
+  localNotes: NotesMap,
+  localTags: string[],
+): Promise<{ notes: NotesMap; customTags: string[] }> {
+  try {
+    const sync = (await browser.storage.sync.get({
+      [NOTES_KEY]: {},
+      [LEGACY_KEY]: {},
+      [TAGS_KEY]: [],
+    })) as Record<string, unknown>;
+    const fromSync = (sync[NOTES_KEY] as NotesMap) || {};
+    const fromLegacy = (sync[LEGACY_KEY] as NotesMap) || {};
+    const syncTags = Array.isArray(sync[TAGS_KEY])
+      ? (sync[TAGS_KEY] as unknown[]).filter(isSafeTag)
+      : [];
+    if (!Object.keys(fromSync).length && !Object.keys(fromLegacy).length) {
+      return { notes: localNotes, customTags: [...new Set([...localTags, ...syncTags])] };
+    }
+    const bridge = mergeNotes(fromLegacy, fromSync).merged;
+    const merged = mergeNotes(localNotes, bridge, { onlyNew: true }).merged;
+    return { notes: merged, customTags: [...new Set([...localTags, ...syncTags])] };
+  } catch {
+    return { notes: localNotes, customTags: localTags };
+  }
+}
+
+let migrationRequested = false;
+function requestMigration(): void {
+  if (migrationRequested) return;
+  migrationRequested = true;
+  // Динамический импорт не нужен: messaging лёгкий и без циклов.
+  void sendRuntime({ type: "notes_migrate" }).catch(() => {
+    migrationRequested = false; // фон спит — попросим при следующем load
+  });
 }
 
 /** Записать заметки. Возвращает false при ошибке — вызывающий обязан сказать об этом пользователю. */

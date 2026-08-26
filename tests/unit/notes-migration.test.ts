@@ -8,11 +8,16 @@ vi.mock("@core/env", () => ({
     },
   },
 }));
+vi.mock("@core/messaging", () => ({
+  sendRuntime: vi.fn(async () => ({ ok: true })),
+  onMessage: vi.fn(() => () => undefined),
+}));
 vi.mock("@core/log", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 import { browser } from "@core/env";
+import { sendRuntime } from "@core/messaging";
 import { loadNotes, type NotesMap } from "@core/notes-store";
 
 const local = browser.storage.local as unknown as { get: Mock; set: Mock };
@@ -46,7 +51,7 @@ describe("разовый перенос заметок из storage.sync", () =>
       { Alice: { text: "заметка 2025", timestamp: 1_750_000_000_000, nickColor: "#111" } },
       { Alice: { text: "заметка 2021", timestamp: 1_600_000_000_000 } },
     );
-    return loadNotes().then(({ notes }) => {
+    return loadNotes({ persistMigration: true }).then(({ notes }) => {
       expect(notes.Alice).toEqual({
         text: "заметка 2025",
         timestamp: 1_750_000_000_000,
@@ -65,7 +70,7 @@ describe("разовый перенос заметок из storage.sync", () =>
         Bob: { text: "которой тут нет", timestamp: 1_700_000_000_000 },
       },
     );
-    const { notes } = await loadNotes();
+    const { notes } = await loadNotes({ persistMigration: true });
     expect(notes["u:7"]).toEqual({ text: "", timestamp: 1_780_000_000_000, nick: "Alice" });
     expect(notes.Bob).toEqual({ text: "которой тут нет", timestamp: 1_700_000_000_000 });
   });
@@ -77,9 +82,26 @@ describe("разовый перенос заметок из storage.sync", () =>
       { "u:7": { text: "живая", timestamp: 5, nick: 123 as never } },
       { Bob: { text: "из облака", timestamp: 7 } },
     );
-    const { notes } = await loadNotes();
+    const { notes } = await loadNotes({ persistMigration: true });
     expect(notes.Bob).toEqual({ text: "из облака", timestamp: 7 });
     const written = local.set.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(written[MIGRATED_KEY], "флаг миграции обязан быть выставлен").toBe(true);
+  });
+});
+
+describe("SEC26-5: запись миграции — только координатор", () => {
+  test("обычный load: объединённый ВИД без единой записи + просьба фону", async () => {
+    givenStorage(
+      { Alice: { text: "локальная", timestamp: 9 } },
+      { Bob: { text: "из облака", timestamp: 7 } },
+    );
+    const { notes } = await loadNotes(); // БЕЗ persistMigration
+    // Вид объединён: пользователь видит облачную заметку сразу.
+    expect(notes.Bob).toEqual({ text: "из облака", timestamp: 7 });
+    expect(notes.Alice).toEqual({ text: "локальная", timestamp: 9 });
+    // Но НИ ОДНОЙ записи из этого контекста: снапшот-RMW и была гонка.
+    expect(local.set, "запись миграции не из координатора запрещена").not.toHaveBeenCalled();
+    // Фон попрошен выполнить перенос сериализованно.
+    expect(sendRuntime).toHaveBeenCalledWith({ type: "notes_migrate" });
   });
 });

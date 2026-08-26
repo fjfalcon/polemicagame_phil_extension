@@ -15,6 +15,11 @@ vi.mock("@core/env", () => {
   const data = new Map<string, unknown>();
   return {
     browser: {
+      runtime: {
+        id: "test",
+        onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
+        sendMessage: vi.fn(async () => undefined),
+      },
       storage: {
         local: {
           data,
@@ -324,8 +329,11 @@ describe("уборка за собой (жалоба 10.08.2026)", () => {
     storage.data.set(`${WS_LOG_PREFIX}a:0`, chunk(now - 3000, 100));
     storage.data.set(`${WS_LOG_PREFIX}b:0`, chunk(now - 2000, 100));
     storage.data.set(`${WS_LOG_PREFIX}c:0`, chunk(now - 1000, 100));
-    const kept = await sweepStorage(150);
-    expect(kept, "оставляем в пределах бюджета").toBeLessThanOrEqual(150);
+    // Бюджет — в СЕРИАЛИЗОВАННЫХ символах (SEC26-3): метрика учёта и уборки
+    // одна, размер куска считаем той же функцией, что и код.
+    const oneChunk = JSON.stringify(storage.data.get(`${WS_LOG_PREFIX}c:0`)).length;
+    const kept = await sweepStorage(oneChunk + 10);
+    expect(kept, "оставляем в пределах бюджета").toBeLessThanOrEqual(oneChunk + 10);
     // Свежие дороже старых: остаться должен последний.
     expect([...storage.data.keys()]).toContain(`${WS_LOG_PREFIX}c:0`);
     expect([...storage.data.keys()]).not.toContain(`${WS_LOG_PREFIX}a:0`);

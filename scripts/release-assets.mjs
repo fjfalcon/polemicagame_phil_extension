@@ -176,7 +176,7 @@ async function main() {
     return;
   }
   console.log(
-    `\nДальше (перед этим: npm run release:check):\n  gh release create v${version} ${assets
+    `\nДальше (release:check встроен в команду — REL26-2):\n  npm run release:check && gh release create v${version} ${assets
       .map((a) => path.relative(root, a))
       .join(" ")} --title "…" -F -\n`,
   );

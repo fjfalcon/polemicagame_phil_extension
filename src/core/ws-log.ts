@@ -164,6 +164,10 @@ export function droppedCount(): number {
  * свои 2М поверх (PERF26-4, механизм 1).
  */
 export async function startSession(): Promise<void> {
+  // Быстрое перевключение: не стартуем, пока прошлая сессия закрывается —
+  // иначе кадры нового включения писались бы под СТАРЫМ поколением и
+  // выбрасывались его закрытием (SEC26-4, гонка disable→enable).
+  if (closing) await closing;
   foreignChars = await sweepStorage(Math.floor(MAX_TOTAL_CHARS / 2));
 }
 
@@ -189,6 +193,7 @@ export function flushNow(): Promise<void> {
   if (pending.length === 0) return flushChain;
   const frames = pending;
   const chars = pendingChars;
+  void chars; // учёт ниже — по сериализованному размеру (SEC26-3)
   pending = [];
   pendingChars = 0;
   // Записи — строго по очереди: иначе учёт занятого места отставал бы от
@@ -208,13 +213,21 @@ export function flushNow(): Promise<void> {
   // а файл собирает ПОПАП (другой контекст; adversarial 26.08.2026, №3).
   const dropped = droppedByBackpressure - reportedDrops;
   reportedDrops = droppedByBackpressure;
-  chainBacklogChars += chars;
+  // Учёт — по СЕРИАЛИЗОВАННОМУ размеру (SEC26-3): голые тела кадров занижали
+  // фактический storage в ~5 раз (timestamp/direction/JSON-обвязка каждого
+  // кадра), и «потолок 2М» подбирался к квоте вплотную.
+  const payload =
+    dropped > 0
+      ? { at: Date.now(), frames, dropped }
+      : { at: Date.now(), frames };
+  const serialized = JSON.stringify(payload).length;
+  chainBacklogChars += serialized;
   flushChain = flushChain.then(
-    () => writeChunk(frames, chars, gen, dropped),
-    () => writeChunk(frames, chars, gen, dropped),
+    () => writeChunk(payload, serialized, gen),
+    () => writeChunk(payload, serialized, gen),
   );
   flushChain = flushChain.finally(() => {
-    if (gen === generation) chainBacklogChars -= chars;
+    if (gen === generation) chainBacklogChars -= serialized;
   });
   return flushChain;
 }
@@ -222,17 +235,14 @@ export function flushNow(): Promise<void> {
 let flushChain: Promise<void> = Promise.resolve();
 
 async function writeChunk(
-  frames: WsFrame[],
+  payload: { at: number; frames: WsFrame[]; dropped?: number },
   chars: number,
   gen: number,
-  dropped = 0,
 ): Promise<void> {
   // Сессию записи выключили, пока кусок стоял в очереди, — прошлой жизни
   // на диске и в учёте делать нечего.
   if (gen !== generation) return;
   const key = `${WS_LOG_PREFIX}${SESSION_ID}:${gen}-${seq++}`;
-  const payload =
-    dropped > 0 ? { at: Date.now(), frames, dropped } : { at: Date.now(), frames };
   try {
     await browser.storage.local.set({ [key]: payload });
   } catch (e) {
@@ -286,13 +296,23 @@ async function writeChunk(
  * и gen-гейт выбрасывал последнюю партию — а маршрут пользователя ровно
  * «поймал момент → выключил → скачал». Ждём цепочку, потом закрываем.
  */
+let closing: Promise<void> | null = null;
+
 export async function finishSession(): Promise<void> {
+  const run = (async () => {
+    try {
+      await flushNow();
+    } catch {
+      /* хвост не записался — хуже уже не сделаем */
+    }
+    resetBuffer();
+  })();
+  closing = run;
   try {
-    await flushNow();
-  } catch {
-    /* хвост не записался — хуже уже не сделаем */
+    await run;
+  } finally {
+    if (closing === run) closing = null;
   }
-  resetBuffer();
 }
 
 /** Забыть накопленное в памяти (при выключении настройки). */
@@ -322,11 +342,13 @@ interface StoredChunk {
   dropped?: number;
 }
 
-/** Размер куска в символах — по тем же телам кадров, что мы и считали. */
+/** Размер куска — СЕРИАЛИЗОВАННЫЙ, той же метрикой, что и учёт (SEC26-3). */
 function chunkChars(chunk: StoredChunk): number {
-  let n = 0;
-  for (const f of chunk.frames ?? []) n += typeof f?.m === "string" ? f.m.length : 0;
-  return n;
+  try {
+    return JSON.stringify(chunk)?.length ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -348,7 +370,10 @@ export async function sweepStorage(budget = MAX_TOTAL_CHARS): Promise<number> {
     const now = Date.now();
     const mine: Array<{ key: string; at: number; chars: number }> = [];
     const doomed: string[] = [];
-    const ownPrefix = `${WS_LOG_PREFIX}${SESSION_ID}:`;
+    // Только АКТИВНОЕ поколение — «свои» (SEC26-4): закрытые поколения этой
+    // же вкладки после перевключения настройки никем не учитывались и не
+    // убирались — копились до отказа квоты.
+    const ownPrefix = `${WS_LOG_PREFIX}${SESSION_ID}:${generation}-`;
     for (const [key, value] of Object.entries(all)) {
       if (!key.startsWith(WS_LOG_PREFIX)) continue;
       // Свою сессию не считаем и не удаляем: её ведёт учёт chunks/storedChars,

@@ -14,7 +14,8 @@
  * разбора; медиа и ключи сессии не попадают в файл никогда (см. core/ws-log).
  */
 import { log } from "@core/log";
-import { finishSession, flushNow, record, size, startSession } from "@core/ws-log";
+import { onMessage } from "@core/messaging";
+import { finishSession, flushNow, record, resetBuffer, size, startSession } from "@core/ws-log";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const SCOPE = "ws-log";
@@ -25,6 +26,7 @@ export const LOG_CMD_SOURCE = "pn-ws-log-cmd";
 export const PROBE_SOURCE = "pn-room-probe";
 
 let listener: ((e: MessageEvent) => void) | null = null;
+let unsubReset: (() => void) | null = null;
 let onHide: (() => void) | null = null;
 /** Сколько кадров отброшено как чужие (медиа) — видно в логе при выключении. */
 let skipped = 0;
@@ -63,6 +65,11 @@ export const wsLogFeature: Feature = {
     void startSession();
     listener = (e: MessageEvent) => onProbeMessage(e);
     window.addEventListener("message", listener);
+    // «Очистить» в попапе стирает диск — наша копия модуля обязана забыть
+    // буфер и учёт, иначе следующий flush воскресит очищенное (SEC26-9).
+    unsubReset = onMessage((msg) => {
+      if ((msg as { type?: string })?.type === "ws_log_reset") resetBuffer();
+    });
     commandProbe(true);
     // Сброс на уходе со страницы: F5 посреди игры не должен стирать
     // собранное — ровно ради этого кадры вообще уезжают в storage.
@@ -72,6 +79,8 @@ export const wsLogFeature: Feature = {
   },
 
   disable() {
+    unsubReset?.();
+    unsubReset = null;
     commandProbe(false);
     if (listener) {
       window.removeEventListener("message", listener);

@@ -9,7 +9,8 @@ import { installErrorCapture } from "@core/errors";
 import { handleInstalled } from "./onboarding";
 import { onMessage, sendToTab } from "@core/messaging";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
-import { applyNoteOps, mergeNotesViaCoordinator } from "./notes-coordinator";
+import { applyNoteOps, mergeNotesViaCoordinator, migrateViaCoordinator } from "./notes-coordinator";
+import { sanitizeObsHost } from "@shared/safe-endpoint";
 import {
   OBS_RETRY_BLOCKED_KEY,
   OBS_RETRY_BLOCK_REASON_KEY,
@@ -540,6 +541,9 @@ onMessage((msg: ExtMessage, sender) => {
   if ("type" in msg && msg.type === "notes_apply_ops") {
     return applyNoteOps(msg.ops);
   }
+  if ("type" in msg && msg.type === "notes_migrate") {
+    return migrateViaCoordinator().then(() => ({ ok: true }));
+  }
   if ("type" in msg && msg.type === "notes_merge") {
     return mergeNotesViaCoordinator(msg.incoming, msg.approvedReplaced);
   }
@@ -762,6 +766,16 @@ async function runUpgradeMigrations(): Promise<void> {
         await browser.storage.sync.set({ twitch_floating_panel_enabled: true });
       }
       await browser.storage.local.set({ pn_twitch_panel_restored_v1: true });
+    }
+    // SEC26-1: уже засинканный obs_host мог нести креды/токен в URL —
+    // разово нормализуем (дальше их не пропускает санитайзер попапа).
+    const hostBag = (await browser.storage.sync.get("obs_host")) as { obs_host?: string };
+    if (typeof hostBag.obs_host === "string") {
+      const clean = sanitizeObsHost(hostBag.obs_host);
+      if (clean !== hostBag.obs_host) {
+        await browser.storage.sync.set({ obs_host: clean });
+        log.info("background", "obs_host нормализован: креды/query удалены из sync");
+      }
     }
     await browser.storage.sync.remove([
       "obs_password",

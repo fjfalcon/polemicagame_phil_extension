@@ -43,7 +43,7 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
   return enqueue(async () => {
     if (!Array.isArray(ops) || ops.length === 0) return { ok: true };
-    const { notes, loadFailed } = await loadNotes();
+    const { notes, loadFailed } = await loadNotes({ persistMigration: true }); // координатор — единственный писатель миграции
     if (loadFailed) {
       // Пустая карта после сбоя чтения — не «заметок нет»: писать нельзя.
       // reason отличает ОСОЗНАННЫЙ отказ от «координатор не ответил»:
@@ -71,12 +71,19 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
 }
 
 /** Слить карту (импорт бэкапа) — тот же контракт очереди. */
+/** Разовая миграция sync→local — сериализованно, единственный писатель (SEC26-5). */
+export function migrateViaCoordinator(): Promise<void> {
+  return enqueue(async () => {
+    await loadNotes({ persistMigration: true });
+  });
+}
+
 export function mergeNotesViaCoordinator(
   incoming: Record<string, unknown>,
   approvedReplaced?: number,
 ): Promise<NotesResultMsg> {
   return enqueue(async () => {
-    const { notes, loadFailed } = await loadNotes();
+    const { notes, loadFailed } = await loadNotes({ persistMigration: true }); // координатор — единственный писатель миграции
     if (loadFailed) return { ok: false, reason: "read_failed" };
     const { merged, added, replaced } = mergeNotes(notes, incoming as NotesMap);
     // Граница согласия и на координаторном пути (ревью 26.08.2026): цифры

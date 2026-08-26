@@ -338,6 +338,17 @@ export interface ObsRoomProbeMsg {
   type: "obs_room_probe";
 }
 
+/** Контент/попап просят фон выполнить разовую миграцию заметок sync→local
+ *  (SEC26-5: запись миграции — только сериализованный координатор). */
+export interface NotesMigrateMsg {
+  type: "notes_migrate";
+}
+
+/** Попап очистил полный лог: контент-контексты сбрасывают свой буфер/учёт. */
+export interface WsLogResetMsg {
+  type: "ws_log_reset";
+}
+
 /** Попап спрашивает вкладку её состояние для диагностического снимка. */
 export interface DiagStateMsg {
   type: "diag_state";
@@ -347,6 +358,8 @@ export type ExtMessage =
   | ObsCommandMsg
   | ObsRoomProbeMsg
   | DiagStateMsg
+  | NotesMigrateMsg
+  | WsLogResetMsg
   | ObsEventMsg
   | UpdateNotesSettingsMsg
   | TwitchControlMsg
