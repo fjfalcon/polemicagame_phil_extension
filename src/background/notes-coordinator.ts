@@ -73,11 +73,18 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
 /** Слить карту (импорт бэкапа) — тот же контракт очереди. */
 export function mergeNotesViaCoordinator(
   incoming: Record<string, unknown>,
+  approvedReplaced?: number,
 ): Promise<NotesResultMsg> {
   return enqueue(async () => {
     const { notes, loadFailed } = await loadNotes();
     if (loadFailed) return { ok: false, reason: "read_failed" };
     const { merged, added, replaced } = mergeNotes(notes, incoming as NotesMap);
+    // Граница согласия и на координаторном пути (ревью 26.08.2026): цифры
+    // диалога считались по снимку попапа, а карта здесь свежая — замен
+    // больше одобренного не пишем, возвращаем свежие числа для нового вопроса.
+    if (typeof approvedReplaced === "number" && replaced > approvedReplaced) {
+      return { ok: false, reason: "consent_exceeded", added, replaced };
+    }
     if (!added && !replaced) return { ok: true, added: 0, replaced: 0 };
     const ok = await saveNotes(merged);
     return ok

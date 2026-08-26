@@ -259,13 +259,17 @@ export interface NotesApplyOpsMsg {
 export interface NotesMergeMsg {
   type: "notes_merge";
   incoming: Record<string, unknown>;
+  /** Предел замен, одобренный пользователем в диалоге; больше — координатор
+   *  обязан отказать consent_exceeded, а не писать (ревью 26.08.2026). */
+  approvedReplaced?: number;
 }
 
 /** Ответ координатора: ok=false — писать НЕ удалось (UI обязан сказать). */
 export interface NotesResultMsg {
   ok: boolean;
-  /** Почему отказ. read_failed — писать нельзя, фолбэк запрещён. */
-  reason?: "read_failed";
+  /** Почему отказ. read_failed — писать нельзя, фолбэк запрещён;
+   *  consent_exceeded — замен больше одобренного, нужен новый вопрос. */
+  reason?: "read_failed" | "consent_exceeded";
   notes?: Record<string, unknown>;
   added?: number;
   replaced?: number;

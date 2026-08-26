@@ -853,10 +853,42 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
         }
-        const applied = await sendRuntime<NotesResultMsg>({
-          type: "notes_merge",
-          incoming: incoming as Record<string, unknown>,
-        });
+        // Петля согласия на КООРДИНАТОРНОМ пути (ревью 26.08.2026): цифры
+        // диалога — по снимку попапа, а мерж у координатора свежий. Предел
+        // передаётся в запросе; consent_exceeded — новый вопрос со свежими
+        // числами; растёт быстрее двух согласий — отмена, как в фолбэке.
+        let approvedCoord = replaced;
+        let coordConfirms = 0;
+        let applied: NotesResultMsg | undefined;
+        for (;;) {
+          applied = await sendRuntime<NotesResultMsg>({
+            type: "notes_merge",
+            incoming: incoming as Record<string, unknown>,
+            approvedReplaced: approvedCoord,
+          });
+          if (applied?.ok === false && applied.reason === "consent_exceeded") {
+            if (coordConfirms >= 2) {
+              showPopupToast(
+                "Заметки прямо сейчас активно меняются — импорт отменён, повторите позже",
+                "error",
+              );
+              return;
+            }
+            coordConfirms++;
+            const okFresh = await popupConfirm(
+              `Пока вы подтверждали, заметки менялись: импорт теперь изменит ` +
+                `${applied.replaced ?? 0} существующих (было ${approvedCoord}).\n\nПродолжить?`,
+              "Импортировать",
+            );
+            if (!okFresh) {
+              showPopupToast("Импорт отменён");
+              return;
+            }
+            approvedCoord = applied.replaced ?? approvedCoord;
+            continue;
+          }
+          break;
+        }
         if (applied?.reason === "read_failed") {
           // Координатор ОСОЗНАННО отказал (не смог прочитать карту) — писать
           // напрямую нельзя, это обход защиты «не поверх непрочитанного».
@@ -871,8 +903,10 @@ document.addEventListener("DOMContentLoaded", () => {
           showPopupToast("Не удалось сохранить заметки — хранилище отказало", "error");
           return;
         }
-        if (!applied) {
-          // Фолбэк на прямую запись — ТОЛЬКО когда координатор не ответил
+        if (!applied || applied.ok !== true) {
+          // Фолбэк на прямую запись — когда координатор не ответил ИЛИ ответил
+          // невнятно ({}, ok:"false" — не строгий true): malformed-ответ
+          // раньше читался как успех без единой записи (ревью 26.08.2026).
           // (спящий воркер, старая вкладка): терять импорт нельзя.
           // Оркестрация петли перечитываний/согласий — в import-fallback.ts,
           // под поведенческими тестами.

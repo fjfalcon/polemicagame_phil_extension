@@ -64,13 +64,13 @@ async function zipTarget(target, outName) {
 }
 
 async function main() {
+  // Штамп прошлого прогона снимается ПЕРВЫМ ДЕЛОМ — до readVersion: падение
+  // на дрейфе версий/длине description тоже не должно оставлять валидный
+  // штамп над старыми артефактами (ревью 26.08.2026, хвост №1 пятой волны).
+  await fs.rm(path.join(dist, ".gate-stamp.json"), { force: true });
+
   const version = await readVersion();
   console.log(`\n▶ Сборка релиза ${version}\n`);
-
-  // Штамп прошлого прогона снимается ДО гейта: если этот прогон упадёт,
-  // старые артефакты останутся БЕЗ штампа — publish/sign честно откажут
-  // (ревью 26.08.2026, хвост №2).
-  await fs.rm(path.join(dist, ".gate-stamp.json"), { force: true });
 
   // Полный ОФЛАЙН-гейт (26.08.2026, ревью доказуемости контура): релизные
   // артефакты НЕ собираются, пока красное хоть что-то из: production
@@ -125,6 +125,7 @@ async function main() {
         dirty,
         builtAt: new Date().toISOString(),
         chromeZipSha256: fileSha256(path.join(dist, "polemica-chrome.zip")),
+        firefoxZipSha256: fileSha256(path.join(dist, "polemica-firefox.zip")),
         firefoxTreeSha256: treeSha256(path.join(dist, "firefox")),
       },
       null,
@@ -153,6 +154,12 @@ async function main() {
     // Имя от web-ext — со служебным хешем; для релиза даём человеческое.
     const target = path.join(dist, `polemica-notes-firefox-${version}.xpi`);
     await fs.copyFile(path.join(signedDir, xpi), target);
+    // Дозапись хэша подписанного XPI в штамп: подпись идёт ПОСЛЕ записи
+    // штампа, а след полного набора артефактов должен быть в одном месте.
+    const stampPath = path.join(dist, ".gate-stamp.json");
+    const stamp = JSON.parse(await fs.readFile(stampPath, "utf8"));
+    stamp.xpiSha256 = fileSha256(target);
+    await fs.writeFile(stampPath, JSON.stringify(stamp, null, 2));
     assets.push(target);
   }
 

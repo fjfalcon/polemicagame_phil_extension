@@ -541,7 +541,7 @@ onMessage((msg: ExtMessage, sender) => {
     return applyNoteOps(msg.ops);
   }
   if ("type" in msg && msg.type === "notes_merge") {
-    return mergeNotesViaCoordinator(msg.incoming);
+    return mergeNotesViaCoordinator(msg.incoming, msg.approvedReplaced);
   }
   // Возвращаем ПРОМИС операции, а не void: иначе service worker может уснуть
   // раньше, чем будильник реально создан/снят.
