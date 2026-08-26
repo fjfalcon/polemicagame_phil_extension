@@ -14,10 +14,19 @@ export function fileSha256(p) {
 }
 
 /** Дайджест дерева: отсортированные относительные пути + содержимое. */
+/**
+ * Служебные файлы web-ext, которые ПОДПИСЬ кладёт внутрь dist/firefox
+ * (.amo-upload-uuid — живой прогон 26.08.2026; .web-extension-id — при
+ * отсутствии gecko.id). Это метаданные подписи, не продукт: без исключения
+ * каждый sign инвалидировал бы штамп собственного gated-прогона.
+ */
+const WEB_EXT_METADATA = new Set([".amo-upload-uuid", ".web-extension-id"]);
+
 export function treeSha256(dir) {
   const files = [];
   const walk = (d) => {
     for (const name of fs.readdirSync(d).sort()) {
+      if (d === dir && WEB_EXT_METADATA.has(name)) continue;
       const p = path.join(d, name);
       // lstat, не stat: симлинк в артефакте — сам по себе повод отказать
       // (битый давал ENOENT-стектрейс, цикл — вечную рекурсию, а цель вне
