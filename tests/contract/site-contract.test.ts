@@ -73,7 +73,7 @@ describe("live Polemica bundle contracts", () => {
 
     const changed: string[] = [];
     for (const [key, result] of Object.entries(downloads) as Array<[BundleKey, Download]>) {
-      const previous = siteFixture.bundles[key].sha256;
+      const previous = (siteFixture.bundles[key] as { sha256?: string }).sha256;
       if (previous !== result.sha256) {
         changed.push(`${key}: ${previous} -> ${result.sha256} (${result.bytes} bytes)`);
       }
@@ -187,7 +187,7 @@ describe("live Polemica bundle contracts", () => {
     if (UPDATE_FIXTURES && changed.length) {
       const next = structuredClone(siteFixture) as typeof siteFixture;
       for (const key of Object.keys(next.bundles) as BundleKey[]) {
-        next.bundles[key].sha256 = downloads[key].sha256;
+        (next.bundles[key] as { sha256?: string }).sha256 = downloads[key].sha256;
       }
       fs.writeFileSync(
         path.join(ROOT, "tests/fixtures/site-contract.json"),

@@ -22,14 +22,8 @@ interface ConnSettings {
  * — логин, пароль и query оттуда в файл поддержки уезжать не должны (аудит
  * наблюдаемости 02.08.2026, LOG-3).
  */
-export function safeEndpoint(url: string): string {
-  try {
-    const u = new URL(url);
-    return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ""}`;
-  } catch {
-    return "(некорректный адрес)";
-  }
-}
+import { safeEndpoint } from "@shared/safe-endpoint";
+export { safeEndpoint };
 
 /**
  * Категория неудачной попытки подключения — вместо сырого `Error.message`.

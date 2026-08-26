@@ -96,7 +96,10 @@ describe("вложенные формы HTTP API", () => {
     const games = body as Array<{ players?: Array<Record<string, unknown>> }>;
     if (games.length === 0) skip("нет активных игр — состав players не проверить");
     const withPlayers = games.find((g) => Array.isArray(g.players) && g.players.length > 0);
-    if (!withPlayers) skip("в активных играх нет игроков — состав не проверить");
+    if (!withPlayers) {
+      skip("в активных играх нет игроков — состав не проверить");
+      return;
+    }
     const p = (withPlayers.players as Array<Record<string, unknown>>)[0];
     expect(p, "players[0] несёт id и username").toMatchObject({
       id: expect.anything(),

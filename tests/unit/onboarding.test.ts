@@ -82,13 +82,13 @@ describe("handleInstalled: проводка диспетчера", () => {
   test("обновление без закрепления: вкладка открывается ФОНОВОЙ — фокус у стримера в эфире красть нельзя", async () => {
     tabs().mockClear();
     storage().mockResolvedValueOnce({ onboarding_shown: false });
-    (browser.action as Record<string, unknown>).getUserSettings = vi.fn(async () => ({
+    (browser.action as unknown as Record<string, unknown>).getUserSettings = vi.fn(async () => ({
       isOnToolbar: false,
     }));
     await handleInstalled({ reason: "update" });
     expect(tabs()).toHaveBeenCalledTimes(1);
     expect(tabs().mock.calls[0][0]).toMatchObject({ active: false });
-    delete (browser.action as Record<string, unknown>).getUserSettings;
+    delete (browser.action as unknown as Record<string, unknown>).getUserSettings;
   });
 
   test("обновление на старом браузере (нет getUserSettings) — тишина", async () => {

@@ -101,10 +101,10 @@ describe("честные отказы вместо поломки страниц
     // Смысл мягкого шага именно в бескровности: дожать отложенные подписки,
     // не трогая соединения, — у остальных игроков картинка не мигает.
     const { proxy } = workingProxy();
-    (proxy.mediaRoom as { updateStreams?: () => void }).updateStreams = vi.fn();
+    (proxy.mediaRoom as unknown as { updateStreams?: () => void }).updateStreams = vi.fn();
     appWithProxy(proxy);
     expect(refreshStreams(document)).toBeNull();
-    expect((proxy.mediaRoom as { updateStreams: () => void }).updateStreams).toHaveBeenCalled();
+    expect((proxy.mediaRoom as unknown as { updateStreams: () => void }).updateStreams).toHaveBeenCalled();
     expect(proxy.mediaRoom.disconnect).not.toHaveBeenCalled();
     expect(proxy.createMediaRoom).not.toHaveBeenCalled();
   });

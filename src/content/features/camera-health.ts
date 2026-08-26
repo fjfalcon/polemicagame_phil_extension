@@ -75,9 +75,18 @@ export function isDeadTrack(track: TrackLike | undefined): boolean {
   return deadCause(track) !== null;
 }
 
-/** Ник с плитки — для журнала: «оборвалось у кого-то» бесполезно в разборе. */
-export function tileNick(tile: HTMLElement): string {
-  return tile.querySelector(SITE.playerName)?.textContent?.trim() || "?";
+/**
+ * Метка плитки для журнала — НОМЕР места, не ник: ники игроков в файл лога
+ * не пишутся (решение владельца 02.08.2026; нарушение жило здесь с рождения
+ * camera-health и поймано только внешним ревью 26.08.2026). Номер места в
+ * разборе не хуже: «оборвалось у плитки 5» сопоставимо со стримом.
+ */
+export function tileLabel(tile: HTMLElement): string {
+  let i = Array.from(document.querySelectorAll<HTMLElement>(SITE.playerDesktop)).indexOf(tile);
+  // Фолбэк на голый .player: наблюдаемые camera-health плитки не обязаны
+  // совпадать со строгим селектором стола (мобильная разметка, зритель).
+  if (i < 0) i = Array.from(document.querySelectorAll<HTMLElement>(".player")).indexOf(tile);
+  return i >= 0 ? `плитка ${i + 1}` : "плитка ?";
 }
 
 /**
@@ -224,7 +233,7 @@ class CameraHealth {
         existing.remove();
         // Снятие тоже в журнал: пара «оборвалось → ожило» и есть картина
         // инцидента; без второй половины лог читается как вечный обрыв.
-        log.info(SCOPE, `видео ожило: «${tileNick(tile)}»`);
+        log.info(SCOPE, `видео ожило: «${tileLabel(tile)}»`);
       }
       return;
     }
@@ -247,7 +256,7 @@ class CameraHealth {
       '<path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>' +
       '<line x1="12" y1="20" x2="12" y2="20"/></svg>';
     wrapper.appendChild(badge);
-    log.info(SCOPE, `видео оборвалось: «${tileNick(tile)}» (${cause})`);
+    log.info(SCOPE, `видео оборвалось: «${tileLabel(tile)}» (${cause})`);
   }
 
   private removeOverlays(): void {
@@ -367,10 +376,10 @@ class CameraHealth {
   }
 
   /** Ники плиток с меткой обрыва — картина «до» и «после» для журнала. */
-  private deadNicks(): string[] {
+  private deadLabels(): string[] {
     return Array.from(document.querySelectorAll<HTMLElement>(`.${OVERLAY_CLASS}`)).map((badge) => {
       const tile = badge.closest<HTMLElement>(SITE.player);
-      return tile ? tileNick(tile) : "?";
+      return tile ? tileLabel(tile) : "?";
     });
   }
 
@@ -408,7 +417,7 @@ class CameraHealth {
     this.reconnecting = true;
     this.syncButton();
     // Картина «до» — без неё по журналу не понять, что именно чинили.
-    log.info(SCOPE, `кнопка камер: мёртвых плиток ${this.deadNicks().length} [${this.deadNicks().join(", ")}]`);
+    log.info(SCOPE, `кнопка камер: мёртвых плиток ${this.deadLabels().length} [${this.deadLabels().join(", ")}]`);
     showToast("Обновляю видео…");
     // ЛЕСЕНКА. Сначала мягкий шаг: updateStreams() дожимает отложенные
     // подписки и не рвёт ничего — у остальных даже не мигнёт. Жёсткое
@@ -450,7 +459,7 @@ class CameraHealth {
       // не нужен вовсе, и ни у кого ничего не мигнуло.
       this.verdictTimer = setTimeout(() => {
         this.verdictTimer = null;
-        const still = this.deadNicks();
+        const still = this.deadLabels();
         if (still.length === 0) {
           this.reconnecting = false;
           this.stage = null;
@@ -475,7 +484,7 @@ class CameraHealth {
       this.reconnecting = false;
       this.stage = null;
       this.syncButton();
-      const still = this.deadNicks();
+      const still = this.deadLabels();
       // Итог — в журнал и сразу на диск: это и есть доказательство «работает /
       // не работает» для разбора без повторной игры.
       log.info(

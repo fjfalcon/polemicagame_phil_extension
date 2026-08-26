@@ -53,7 +53,7 @@ describe("пробы зелёные на реальных фрагментах �
  * свою пробу. Проба, переживающая свою мутацию, — вакуумная.
  */
 describe("каждая проба умирает от своего дрифта", () => {
-  const cases: Array<[string, Record<string, (t: string) => { ok: boolean }>, string, string, (t: string) => string]> = [
+  const cases: Array<[string, Parameters<typeof runProbes>[0], string, string, (t: string) => string]> = [
     // game-search
     ["acceptCursorBinding: инверсия байндинга", gameSearchProbes, "acceptCursorBinding", GS,
       (t) => t.replace('"cursor-pointer":!', '"cursor-pointer":')],

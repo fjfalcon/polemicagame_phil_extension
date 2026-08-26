@@ -80,7 +80,7 @@ describe("сеть", () => {
     const spy = vi.fn(async () => ({ ok: true, json: async () => ({ queues: { standard: { players: 1 } } }) }));
     vi.stubGlobal("fetch", spy);
     await fetchQueueState();
-    expect(String(spy.mock.calls[0][0])).toBe("https://game.polemicagame.com/api/search");
+    expect(String((spy.mock.calls[0] as unknown[])[0])).toBe("https://game.polemicagame.com/api/search");
     vi.unstubAllGlobals();
   });
 });

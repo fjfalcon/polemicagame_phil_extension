@@ -66,8 +66,32 @@ async function main() {
   const version = await readVersion();
   console.log(`\n▶ Сборка релиза ${version}\n`);
 
+  // Полный гейт (26.08.2026, ревью доказуемости контура): релизные артефакты
+  // НЕ собираются, пока красное хоть что-то из: production typecheck,
+  // typecheck тестов, вся vitest-сюита. Дисциплина «гоняю руками» больше не
+  // единственная преграда.
   run("npm", ["run", "typecheck"]);
+  run("npx", ["tsc", "-p", "tests/tsconfig.json", "--noEmit"]);
+  run("npm", ["test"]);
   run("npm", ["run", "build"]);
+  // web-ext lint — после сборки (линтует dist). Warnings не блокируют
+  // (32 известных про innerHTML), errors — блокируют (ненулевой exit).
+  run("npm", ["run", "lint:ext:chrome"]);
+  run("npm", ["run", "lint:ext:firefox"]);
+
+  // Мягкий след adversarial-контура: леджер волн должен упоминать текущую
+  // версию. Предупреждение, НЕ блок — механический запрет превратил бы
+  // дисциплину в церемонию (решение 26.08.2026).
+  try {
+    const ledger = await fs.readFile(path.join(root, "docs/review-ledger.md"), "utf8");
+    if (!ledger.includes(version)) {
+      console.warn(
+        `\n⚠ docs/review-ledger.md не упоминает ${version} — adversarial-волна по этому релизу не записана (или не проводилась).\n`,
+      );
+    }
+  } catch {
+    console.warn("\n⚠ docs/review-ledger.md отсутствует — леджер волн не ведётся.\n");
+  }
 
   const assets = [
     await zipTarget("chrome", "polemica-chrome.zip"),

@@ -11,6 +11,7 @@
  */
 import type { Settings } from "@shared/types";
 import { NOTES_KEY } from "./notes-store";
+import { safeEndpoint } from "@shared/safe-endpoint";
 
 /** Настройки для снимка: секреты маскируются, остальное — как есть. */
 export function formatSettings(settings: Settings): string[] {
@@ -18,6 +19,9 @@ export function formatSettings(settings: Settings): string[] {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => {
       if (key === "obs_password") return `${key}: ${value ? "<задан>" : "<пуст>"}`;
+      // В адресе OBS бывают логин/пароль/токены — в снимок только хост
+      // (то же правило safeEndpoint, что в логе OBS; ревью 26.08.2026).
+      if (key === "obs_host") return `${key}: ${safeEndpoint(String(value ?? ""))}`;
       return `${key}: ${JSON.stringify(value)}`;
     });
 }

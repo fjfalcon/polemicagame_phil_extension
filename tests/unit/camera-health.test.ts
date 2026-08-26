@@ -48,7 +48,7 @@ import {
   isDeadTrack,
   isFrozen,
   ownSpeechInProgress,
-  tileNick,
+  tileLabel,
 } from "@content/features/camera-health";
 import { log } from "@core/log";
 import type { Settings } from "@shared/types";
@@ -153,9 +153,10 @@ describe("метка обрыва", () => {
     expect(overlay()).not.toBeNull();
   });
 
-  test("журнал различает «оборвалось» и «ожило» и называет ника", () => {
+  test("журнал различает «оборвалось» и «ожило» и называет ПЛИТКУ (не ника)", () => {
     // Логи и есть доказательство «работает/нет» при живой проверке: пара
-    // «оборвалось → ожило» с ником читается без второй игры.
+    // «оборвалось → ожило» с номером плитки читается без второй игры.
+    // Ник в персистящийся лог не пишется (решение 02.08.2026).
     const video = room();
     document.querySelector("#p0")!.insertAdjacentHTML(
       "beforeend",
@@ -166,13 +167,18 @@ describe("метка обрыва", () => {
     cameraHealthFeature.enable(ctx());
     tickOnce();
     const infoCalls = (log.info as ReturnType<typeof vi.fn>).mock.calls.map((c) => c.join(" "));
-    expect(infoCalls.some((c) => c.includes("Petya") && c.includes("muted"))).toBe(true);
+    expect(infoCalls.some((c) => c.includes("плитка") && c.includes("muted"))).toBe(true);
+    expect(infoCalls.some((c) => c.includes("Petya")), "ник не утёк в журнал").toBe(false);
 
     track.muted = false;
     tickOnce();
     const after = (log.info as ReturnType<typeof vi.fn>).mock.calls.map((c) => c.join(" "));
-    expect(after.some((c) => c.includes("ожило") && c.includes("Petya"))).toBe(true);
-    expect(tileNick(document.querySelector("#p0") as HTMLElement)).toBe("Petya");
+    expect(after.some((c) => c.includes("ожило") && c.includes("плитка"))).toBe(true);
+    // Номер места, НЕ ник: ники в персистящийся лог не пишутся (решение
+    // владельца 02.08.2026; ревью 26.08.2026).
+    const label = tileLabel(document.querySelector("#p0") as HTMLElement);
+    expect(label).toMatch(/^плитка \d+$/);
+    expect(label).not.toContain("Petya");
   });
 
   test("метка идемпотентна: второй проход не плодит вторую", () => {

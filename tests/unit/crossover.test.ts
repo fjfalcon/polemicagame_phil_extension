@@ -211,7 +211,10 @@ describe("загрузка истории страницами", () => {
     `${new Date(Date.UTC(2026, 11, 31) - n * 86_400_000).toISOString().slice(0, 10)} 10:00:00`;
 
   /** Сервер с заданным числом игр: страница отдаёт PAGE_SIZE, даты убывают. */
-  function serve(total: number): ReturnType<typeof vi.fn> {
+  type ServedFetch = ((url: string) => Promise<{ ok: boolean; status?: number; json?: () => Promise<unknown> }>) & {
+    mock: { calls: unknown[][] };
+  };
+  function serve(total: number): ServedFetch {
     return vi.fn(async (url: string) => {
       const page = Number(new URL(url).searchParams.get("page") ?? 1);
       const size = Number(new URL(url).searchParams.get("limit") ?? PAGE_SIZE);
@@ -227,7 +230,7 @@ describe("загрузка истории страницами", () => {
         };
       });
       return { ok: true, json: async () => ({ rows, totalCount: total }) };
-    });
+    }) as unknown as ServedFetch;
   }
 
   test("забирает ВСЮ историю, а не первую страницу", async () => {
