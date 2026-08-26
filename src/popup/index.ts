@@ -41,7 +41,7 @@ import {
   TAGS_KEY,
   MAX_IMPORT_ENTRIES,
 } from "@core/notes-store";
-import { runImportFallback } from "./import-fallback";
+import { runCoordinatorImport, runImportFallback } from "./import-fallback";
 
 /** Сколько игр с метками ролей принимаем из чужого файла (у фичи лимит 50). */
 const MAX_IMPORT_ROLE_GAMES = 50;
@@ -853,42 +853,34 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
         }
-        // Петля согласия на КООРДИНАТОРНОМ пути (ревью 26.08.2026): цифры
-        // диалога — по снимку попапа, а мерж у координатора свежий. Предел
-        // передаётся в запросе; consent_exceeded — новый вопрос со свежими
-        // числами; растёт быстрее двух согласий — отмена, как в фолбэке.
-        let approvedCoord = replaced;
-        let coordConfirms = 0;
-        let applied: NotesResultMsg | undefined;
-        for (;;) {
-          applied = await sendRuntime<NotesResultMsg>({
-            type: "notes_merge",
-            incoming: incoming as Record<string, unknown>,
-            approvedReplaced: approvedCoord,
-          });
-          if (applied?.ok === false && applied.reason === "consent_exceeded") {
-            if (coordConfirms >= 2) {
-              showPopupToast(
-                "Заметки прямо сейчас активно меняются — импорт отменён, повторите позже",
-                "error",
-              );
-              return;
-            }
-            coordConfirms++;
-            const okFresh = await popupConfirm(
+        // Петля согласия координаторного пути — в import-fallback.ts, под
+        // тестами и с общим MAX_CONFIRMS (adversarial 26.08.2026, №1).
+        const coord = await runCoordinatorImport(replaced, {
+          merge: (approvedReplaced) =>
+            sendRuntime<NotesResultMsg>({
+              type: "notes_merge",
+              incoming: incoming as Record<string, unknown>,
+              approvedReplaced,
+            }),
+          confirmMore: (fresh, approved) =>
+            popupConfirm(
               `Пока вы подтверждали, заметки менялись: импорт теперь изменит ` +
-                `${applied.replaced ?? 0} существующих (было ${approvedCoord}).\n\nПродолжить?`,
+                `${fresh} существующих (было ${approved}).\n\nПродолжить?`,
               "Импортировать",
-            );
-            if (!okFresh) {
-              showPopupToast("Импорт отменён");
-              return;
-            }
-            approvedCoord = applied.replaced ?? approvedCoord;
-            continue;
-          }
-          break;
+            ),
+        });
+        if (coord.status === "cancelled") {
+          showPopupToast("Импорт отменён");
+          return;
         }
+        if (coord.status === "unstable") {
+          showPopupToast(
+            "Заметки прямо сейчас активно меняются — импорт отменён, повторите позже",
+            "error",
+          );
+          return;
+        }
+        let applied = coord.applied;
         if (applied?.reason === "read_failed") {
           // Координатор ОСОЗНАННО отказал (не смог прочитать карту) — писать
           // напрямую нельзя, это обход защиты «не поверх непрочитанного».
@@ -907,10 +899,13 @@ document.addEventListener("DOMContentLoaded", () => {
           // Фолбэк на прямую запись — когда координатор не ответил ИЛИ ответил
           // невнятно ({}, ok:"false" — не строгий true): malformed-ответ
           // раньше читался как успех без единой записи (ревью 26.08.2026).
+          // Невнятный ответ обнуляем: его числа не должны побеждать честные
+          // цифры фолбэка в тосте (adversarial, №2).
+          applied = undefined;
           // (спящий воркер, старая вкладка): терять импорт нельзя.
           // Оркестрация петли перечитываний/согласий — в import-fallback.ts,
           // под поведенческими тестами.
-          const result = await runImportFallback(incoming as NotesMap, replaced, {
+          const result = await runImportFallback(incoming as NotesMap, coord.approved, {
             loadNotes,
             saveNotes,
             confirmMore: (fresh, approved) =>

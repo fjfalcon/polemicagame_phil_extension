@@ -20,7 +20,7 @@ vi.mock("@core/log", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { MAX_CONFIRMS, runImportFallback } from "@popup/import-fallback";
+import { MAX_CONFIRMS, runCoordinatorImport, runImportFallback } from "@popup/import-fallback";
 import type { NotesMap } from "@core/notes-store";
 
 /** Заметка с меткой времени: свежая побеждает существующую (иначе mergeNotes
@@ -108,5 +108,48 @@ describe("петля фолбэка импорта", () => {
     const { d } = deps([{}], { saveNotes: vi.fn(async () => false) });
     const r = await runImportFallback(incoming, 0, d);
     expect(r).toEqual({ status: "save_failed" });
+  });
+});
+
+describe("петля согласия координаторного пути", () => {
+  const exceeded = (replaced: number) =>
+    ({ ok: false, reason: "consent_exceeded", replaced }) as const;
+
+  test("consent_exceeded → согласие → ретрай с НОВЫМ пределом", async () => {
+    const merge = vi
+      .fn()
+      .mockResolvedValueOnce(exceeded(5))
+      .mockResolvedValueOnce({ ok: true, added: 1, replaced: 5 });
+    const r = await runCoordinatorImport(0, { merge, confirmMore: vi.fn(async () => true) });
+    expect(merge).toHaveBeenNthCalledWith(1, 0);
+    expect(merge).toHaveBeenNthCalledWith(2, 5);
+    expect(r).toMatchObject({ status: "done", approved: 5 });
+  });
+
+  test("отказ пользователя — cancelled, повторного merge нет", async () => {
+    const merge = vi.fn().mockResolvedValue(exceeded(5));
+    const r = await runCoordinatorImport(0, { merge, confirmMore: vi.fn(async () => false) });
+    expect(r).toEqual({ status: "cancelled" });
+    expect(merge).toHaveBeenCalledTimes(1);
+  });
+
+  test("рост быстрее MAX_CONFIRMS согласий — unstable", async () => {
+    let n = 0;
+    const merge = vi.fn(async () => exceeded(++n * 10));
+    const confirmMore = vi.fn(async () => true);
+    const r = await runCoordinatorImport(0, { merge, confirmMore });
+    expect(r).toEqual({ status: "unstable" });
+    expect(confirmMore).toHaveBeenCalledTimes(MAX_CONFIRMS);
+  });
+
+  test("фон молчит/невнятен — done с итоговым approved (фолбэку нужен ИМЕННО он)", async () => {
+    const merge = vi
+      .fn()
+      .mockResolvedValueOnce(exceeded(7))
+      .mockResolvedValueOnce(undefined);
+    const r = await runCoordinatorImport(0, { merge, confirmMore: vi.fn(async () => true) });
+    // Мутант «вернуть додиалоговый baseline» заставлял бы фолбэк
+    // переспрашивать уже одобренное (adversarial 26.08.2026, №5).
+    expect(r).toEqual({ status: "done", applied: undefined, approved: 7 });
   });
 });

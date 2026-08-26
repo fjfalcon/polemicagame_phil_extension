@@ -82,7 +82,13 @@ export function mergeNotesViaCoordinator(
     // Граница согласия и на координаторном пути (ревью 26.08.2026): цифры
     // диалога считались по снимку попапа, а карта здесь свежая — замен
     // больше одобренного не пишем, возвращаем свежие числа для нового вопроса.
-    if (typeof approvedReplaced === "number" && replaced > approvedReplaced) {
+    // Валидация с провода: NaN молча выключал бы гейт, отрицательное —
+    // отказывало пустому мержу (adversarial 26.08.2026, №4).
+    const approved =
+      typeof approvedReplaced === "number" && Number.isFinite(approvedReplaced) && approvedReplaced >= 0
+        ? approvedReplaced
+        : undefined;
+    if (approved !== undefined && replaced > approved) {
       return { ok: false, reason: "consent_exceeded", added, replaced };
     }
     if (!added && !replaced) return { ok: true, added: 0, replaced: 0 };
