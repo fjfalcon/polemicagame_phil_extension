@@ -54,8 +54,56 @@ export abstract class FloatingPanel {
     document.body.appendChild(this.root);
     this.restoreBox();
     this.renderBody(this.body);
+    this.watchViewport();
     this.mounted = true;
     log.debug("panel", "mounted", this.opts.storageKey);
+  }
+
+  /**
+   * Окно уменьшилось (свернули браузер, сменили разрешение под запись) —
+   * панель обязана остаться на экране. Кламп НЕ сохраняем: вернувшись на
+   * большой монитор, пользователь получит свою прежнюю коробку, а не
+   * подрезанную временным окном.
+   */
+  private watchViewport(): void {
+    let frame: number | null = null;
+    const onResize = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        this.clampToViewport();
+      });
+    };
+    window.addEventListener("resize", onResize);
+    this.cleanup.push(() => {
+      window.removeEventListener("resize", onResize);
+      if (frame !== null) cancelAnimationFrame(frame);
+    });
+  }
+
+  private clampToViewport(): void {
+    if (!this.root.isConnected) return;
+    const vw = window.innerWidth || 1280;
+    const vh = window.innerHeight || 720;
+    const r = this.root.getBoundingClientRect();
+    const width = Math.min(Math.max(this.opts.minWidth, r.width), vw);
+    const height = Math.min(Math.max(this.opts.minHeight, r.height), vh);
+    const left = Math.min(Math.max(0, r.left), Math.max(0, vw - width));
+    // Заголовок обязан остаться в пределах экрана: за него панель и таскают.
+    const top = Math.min(Math.max(0, r.top), Math.max(0, vh - 32));
+    const next = {
+      width: `${Math.round(width)}px`,
+      height: `${Math.round(height)}px`,
+      left: `${Math.round(left)}px`,
+      top: `${Math.round(top)}px`,
+    };
+    // Пишем только изменившееся: общий наблюдатель следит за style, и
+    // безусловная запись порождала бы мутацию на каждый resize (§4).
+    for (const [k, v] of Object.entries(next) as Array<[keyof typeof next, string]>) {
+      if (this.root.style[k] !== v) this.root.style[k] = v;
+    }
+    if (this.root.style.right !== "auto") this.root.style.right = "auto";
+    if (this.root.style.bottom !== "auto") this.root.style.bottom = "auto";
   }
 
   unmount(): void {
@@ -137,7 +185,15 @@ export abstract class FloatingPanel {
 
     root.append(header, body);
 
-    if (this.opts.resizable) root.appendChild(this.buildResizeHandle(root));
+    if (this.opts.resizable) {
+      // Три ручки вместо одного невидимого угла 14×14: правый край тянет
+      // ширину, нижний — высоту, угол — обе (жалоба владельца 27.08.2026
+      // «менять размеры нормально»). Попасть в угол мышью на панели 250px
+      // было отдельным упражнением, а край менял обе стороны разом.
+      root.appendChild(this.buildResizeHandle(root, "e"));
+      root.appendChild(this.buildResizeHandle(root, "s"));
+      root.appendChild(this.buildResizeHandle(root, "se"));
+    }
 
     this.root = root;
     this.header = header;
@@ -256,17 +312,43 @@ export abstract class FloatingPanel {
   }
 
   // ───────────────────────── resize ─────────────────────────
-  private buildResizeHandle(root: HTMLElement): HTMLElement {
+  private buildResizeHandle(root: HTMLElement, dir: "e" | "s" | "se"): HTMLElement {
     const h = document.createElement("div");
-    h.className = "fp-resize";
-    Object.assign(h.style, {
-      position: "absolute",
-      right: "0",
-      bottom: "0",
-      width: "14px",
-      height: "14px",
-      cursor: "nwse-resize",
-    } as CSSStyleDeclaration);
+    h.className = `fp-resize fp-resize-${dir}`;
+    const common = { position: "absolute", zIndex: "4", touchAction: "none" };
+    if (dir === "e") {
+      Object.assign(h.style, {
+        ...common,
+        right: "0",
+        top: "0",
+        bottom: "16px",
+        width: "6px",
+        cursor: "ew-resize",
+      } as CSSStyleDeclaration);
+    } else if (dir === "s") {
+      Object.assign(h.style, {
+        ...common,
+        left: "0",
+        right: "16px",
+        bottom: "0",
+        height: "6px",
+        cursor: "ns-resize",
+      } as CSSStyleDeclaration);
+    } else {
+      Object.assign(h.style, {
+        ...common,
+        right: "0",
+        bottom: "0",
+        width: "16px",
+        height: "16px",
+        cursor: "nwse-resize",
+        // Видимая насечка: невидимую ручку искали наугад.
+        background:
+          "linear-gradient(135deg, transparent 0 45%, rgba(255,255,255,.28) 45% 55%," +
+          " transparent 55% 70%, rgba(255,255,255,.28) 70% 80%, transparent 80%)",
+        borderBottomRightRadius: "10px",
+      } as CSSStyleDeclaration);
+    }
 
     let startX = 0;
     let startY = 0;
@@ -279,10 +361,23 @@ export abstract class FloatingPanel {
     const applySize = () => {
       frameId = null;
       if (pointerId === null || !root.isConnected) return;
-      const width = `${Math.max(this.opts.minWidth, baseW + (latestX - startX))}px`;
-      const height = `${Math.max(this.opts.minHeight, baseH + (latestY - startY))}px`;
-      if (root.style.width !== width) root.style.width = width;
-      if (root.style.height !== height) root.style.height = height;
+      // Потолок — вьюпорт: панель, растянутая мимо экрана, уносит свой же
+      // угол с ручкой за край, и уменьшить её обратно уже нечем.
+      const vw = window.innerWidth || 1280;
+      const vh = window.innerHeight || 720;
+      const r = root.getBoundingClientRect();
+      const maxW = Math.max(this.opts.minWidth, vw - r.left);
+      const maxH = Math.max(this.opts.minHeight, vh - r.top);
+      if (dir !== "s") {
+        const w = Math.min(maxW, Math.max(this.opts.minWidth, baseW + (latestX - startX)));
+        const width = `${Math.round(w)}px`;
+        if (root.style.width !== width) root.style.width = width;
+      }
+      if (dir !== "e") {
+        const hh = Math.min(maxH, Math.max(this.opts.minHeight, baseH + (latestY - startY)));
+        const height = `${Math.round(hh)}px`;
+        if (root.style.height !== height) root.style.height = height;
+      }
     };
     const detach = () => {
       window.removeEventListener("pointermove", onMove);

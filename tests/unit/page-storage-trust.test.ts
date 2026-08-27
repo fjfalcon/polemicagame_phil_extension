@@ -49,6 +49,7 @@ vi.mock("../../src/content/match-data", () => ({ getMatchId: vi.fn() }));
 import { FloatingPanel } from "@core/FloatingPanel";
 import { parseFlippedPlayers } from "@content/features/player-notes";
 import { loadPrefs } from "@content/panels/twitch-panel";
+import { loadPrefs as loadSessionPrefs } from "@content/panels/session-stats-panel";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const readSource = (rel: string) => fs.readFileSync(path.join(ROOT, rel), "utf8");
@@ -319,6 +320,73 @@ describe("twitch-panel loadPrefs: схема против недоверенно
       fc.property(fc.oneof(objectRaw, fc.string()), (raw) => {
         localStorage.setItem(PREFS_KEY, raw);
         expectValidPrefs(loadPrefs());
+      }),
+    );
+  });
+});
+
+describe("session-stats loadPrefs: та же схема против недоверенного localStorage", () => {
+  // Панель «Мой вечер» получила настройки вида 27.08.2026 и читает тот же
+  // общий санитайзер, что и чат. Свой набор ключей — свой property-тест:
+  // общий модуль не отвечает за поле rowsLimit.
+  const SESSION_KEY = "fp:session-stats:prefs";
+  const SESSION_DEFAULTS = {
+    headerHidden: false,
+    bgOpacity: 95,
+    fontSize: "m",
+    clickThrough: false,
+    rowsLimit: 12,
+  };
+
+  afterEach(() => localStorage.removeItem(SESSION_KEY));
+
+  test("чужие ключи и неверные типы не проходят схему", () => {
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ junk: 1, headerHidden: 1, bgOpacity: "99", fontSize: "xl", rowsLimit: 7 }),
+    );
+    expect(loadSessionPrefs()).toEqual(SESSION_DEFAULTS);
+  });
+
+  test("унаследованные через prototype поля НЕ считаются выбором пользователя", () => {
+    const proto = Object.prototype as Record<string, unknown>;
+    localStorage.setItem(SESSION_KEY, "{}");
+    proto.clickThrough = true;
+    proto.headerHidden = true;
+    proto.bgOpacity = 0;
+    proto.rowsLimit = 50;
+    try {
+      expect(loadSessionPrefs()).toEqual(SESSION_DEFAULTS);
+    } finally {
+      for (const k of Object.keys(SESSION_DEFAULTS)) delete proto[k];
+    }
+  });
+
+  test("property: произвольный JSON никогда не бросает и всегда даёт валидную схему", () => {
+    const fieldValue = fc.oneof(
+      fc.boolean(),
+      fc.double({ noNaN: true, noDefaultInfinity: true }),
+      fc.string({ maxLength: 8 }),
+      fc.constant(null),
+      fc.constantFrom<unknown>("s", "m", "l", 5, 10, 12, 25, 50),
+    );
+    const objectRaw = fc
+      .dictionary(fc.constantFrom(...Object.keys(SESSION_DEFAULTS), "junk"), fieldValue, {
+        maxKeys: 8,
+      })
+      .map((o) => JSON.stringify(o));
+    fc.assert(
+      fc.property(fc.oneof(objectRaw, fc.string()), (raw) => {
+        localStorage.setItem(SESSION_KEY, raw);
+        const p = loadSessionPrefs();
+        expect(Object.keys(p).sort()).toEqual(Object.keys(SESSION_DEFAULTS).sort());
+        expect(Number.isInteger(p.bgOpacity)).toBe(true);
+        expect(p.bgOpacity).toBeGreaterThanOrEqual(0);
+        expect(p.bgOpacity).toBeLessThanOrEqual(100);
+        expect(["s", "m", "l"]).toContain(p.fontSize);
+        expect([5, 10, 12, 25, 50]).toContain(p.rowsLimit);
+        expect(typeof p.headerHidden).toBe("boolean");
+        expect(typeof p.clickThrough).toBe("boolean");
       }),
     );
   });

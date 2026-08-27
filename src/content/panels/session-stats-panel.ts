@@ -27,6 +27,25 @@ import {
   summarizeSession,
 } from "@core/session-stats";
 import { createRoleSvg } from "../role-sprite";
+import {
+  applyChrome,
+  buildGearMenu,
+  buildHoverStrip,
+  buildUnlockChip,
+  CHROME_DEFAULTS,
+  FONT_SCALE,
+  menuCheck,
+  menuHint,
+  menuRange,
+  menuRow,
+  menuSegmented,
+  menuSelect,
+  ownField,
+  readPanelPrefsRaw,
+  sanitizeChromePrefs,
+  savePanelPrefs,
+  type ChromePrefs,
+} from "@core/panel-chrome";
 import type { Feature } from "@core/feature";
 
 const SCOPE = "session";
@@ -35,8 +54,35 @@ const SCOPE = "session";
 export const SESSION_RESET_KEY = "pn_session_reset";
 /** Период фонового обновления при видимой вкладке. */
 const REFRESH_MS = 3 * 60_000;
-/** Сколько последних игр сессии показываем (остальное — счётчиком). */
-const ROWS_LIMIT = 12;
+/** Сколько последних игр сессии показываем по умолчанию (остальное — счётчиком). */
+const DEFAULT_ROWS_LIMIT = 12;
+const ROWS_VARIANTS = [5, 10, 12, 25, 50] as const;
+/** Базовый кегль тела панели; s/m/l масштабируют именно его. */
+const BASE_FONT_PX = 12;
+
+/** Настройки вида — как у чата: фон, заголовок, шрифт, сквозь клики. */
+interface SessionPrefs extends ChromePrefs {
+  /** Сколько строк игр видно. */
+  rowsLimit: number;
+}
+
+const PREFS_KEY = "fp:session-stats:prefs";
+const DEFAULT_PREFS: SessionPrefs = { ...CHROME_DEFAULTS, rowsLimit: DEFAULT_ROWS_LIMIT };
+
+/**
+ * Экспорт — шов для property-тестов враждебного localStorage страницы
+ * (AGENTS.md §5): панель обязана пережить любую подстановку сайта.
+ */
+export function loadPrefs(): SessionPrefs {
+  const raw = readPanelPrefsRaw(PREFS_KEY);
+  const rowsLimit = ownField(raw, "rowsLimit");
+  return {
+    ...sanitizeChromePrefs(raw, DEFAULT_PREFS),
+    rowsLimit: (ROWS_VARIANTS as readonly number[]).includes(rowsLimit as number)
+      ? (rowsLimit as number)
+      : DEFAULT_PREFS.rowsLimit,
+  };
+}
 /** Строк истории за запрос: сессия — десятки игр, не тысячи (~65 КБ vs 660). */
 const SESSION_PAGE_LIMIT = 200;
 
@@ -60,6 +106,12 @@ function deltaColor(n: number): string {
 
 class SessionStatsPanel extends FloatingPanel {
   private bodyEl: HTMLElement | null = null;
+  private prefs: SessionPrefs = loadPrefs();
+  private gearMenu: HTMLElement | null = null;
+  private hoverStrip: HTMLElement | null = null;
+  private unlockChip: HTMLElement | null = null;
+  /** Последняя сводка — для перерисовки при смене шрифта/числа строк. */
+  private lastRows: GameRow[] | null = null;
 
   get isShown(): boolean {
     return this.isMounted && this.root.style.display !== "none";
@@ -85,6 +137,7 @@ class SessionStatsPanel extends FloatingPanel {
       () => void startNewSession(),
       "Начать сессию заново (счёт с нуля)",
     );
+    this.addHeaderButton("⚙", () => this.toggleGearMenu(), "Настройки панели");
     this.addHeaderButton("×", () => sessionStatsFeature.requestClose(), "Закрыть");
 
     const el = document.createElement("div");
@@ -105,11 +158,121 @@ class SessionStatsPanel extends FloatingPanel {
     body.appendChild(style);
     body.appendChild(el);
     this.bodyEl = el;
+
+    this.gearMenu = buildGearMenu(this.root);
+    this.hoverStrip = buildHoverStrip({
+      root: this.root,
+      onGear: () => this.toggleGearMenu(),
+      onShowHeader: () => this.setPrefs({ headerHidden: false }),
+    });
+    // Полоска — ручка перетаскивания, когда заголовка нет.
+    this.enableDrag(this.hoverStrip, this.root);
+    this.unlockChip = buildUnlockChip(
+      this.root,
+      "«Мой вечер» в режиме «сквозь клики». Нажмите, чтобы вернуть управление панелью",
+      () => this.setPrefs({ clickThrough: false }),
+    );
+    this.applyPrefs();
     this.renderMessage("Загрузка…");
+  }
+
+  // ─────────────── настройки вида ───────────────
+
+  private setPrefs(patch: Partial<SessionPrefs>, rerender = false): void {
+    this.prefs = { ...this.prefs, ...patch };
+    savePanelPrefs(PREFS_KEY, this.prefs);
+    this.applyPrefs();
+    if (rerender) this.rerender();
+  }
+
+  private applyPrefs(): void {
+    applyChrome(this.prefs, {
+      root: this.root,
+      header: this.header,
+      hoverStrip: this.hoverStrip,
+      unlockChip: this.unlockChip,
+      gearMenu: this.gearMenu,
+    });
+    if (this.bodyEl) {
+      const px = (BASE_FONT_PX * FONT_SCALE[this.prefs.fontSize]).toFixed(1);
+      this.bodyEl.style.font = `${px}px/1.5 system-ui, sans-serif`;
+    }
+  }
+
+  /** Перерисовать то, что уже показано (смена шрифта/числа строк). */
+  private rerender(): void {
+    if (this.lastRows) this.renderSession(this.lastRows);
+  }
+
+  private toggleGearMenu(): void {
+    const menu = this.gearMenu;
+    if (!menu) return;
+    const opening = menu.style.display === "none";
+    // Пересобираем при КАЖДОМ открытии: prefs меняются и мимо меню (чип-замок,
+    // «▾» на полоске), и чекбоксы иначе врали бы.
+    if (opening) this.populateGearMenu(menu);
+    menu.style.display = opening ? "block" : "none";
+  }
+
+  private populateGearMenu(menu: HTMLElement): void {
+    menu.replaceChildren();
+    menu.appendChild(
+      menuRow(
+        "Фон",
+        menuRange(
+          this.prefs.bgOpacity,
+          (v) => {
+            // Живой предпросмотр без записи на диск; сохранение — по отпусканию.
+            this.prefs = { ...this.prefs, bgOpacity: v };
+            this.applyPrefs();
+          },
+          () => savePanelPrefs(PREFS_KEY, this.prefs),
+        ),
+      ),
+    );
+    menu.appendChild(
+      menuRow(
+        "Шрифт",
+        menuSegmented(
+          ["s", "m", "l"] as const,
+          this.prefs.fontSize,
+          (v) => v.toUpperCase(),
+          (v) => this.setPrefs({ fontSize: v }, true),
+        ),
+      ),
+    );
+    menu.appendChild(
+      menuRow(
+        "Игр в списке",
+        menuSelect(ROWS_VARIANTS, this.prefs.rowsLimit, (v) =>
+          this.setPrefs({ rowsLimit: v }, true),
+        ),
+      ),
+    );
+    menu.appendChild(
+      menuRow(
+        "Заголовок",
+        menuCheck(!this.prefs.headerHidden, (v) => this.setPrefs({ headerHidden: !v })),
+      ),
+    );
+    menu.appendChild(
+      menuRow(
+        "Сквозь клики",
+        menuCheck(this.prefs.clickThrough, (v) => this.setPrefs({ clickThrough: v })),
+      ),
+    );
+    menu.appendChild(
+      menuHint(
+        "«Сквозь клики»: панель перестаёт ловить мышь; выход — замок в углу. " +
+          "Размер тянется за правый край, нижний край и уголок.",
+      ),
+    );
   }
 
   renderMessage(text: string): void {
     if (!this.bodyEl) return;
+    // Сводки больше нет — смена шрифта не должна воскресить старую.
+    this.lastRows = null;
     this.bodyEl.innerHTML = `<div style="text-align:center;color:rgba(255,255,255,.6);padding:16px 6px;font-style:italic;">${escapeHtml(text)}</div>`;
   }
 
@@ -117,6 +280,9 @@ class SessionStatsPanel extends FloatingPanel {
   renderSession(rows: GameRow[]): void {
     const el = this.bodyEl;
     if (!el) return;
+    this.lastRows = rows;
+    const limit = this.prefs.rowsLimit;
+    const iconPx = Math.round(18 * FONT_SCALE[this.prefs.fontSize]);
     const s = summarizeSession(rows);
     const mmrLine =
       s.startMmr !== null && s.currentMmr !== null
@@ -137,7 +303,7 @@ class SessionStatsPanel extends FloatingPanel {
       el.innerHTML = `${head}<div style="text-align:center;color:rgba(255,255,255,.6);padding:10px;font-style:italic;">Сессия пока пуста — удачной первой!</div>`;
       return;
     }
-    const items = rows.slice(0, ROWS_LIMIT).map((r) => {
+    const items = rows.slice(0, limit).map((r) => {
       const sprite = ROLE_SPRITE[r.role] ?? "civilian";
       const diff =
         typeof r.mmrDiff === "number"
@@ -149,14 +315,14 @@ class SessionStatsPanel extends FloatingPanel {
       return `
         <a href="/match/${r.id}" target="_blank" rel="noopener" class="ss-row"
            title="Открыть разбор матча №${r.id}${r.mode && r.mode !== "league" ? ` · режим: ${r.mode.replace(/[^a-z0-9_-]/gi, "")}` : ""}">
-          <span style="width:18px;height:18px;flex:none;display:grid;place-items:center;">${createRoleSvg(sprite, 18)}</span>
+          <span style="width:${iconPx}px;height:${iconPx}px;flex:none;display:grid;place-items:center;">${createRoleSvg(sprite, iconPx)}</span>
           <span style="flex:1;">${result}</span>
           ${diff}
         </a>`;
     });
     const tail =
-      rows.length > ROWS_LIMIT
-        ? `<div style="text-align:center;color:rgba(255,255,255,.45);padding:4px;">…и ещё ${rows.length - ROWS_LIMIT}</div>`
+      rows.length > limit
+        ? `<div style="text-align:center;color:rgba(255,255,255,.45);padding:4px;">…и ещё ${rows.length - limit}</div>`
         : "";
     el.innerHTML = head + items.join("") + tail;
   }

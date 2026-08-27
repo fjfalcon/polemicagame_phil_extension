@@ -24,6 +24,24 @@ import { browser } from "@core/env";
 import { FloatingPanel } from "@core/FloatingPanel";
 import { onDomChange } from "@core/dom";
 import { escapeHtml } from "@core/escape";
+import {
+  applyChrome,
+  buildGearMenu,
+  buildHoverStrip,
+  buildUnlockChip,
+  CHROME_DEFAULTS,
+  menuCheck,
+  menuHint,
+  menuRange,
+  menuRow,
+  menuSegmented,
+  menuSelect,
+  ownField,
+  readPanelPrefsRaw,
+  sanitizeChromePrefs,
+  savePanelPrefs,
+  type ChromePrefs,
+} from "@core/panel-chrome";
 import { log } from "@core/log";
 import { onMessage, sendRuntime } from "@core/messaging";
 import { SITE } from "@core/selectors";
@@ -63,27 +81,18 @@ interface ChatMessage {
  * принадлежит сайту, источник недоверенный — каждое поле санитизируется при
  * чтении (см. карту хранилища в AGENTS.md §5).
  */
-interface PanelPrefs {
-  headerHidden: boolean;
-  /** Прозрачность фона, 0..100 (0 — фона нет вовсе, «голые» строки чата). */
-  bgOpacity: number;
-  fontSize: "s" | "m" | "l";
+interface PanelPrefs extends ChromePrefs {
   timestamps: boolean;
   highlightMentions: boolean;
-  /** Панель не ловит мышь вообще — оверлей «только чтение» поверх игры. */
-  clickThrough: boolean;
   /** Сколько последних сообщений видно (окно чата; остальное — скроллом). */
   visibleCount: number;
 }
 
 const PREFS_KEY = "fp:twitch-panel:prefs";
 const DEFAULT_PREFS: PanelPrefs = {
-  headerHidden: false,
-  bgOpacity: 95,
-  fontSize: "m",
+  ...CHROME_DEFAULTS,
   timestamps: true,
   highlightMentions: true,
-  clickThrough: false,
   visibleCount: 10,
 };
 const FONT_PX = { s: 11, m: 12.5, l: 14 } as const;
@@ -101,29 +110,13 @@ const VISIBLE_VARIANTS = [3, 5, 10, 25, 50] as const;
  * предположений о вызывающем.
  */
 export function loadPrefs(): PanelPrefs {
-  let raw: unknown = null;
-  try {
-    raw = JSON.parse(localStorage.getItem(PREFS_KEY) || "null");
-  } catch {
-    raw = null;
-  }
+  const raw = readPanelPrefsRaw(PREFS_KEY);
   const d = DEFAULT_PREFS;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...d };
-  const own = (key: keyof PanelPrefs): unknown =>
-    Object.hasOwn(raw as object, key) ? (raw as Record<string, unknown>)[key] : undefined;
-  const bgOpacity = own("bgOpacity");
-  const fontSize = own("fontSize");
-  const visibleCount = own("visibleCount");
+  const visibleCount = ownField(raw, "visibleCount");
   return {
-    headerHidden: own("headerHidden") === true,
-    bgOpacity:
-      typeof bgOpacity === "number" && Number.isFinite(bgOpacity)
-        ? Math.min(100, Math.max(0, Math.round(bgOpacity)))
-        : d.bgOpacity,
-    fontSize: fontSize === "s" || fontSize === "l" ? fontSize : "m",
-    timestamps: own("timestamps") !== false,
-    highlightMentions: own("highlightMentions") !== false,
-    clickThrough: own("clickThrough") === true,
+    ...sanitizeChromePrefs(raw, d),
+    timestamps: ownField(raw, "timestamps") !== false,
+    highlightMentions: ownField(raw, "highlightMentions") !== false,
     visibleCount: (VISIBLE_VARIANTS as readonly number[]).includes(visibleCount as number)
       ? (visibleCount as number)
       : d.visibleCount,
@@ -131,11 +124,7 @@ export function loadPrefs(): PanelPrefs {
 }
 
 function savePrefs(p: PanelPrefs): void {
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
-  } catch {
-    /* приватный режим / квота */
-  }
+  savePanelPrefs(PREFS_KEY, p);
 }
 
 // ─────────────── история чата поверх перезагрузки ───────────────
@@ -675,105 +664,40 @@ class TwitchChatPanel extends FloatingPanel {
    *  по действию пользователя в меню, не из наблюдателей DOM. */
   private applyChrome(): void {
     const p = this.prefs;
-    const a = p.bgOpacity / 100;
-    this.root.style.background = `rgba(30,31,38,${a.toFixed(2)})`;
-    this.root.style.borderColor = `rgba(255,255,255,${(0.12 * a).toFixed(3)})`;
-    this.root.style.boxShadow = a < 0.2 ? "none" : "0 8px 30px rgba(0,0,0,.45)";
+    applyChrome(p, {
+      root: this.root,
+      header: this.header,
+      hoverStrip: this.hoverStrip,
+      unlockChip: this.unlockChip,
+      gearMenu: this.gearMenu,
+    });
     if (this.messagesEl) {
-      this.messagesEl.style.background = a < 0.3 ? "transparent" : "rgba(0,0,0,.12)";
+      // Своё, чатовое: подложка строк исчезает вместе с почти прозрачным фоном.
+      this.messagesEl.style.background = p.bgOpacity / 100 < 0.3 ? "transparent" : "rgba(0,0,0,.12)";
     }
-    this.header.style.display = p.headerHidden ? "none" : "flex";
-    if (this.hoverStrip) {
-      this.hoverStrip.style.display = p.headerHidden && !p.clickThrough ? "flex" : "none";
-    }
-    // Сквозь-клики: панель не ловит мышь; кликабелен только чип-замок.
-    this.root.style.pointerEvents = p.clickThrough ? "none" : "";
-    if (this.unlockChip) this.unlockChip.style.display = p.clickThrough ? "grid" : "none";
-    if (p.clickThrough && this.gearMenu) this.gearMenu.style.display = "none";
   }
 
   // ── скрытый заголовок: hover-полоска ──
 
   private buildHoverStrip(): void {
-    const strip = document.createElement("div");
-    Object.assign(strip.style, {
-      position: "absolute",
-      top: "0",
-      left: "0",
-      right: "0",
-      height: "18px",
-      zIndex: "5",
-      display: "none",
-      alignItems: "center",
-      justifyContent: "flex-end",
-      gap: "4px",
-      padding: "0 4px",
-      cursor: "move",
-      opacity: "0",
-      transition: "opacity .15s",
-      background: "linear-gradient(rgba(0,0,0,.6), transparent)",
-    } as CSSStyleDeclaration);
-    strip.addEventListener("mouseenter", () => (strip.style.opacity = "1"));
-    strip.addEventListener("mouseleave", () => (strip.style.opacity = "0"));
-
-    const mkBtn = (label: string, title: string, onClick: () => void) => {
-      const b = document.createElement("button");
-      b.textContent = label;
-      b.title = title;
-      Object.assign(b.style, {
-        background: "transparent",
-        border: "none",
-        color: "#fff",
-        cursor: "pointer",
-        fontSize: "11px",
-        lineHeight: "1",
-        padding: "2px 4px",
-      } as CSSStyleDeclaration);
-      b.addEventListener("click", onClick);
-      return b;
-    };
-    strip.append(
-      mkBtn("⚙", "Настройки панели", () => this.toggleGearMenu()),
-      mkBtn("▾", "Показать заголовок", () => this.setPrefs({ headerHidden: false })),
-    );
-
+    const strip = buildHoverStrip({
+      root: this.root,
+      onGear: () => this.toggleGearMenu(),
+      onShowHeader: () => this.setPrefs({ headerHidden: false }),
+    });
     // Полоска — ручка перетаскивания, когда заголовка нет.
     this.enableDrag(strip, this.root);
-    this.root.appendChild(strip);
     this.hoverStrip = strip;
   }
 
   // ── сквозь-клики: чип-замок ──
 
   private buildUnlockChip(): void {
-    const chip = document.createElement("button");
-    chip.textContent = "🔓";
-    chip.title = "Чат в режиме «сквозь клики». Нажмите, чтобы вернуть управление панелью";
-    Object.assign(chip.style, {
-      position: "absolute",
-      top: "4px",
-      right: "4px",
-      zIndex: "7",
-      width: "22px",
-      height: "22px",
-      display: "none",
-      placeItems: "center",
-      border: "none",
-      borderRadius: "6px",
-      background: "rgba(0,0,0,.55)",
-      fontSize: "12px",
-      cursor: "pointer",
-      opacity: "0.35",
-      transition: "opacity .15s",
-      // Родитель в режиме сквозь-кликов имеет pointer-events:none; у чипа —
-      // явный auto, поэтому он единственный остаётся кликабельным.
-      pointerEvents: "auto",
-    } as CSSStyleDeclaration);
-    chip.addEventListener("mouseenter", () => (chip.style.opacity = "1"));
-    chip.addEventListener("mouseleave", () => (chip.style.opacity = "0.35"));
-    chip.addEventListener("click", () => this.setPrefs({ clickThrough: false }));
-    this.root.appendChild(chip);
-    this.unlockChip = chip;
+    this.unlockChip = buildUnlockChip(
+      this.root,
+      "Чат в режиме «сквозь клики». Нажмите, чтобы вернуть управление панелью",
+      () => this.setPrefs({ clickThrough: false }),
+    );
   }
 
   // ── меню настроек ──
@@ -789,137 +713,74 @@ class TwitchChatPanel extends FloatingPanel {
   }
 
   private buildGearMenu(): void {
-    const menu = document.createElement("div");
-    Object.assign(menu.style, {
-      position: "absolute",
-      top: "34px",
-      right: "6px",
-      zIndex: "6",
-      display: "none",
-      width: "210px",
-      padding: "10px",
-      background: "#23242c",
-      border: "1px solid rgba(255,255,255,.15)",
-      borderRadius: "8px",
-      boxShadow: "0 8px 24px rgba(0,0,0,.5)",
-      font: "12px/1.5 system-ui, sans-serif",
-      // Панель может быть ниже меню (дефолт 180px, а у root overflow:hidden) —
-      // без ограничения высоты нижние пункты недостижимы (блокер ревью).
-      maxHeight: "calc(100% - 44px)",
-      overflowY: "auto",
-      boxSizing: "border-box",
-    } as CSSStyleDeclaration);
-
-    this.root.appendChild(menu);
-    this.gearMenu = menu;
+    this.gearMenu = buildGearMenu(this.root);
   }
 
   /** Наполнить меню актуальными значениями prefs (зовётся на каждое открытие). */
   private populateGearMenu(menu: HTMLElement): void {
     menu.replaceChildren();
-
-    const row = (label: string, control: HTMLElement) => {
-      const r = document.createElement("div");
-      r.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;";
-      const l = document.createElement("span");
-      l.textContent = label;
-      l.style.color = "rgba(255,255,255,.85)";
-      r.append(l, control);
-      return r;
-    };
-    const check = (value: boolean, onChange: (v: boolean) => void) => {
-      const c = document.createElement("input");
-      c.type = "checkbox";
-      c.checked = value;
-      c.style.cursor = "pointer";
-      c.addEventListener("change", () => onChange(c.checked));
-      return c;
-    };
-
-    // Прозрачность фона.
-    const range = document.createElement("input");
-    range.type = "range";
-    range.min = "0";
-    range.max = "100";
-    range.value = String(this.prefs.bgOpacity);
-    range.style.cssText = "width:100px;cursor:pointer;";
-    // input — только вид (живой предпросмотр при перетаскивании);
-    // запись в localStorage — один раз, по отпусканию (ревью №4).
-    range.addEventListener("input", () => {
-      this.prefs = { ...this.prefs, bgOpacity: Number(range.value) };
-      this.applyChrome();
-    });
-    range.addEventListener("change", () => savePrefs(this.prefs));
-    menu.appendChild(row("Фон", range));
-
-    // Размер шрифта.
-    const fonts = document.createElement("span");
-    (["s", "m", "l"] as const).forEach((size) => {
-      const b = document.createElement("button");
-      b.textContent = size.toUpperCase();
-      b.style.cssText =
-        "border:1px solid rgba(255,255,255,.25);background:transparent;color:#fff;" +
-        "cursor:pointer;padding:2px 7px;margin-left:4px;border-radius:5px;font-size:11px;";
-      const sync = () => {
-        b.style.background =
-          this.prefs.fontSize === size ? "rgba(99,102,241,.5)" : "transparent";
-      };
-      b.addEventListener("click", () => {
-        this.setPrefs({ fontSize: size }, true);
-        fonts.querySelectorAll("button").forEach((x) => (x.style.background = "transparent"));
-        sync();
-      });
-      sync();
-      fonts.appendChild(b);
-    });
-    menu.appendChild(row("Шрифт", fonts));
-
-    // Сколько сообщений видно.
-    const counts = document.createElement("select");
-    counts.style.cssText =
-      "background:#1e1f26;color:#fff;border:1px solid rgba(255,255,255,.25);" +
-      "border-radius:5px;padding:2px 4px;cursor:pointer;font-size:11px;";
-    for (const n of VISIBLE_VARIANTS) {
-      const o = document.createElement("option");
-      o.value = String(n);
-      o.textContent = String(n);
-      if (n === this.prefs.visibleCount) o.selected = true;
-      counts.appendChild(o);
-    }
-    counts.addEventListener("change", () =>
-      this.setPrefs({ visibleCount: Number(counts.value) }, true),
-    );
-    menu.appendChild(row("Сообщений", counts));
-
     menu.appendChild(
-      row(
+      menuRow(
+        "Фон",
+        menuRange(
+          this.prefs.bgOpacity,
+          (v) => {
+            // Живой предпросмотр без записи на диск; сохранение — по отпусканию.
+            this.prefs = { ...this.prefs, bgOpacity: v };
+            this.applyChrome();
+          },
+          () => savePrefs(this.prefs),
+        ),
+      ),
+    );
+    menu.appendChild(
+      menuRow(
+        "Шрифт",
+        menuSegmented(
+          ["s", "m", "l"] as const,
+          this.prefs.fontSize,
+          (v) => v.toUpperCase(),
+          (v) => this.setPrefs({ fontSize: v }, true),
+        ),
+      ),
+    );
+    menu.appendChild(
+      menuRow(
+        "Сообщений",
+        menuSelect(VISIBLE_VARIANTS, this.prefs.visibleCount, (v) =>
+          this.setPrefs({ visibleCount: v }, true),
+        ),
+      ),
+    );
+    menu.appendChild(
+      menuRow(
         "Заголовок",
-        check(!this.prefs.headerHidden, (v) => this.setPrefs({ headerHidden: !v })),
+        menuCheck(!this.prefs.headerHidden, (v) => this.setPrefs({ headerHidden: !v })),
       ),
     );
     menu.appendChild(
-      row(
+      menuRow(
         "Время сообщений",
-        check(this.prefs.timestamps, (v) => this.setPrefs({ timestamps: v }, true)),
+        menuCheck(this.prefs.timestamps, (v) => this.setPrefs({ timestamps: v }, true)),
       ),
     );
     menu.appendChild(
-      row(
+      menuRow(
         "Подсветка @обращений",
-        check(this.prefs.highlightMentions, (v) => this.setPrefs({ highlightMentions: v }, true)),
+        menuCheck(this.prefs.highlightMentions, (v) =>
+          this.setPrefs({ highlightMentions: v }, true),
+        ),
       ),
     );
     menu.appendChild(
-      row(
+      menuRow(
         "Сквозь клики",
-        check(this.prefs.clickThrough, (v) => this.setPrefs({ clickThrough: v })),
+        menuCheck(this.prefs.clickThrough, (v) => this.setPrefs({ clickThrough: v })),
       ),
     );
-
-    const hint = document.createElement("div");
-    hint.textContent = "«Сквозь клики»: чат перестаёт ловить мышь; выход — замок в углу панели.";
-    hint.style.cssText = "color:rgba(255,255,255,.45);font-size:10px;line-height:1.4;";
-    menu.appendChild(hint);
+    menu.appendChild(
+      menuHint("«Сквозь клики»: чат перестаёт ловить мышь; выход — замок в углу панели."),
+    );
   }
 }
 
