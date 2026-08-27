@@ -71,7 +71,16 @@ interface ChatMessage {
   type: "chat" | "system";
   /** Сообщение упоминает @канал — подсветить. */
   mention?: boolean;
+  /**
+   * Ключ обновляемой системной строки: следующее сообщение с тем же ключом
+   * не добавляет строку, а переписывает эту. «Подключаемся…» → «Подключились»
+   * — один шаг одного события, а не две строки (просьба владельца 27.08.2026).
+   */
+  systemKey?: string;
 }
+
+/** Ключи обновляемых системных строк. */
+const SYS_CONNECT = "connect";
 
 // ─────────────── пер-устройство настройки вида панели ───────────────
 
@@ -529,13 +538,47 @@ class TwitchChatPanel extends FloatingPanel {
     this.scheduleHistorySave();
   }
 
-  addSystemMessage(message: string): void {
-    this.messages.push({ message, timestamp: new Date(), type: "system" });
+  /**
+   * Системная строка. С `key` — обновляемая: если ПОСЛЕДНЯЯ строка окна имеет
+   * тот же ключ, она переписывается на месте, а не дублируется ниже.
+   *
+   * Обновляем только последнюю: строка, ушедшая вверх под чужие сообщения,
+   * уже прочитана в своём контексте, и менять её задним числом — врать про
+   * порядок событий.
+   */
+  addSystemMessage(message: string, key?: string): void {
+    const last = this.messages[this.messages.length - 1];
+    if (key && last && last.type === "system" && last.systemKey === key) {
+      last.message = message;
+      // Метка времени — момент ИТОГА: строка теперь утверждает «подключились».
+      last.timestamp = new Date();
+      this.replaceLastMessage();
+      return;
+    }
+    this.messages.push({ message, timestamp: new Date(), type: "system", systemKey: key });
     if (this.messages.length > MAX_MESSAGES) this.messages.shift();
     // Тоже «непрочитанное»: иначе системная строка сдвигала окно рендера,
     // не увеличив его (находка ревью №7).
     if (!this.atBottom) this.bumpUnseen();
     this.appendLastMessage();
+  }
+
+  /**
+   * Переписать последнюю строку на месте. Новых строк не появляется, поэтому
+   * ни окно рендера, ни счётчик непрочитанного не трогаем.
+   */
+  private replaceLastMessage(): void {
+    const el = this.messagesEl;
+    const msg = this.messages[this.messages.length - 1];
+    if (!el || !msg) return;
+    const lastEl = el.lastElementChild;
+    // Окно пустое (например, после смены prefs) — обычная перерисовка.
+    if (!lastEl) {
+      this.renderMessages();
+      return;
+    }
+    lastEl.outerHTML = this.messageHtml(msg);
+    if (this.atBottom) el.scrollTop = el.scrollHeight;
   }
 
   /**
@@ -856,7 +899,8 @@ function startJoinWatchdog(): void {
       `${JOIN_CONFIRM_TIMEOUT_MS / 1000} с —`,
       "вероятно, канала нет или имя набрано с ошибкой",
     );
-    panel?.addSystemMessage("Канал не отвечает — проверьте имя канала");
+    // Исход той же попытки — переписываем её строку, а не пишем вторую.
+    panel?.addSystemMessage("Канал не отвечает — проверьте имя канала", SYS_CONNECT);
   }, JOIN_CONFIRM_TIMEOUT_MS);
 }
 
@@ -1025,7 +1069,7 @@ function scheduleReconnect(): void {
       MAX_RECONNECT_ATTEMPTS,
       "попытки; чат остаётся отключённым",
     );
-    panel?.addSystemMessage("Не удалось подключиться — проверьте имя канала");
+    panel?.addSystemMessage("Не удалось подключиться — проверьте имя канала", SYS_CONNECT);
     return;
   }
   reconnectAttempts++;
@@ -1115,7 +1159,7 @@ function connectToTwitch(): void {
       // несуществующего канала Twitch молча игнорирует JOIN, и человек шесть
       // минут видел бы ложный успех (аудит наблюдаемости 02.08.2026, №8
       // раздела «Ответ пользователю»).
-      panel?.addSystemMessage("Подключаемся к чату…");
+      panel?.addSystemMessage("Подключаемся к чату…", SYS_CONNECT);
       startJoinWatchdog();
       sendTwitchStatus(true);
     };
@@ -1150,7 +1194,10 @@ function connectToTwitch(): void {
       // Объект события сериализуется в «{}» и в файле бесполезен — пишем
       // состояние сокета, а не сам объект (TW-1).
       log.error(SCOPE, "twitch: ошибка сокета, readyState =", ws.readyState);
-      panel?.addSystemMessage("Ошибка подключения к чату");
+      // Ошибка ДО входа в канал — исход текущей попытки (переписываем строку
+      // «подключаемся»). Ошибка на живом чате — отдельное событие: затирать
+      // ею «подключились» значило бы стереть факт, что чат работал.
+      panel?.addSystemMessage("Ошибка подключения к чату", ircReady ? undefined : SYS_CONNECT);
     };
   } catch (e) {
     log.error(SCOPE, "failed to connect", e);
@@ -1207,7 +1254,9 @@ function handleTwitchData(data: string): void {
       reconnectAttempts = 0;
       clearJoinWatchdog();
       log.info(SCOPE, "twitch: чат готов — вход в канал подтверждён");
-      panel?.addSystemMessage("Подключились к чату");
+      // Тот же ключ: строка «подключаемся» превращается в «подключились», а
+      // не повисает над ней второй.
+      panel?.addSystemMessage("Подключились к чату", SYS_CONNECT);
     }
     // Отказ входа: канала нет, он в бане и т.п. Само сообщение не пишем —
     // это текст сервиса, а нам нужен факт.
