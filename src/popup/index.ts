@@ -249,6 +249,16 @@ document.addEventListener("DOMContentLoaded", () => {
     // и удобный момент вернуть браузеру место.
     await wsLog.sweepStorage();
     const { frames, dropped } = await wsLog.collectAll();
+    if (frames.length === 0 && dropped > 0) {
+      // Кадры не записались, но потеря зафиксирована — обвинять пользователя
+      // «лог пуст, включи настройку» здесь нельзя (adversarial 27.08, №2).
+      showPopupToast(
+        `Кадры не сохранились: ${dropped} отброшено при перегрузке хранилища. Освободите место и повторите`,
+        "error",
+        8000,
+      );
+      return;
+    }
     if (frames.length === 0) {
       // Пустой файл только собьёт с толку: причина почти всегда одна —
       // настройку не включили либо включили уже после игры.
@@ -289,7 +299,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     const cleared = await wsLog.clearAll();
     showPopupToast(
-      cleared ? "Полный лог очищен" : "Не удалось очистить — хранилище браузера отказало",
+      cleared
+        ? "Полный лог очищен"
+        : "Хранилище отказало: на диске лог остался, буферы вкладок сброшены",
       cleared ? undefined : "error",
     );
   });
@@ -755,7 +767,10 @@ document.addEventListener("DOMContentLoaded", () => {
           // Смена адреса OBS = другой сервер: старый пароль ему не отдаём.
           if (
             typeof settingsPatch.obs_host === "string" &&
-            settingsPatch.obs_host !== lastKnown?.obs_host
+            // Сравниваем НОРМАЛИЗОВАННЫЕ адреса: косметическая разница в
+            // файле («/» или ?query) стирала пароль как «смену сервера»
+            // (adversarial 27.08, №5).
+            sanitizeObsHost(settingsPatch.obs_host) !== lastKnown?.obs_host
           ) {
             settingsPatch.obs_password = "";
           }
@@ -823,14 +838,17 @@ document.addEventListener("DOMContentLoaded", () => {
               // при следующей записи метки, а присланный файл мог влить
               // тысячи ключей в storage.local, квота которого общая с
               // заметками (ревью аудита lifecycle, находка 3).
-              // Считаем ИТОГ, а не прибавку: потолок общий с runtime-подрезкой.
-              let totalGames = Object.keys(merged).length;
+              let addedGames = 0;
               // Агрегатные потолки (SEC26-6): пер-ключевые лимиты не мешали
               // одной «игре» нести десятки тысяч записей и съесть остаток
               // квоты, общей с заметками.
               let addedBytes = 0;
               for (const [game, marks] of Object.entries(incomingMarks as Record<string, unknown>)) {
-                if (totalGames >= MAX_IMPORT_ROLE_GAMES) {
+                // Потолок ФАЙЛА: сколько игр берём из бэкапа за раз. Общий
+                // предел держит подрезка ниже — той же логикой, что runtime
+                // (adversarial 27.08: «итог >= 50» вливал НОЛЬ у активного
+                // игрока, у которого runtime и так держит ровно 50).
+                if (addedGames >= MAX_IMPORT_ROLE_GAMES) {
                   marksTruncated = true;
                   break;
                 }
@@ -855,7 +873,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Пустая игра слот не занимает (adversarial 27.08, №9).
                 if (perGame === 0) continue;
                 merged[game] = clean;
-                totalGames++;
+                addedGames++;
+              }
+              // Общая подрезка — как в role-marker.writeNow: самые старые
+              // ключи уходят первыми, свежие (в т.ч. импортированные) живут.
+              const allKeys = Object.keys(merged);
+              if (allKeys.length > MAX_IMPORT_ROLE_GAMES) {
+                for (const k of allKeys.slice(0, allKeys.length - MAX_IMPORT_ROLE_GAMES)) {
+                  delete merged[k];
+                }
               }
 
               patch.roleMarks = merged;
@@ -874,7 +900,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const restoredSettings = await applySettings();
           const extras = await applyExtras();
           const cut =
-            (extras.marksTruncated ? " (метки ролей обрезаны потолками файла)" : "") +
+            (extras.marksTruncated ? " (часть меток ролей не поместилась в потолок 50 игр)" : "") +
             (extras.failed ? " — палитра/мьюты/метки НЕ сохранены" : "");
           showPopupToast(
             restoredSettings
@@ -1009,7 +1035,7 @@ document.addEventListener("DOMContentLoaded", () => {
           ? `Добавлено: ${addedFinal}, обновлено: ${replacedFinal}`
           : `Импортировано заметок: ${addedFinal}`;
         const cutMain =
-          (extras.marksTruncated ? " (метки ролей обрезаны потолками файла)" : "") +
+          (extras.marksTruncated ? " (часть меток ролей не поместилась в потолок 50 игр)" : "") +
           (extras.failed ? " — палитра/мьюты/метки НЕ сохранены" : "");
         showPopupToast(
           (restoredSettings ? `${notesMsg}; настроек: ${restoredSettings}` : notesMsg) + cutMain,
@@ -1112,7 +1138,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const el = $<HTMLInputElement>(key);
       if (!el) continue;
       if (el.type === "checkbox") el.checked = value === true;
-      else if (typeof value === "string") el.value = value;
+      // obs_host из чужого патча (грязный sync второго устройства) не должен
+      // даже РИСОВАТЬСЯ с кредами (adversarial 27.08, №6).
+      else if (typeof value === "string") {
+        el.value = key === "obs_host" ? sanitizeObsHost(value) : value;
+      }
     }
     // Зависимые блоки видимости.
     if ("extension_enabled" in patch) applyExtOff(patch.extension_enabled !== false);

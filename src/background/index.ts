@@ -924,12 +924,24 @@ onSettingsChanged((patch) => {
         "obs_enabled" in patch && patch.obs_enabled !== lastObsIntent.enabled;
       const masterChanged =
         "extension_enabled" in patch && patch.extension_enabled !== lastObsIntent.master;
-      const hostChanged = "obs_host" in patch && patch.obs_host !== lastObsIntent.host;
+      // Патч из storage.onChanged — СЫРОЙ (граница чистит только чтение
+      // через getSettings). Сравниваем нормализованное, иначе грязный sync
+      // со второго устройства читался как «сменился адрес» и снимал ручное
+      // отключение и persisted-блок (adversarial 27.08, №3).
+      const patchHost =
+        typeof patch.obs_host === "string" ? sanitizeObsHost(patch.obs_host) : patch.obs_host;
+      // И чиним диск сразу: чтение и так не пропустит секрет, но в облаке
+      // он лежать не должен до следующего апдейта (№4).
+      if (typeof patch.obs_host === "string" && patch.obs_host !== patchHost) {
+        void browser.storage.sync.set({ obs_host: patchHost });
+        log.info("background", "obs_host из sync нормализован: креды/query удалены");
+      }
+      const hostChanged = "obs_host" in patch && patchHost !== lastObsIntent.host;
       const passwordChanged =
         "obs_password" in patch && patch.obs_password !== lastObsIntent.password;
       if ("obs_enabled" in patch) lastObsIntent.enabled = patch.obs_enabled;
       if ("extension_enabled" in patch) lastObsIntent.master = patch.extension_enabled;
-      if ("obs_host" in patch) lastObsIntent.host = patch.obs_host;
+      if ("obs_host" in patch) lastObsIntent.host = patchHost;
       if ("obs_password" in patch) lastObsIntent.password = patch.obs_password;
       // Ни одного РЕАЛЬНОГО перехода — событие «прицепное» (Firefox шлёт все
       // ключи области), делать нечего.

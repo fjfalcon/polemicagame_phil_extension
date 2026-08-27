@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   listener: null as null | ((changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void),
@@ -74,6 +74,19 @@ describe("Firefox-compatible settings changes", () => {
 });
 
 describe("граница настроек чистит секреты в obs_host (ревью 27.08.2026)", () => {
+  // clearMocks не сбрасывает РЕАЛИЗАЦИЮ vi.fn из фабрики vi.mock: без этого
+  // грязный sync протекал бы в тесты, дописанные ниже (adversarial 27.08).
+  afterEach(() => {
+    for (const fn of [
+      browser.storage.sync.get,
+      browser.storage.sync.set,
+      browser.storage.local.get,
+      browser.storage.local.set,
+    ] as unknown as ReturnType<typeof vi.fn>[]) {
+      fn.mockReset();
+    }
+  });
+
   const local = browser.storage.local as unknown as { get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
   const sync = browser.storage.sync as unknown as { get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
 

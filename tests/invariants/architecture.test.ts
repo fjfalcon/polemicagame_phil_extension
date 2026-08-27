@@ -134,6 +134,23 @@ describe("AGENTS §4 storage and data ownership", () => {
     expect(count(notesStore, /browser\.storage\.local\.set\s*\(/g)).toBeGreaterThanOrEqual(3);
   });
 
+  test("obs_host пишется только через границу settings (ревью 27.08.2026)", () => {
+    // Санитайзер стоит в setSettings; прямая запись ключа мимо него снова
+    // вынесла бы креды в облако. Исключение — разовая самолечащая запись
+    // фона, которая САМА нормализует значение.
+    const offenders: string[] = [];
+    for (const file of sourceFiles()) {
+      const source = read(file);
+      for (const m of source.matchAll(/storage\.sync\.set\(\{[^}]*obs_host/g)) {
+        const line = lineOf(source, m.index);
+        const around = source.slice(Math.max(0, (m.index ?? 0) - 400), (m.index ?? 0) + 200);
+        if (/sanitizeObsHost/.test(around)) continue; // самолечение фона
+        offenders.push(`${file}:${line}`);
+      }
+    }
+    expect(offenders, "obs_host мимо setSettings/санитайзера").toEqual([]);
+  });
+
   test("§4.11: notes migration commits data and completion flag atomically", () => {
     const source = read("src/core/notes-store.ts");
     expect(source).toMatch(/storage\.local\.set\(\{[\s\S]*?\[MIGRATED_KEY\]: true[\s\S]*?\}\)/);

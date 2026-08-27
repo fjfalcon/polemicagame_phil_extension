@@ -314,10 +314,26 @@ export async function finishSession(): Promise<void> {
       // «выключил сразу после перегрузки» давал файл, молчащий о потере
       // (ревью 27.08.2026). Пустой кусок-маркер — только с числом.
       const unreported = droppedByBackpressure - reportedDrops;
-      if (unreported > 0) {
+      // stopped = хранилище уже отказало дважды: маркер туда не пролезет, а
+      // попытка стоит двух set + полного sweep (adversarial 27.08).
+      if (unreported > 0 && !stopped) {
         reportedDrops = droppedByBackpressure;
         const gen = generation;
         const payload = { at: Date.now(), frames: [] as WsFrame[], dropped: unreported };
+        // Маркер не должен вытеснять РЕАЛЬНЫЙ кусок кадров: он весит
+        // десятки байт, а MAX_CHUNKS считает ключи — освобождаем место
+        // заранее только если упёрлись.
+        if (chunks.length >= MAX_CHUNKS) {
+          const oldest = chunks.shift();
+          if (oldest) {
+            storedChars -= oldest.chars;
+            try {
+              await browser.storage.local.remove(oldest.key);
+            } catch {
+              /* приберёт следующий sweep */
+            }
+          }
+        }
         await writeChunk(payload, JSON.stringify(payload).length, gen);
       }
     } catch {
