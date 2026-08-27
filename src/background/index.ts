@@ -1056,6 +1056,18 @@ function applyObsIntent(patch: Partial<Settings>): void {
         await setManualDisconnect(false);
         await obs.allowAutoReconnect();
       }
+      if (hostChanged && !passwordChanged) {
+        // Адрес приехал ПО SYNC с другого устройства, а пароль здесь свой,
+        // от прежнего сервера (ревью 27.08.2026): идти с ним на новый OBS
+        // нельзя — это ровно то, что мы запретили. Рвём соединение и ждём,
+        // пока пользователь введёт пароль здесь (тогда сработает транзакция).
+        log.warn(
+          "background",
+          "адрес OBS изменён на другом устройстве — нужен пароль для нового сервера",
+        );
+        obs.disconnect();
+        return;
+      }
       if (hostChanged || passwordChanged) {
         // Правка кредов снимает и ручную паузу: пользователь исправил пароль
         // и ждёт подключения — held manual-disconnect тут только мешает.

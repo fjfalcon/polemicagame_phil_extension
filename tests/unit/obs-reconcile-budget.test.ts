@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const store = vi.hoisted(() => ({ data: {} as Record<string, unknown> }));
+const syncStore = vi.hoisted(() => ({ data: {} as Record<string, unknown> }));
 const settings = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const wiring = vi.hoisted(() => ({
   onAlarm: [] as ((a: { name: string; scheduledTime: number }) => void)[],
@@ -46,10 +47,28 @@ vi.mock("@core/env", () => ({
           for (const key of Array.isArray(keys) ? keys : [keys]) delete store.data[key];
         }),
       },
+      // STATEFUL (ревью 27.08.2026): пустой мок делал проверку «адрес не
+      // записан» зелёной даже при успешной записи — страж был декорацией.
       sync: {
-        get: vi.fn(async () => ({})),
-        set: vi.fn(async () => undefined),
-        remove: vi.fn(async () => undefined),
+        get: vi.fn(async (defaults: Record<string, unknown> | string | null) => {
+          if (defaults && typeof defaults === "object") {
+            const out: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(defaults)) {
+              out[k] = k in syncStore.data ? syncStore.data[k] : v;
+            }
+            return out;
+          }
+          if (typeof defaults === "string") {
+            return defaults in syncStore.data ? { [defaults]: syncStore.data[defaults] } : {};
+          }
+          return { ...syncStore.data };
+        }),
+        set: vi.fn(async (patch: Record<string, unknown>) => {
+          Object.assign(syncStore.data, patch);
+        }),
+        remove: vi.fn(async (keys: string | string[]) => {
+          for (const k of ([] as string[]).concat(keys)) delete syncStore.data[k];
+        }),
       },
     },
     alarms: {
@@ -186,6 +205,7 @@ async function bootBackground(): Promise<void> {
 beforeEach(() => {
   vi.useFakeTimers();
   store.data = {};
+  syncStore.data = {};
   settings.current = {
     extension_enabled: true,
     obs_enabled: true,
@@ -470,7 +490,7 @@ describe("частичная запись storage не пускает расще
     expect(res?.stage).toBe("password");
     // Главное: никакого подключения к НОВОМУ адресу со старым паролем.
     expect(FakeSocket.created, "нового сокета нет").toBe(0);
-    expect(store.data.obs_host, "адрес не записан — пара не расщеплена").toBeUndefined();
+    expect(syncStore.data.obs_host, "адрес не записан — пара не расщеплена").toBeUndefined();
   });
 
   test("адрес не записался — честный отказ, пара помечена несогласованной", async () => {
@@ -493,5 +513,29 @@ describe("частичная запись storage не пускает расще
     expect(res?.ok).toBe(false);
     expect(res?.stage).toBe("host");
     expect(FakeSocket.created, "к новому адресу не пошли").toBe(0);
+    expect(syncStore.data.obs_host, "адрес действительно не записался").toBeUndefined();
+    expect(store.data.obs_password, "а пароль — записан (порядок: пароль → адрес)").toBe("новый");
+  });
+});
+
+describe("адрес приехал по sync с другого устройства (ревью 27.08.2026)", () => {
+  test("к новому серверу со СВОИМ старым паролем не идём — рвём связь и ждём пароль", async () => {
+    await bootBackground();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+    FakeSocket.created = 0;
+
+    // Только host (пароль в sync не ходит — он local и остался прежним).
+    for (const fn of wiring.onSettings) fn({ obs_host: "ws://other-device:4455" });
+    await vi.advanceTimersByTimeAsync(300);
+    await flushMicrotasks();
+
+    expect(FakeSocket.created, "нового подключения нет").toBe(0);
+    const warns = vi
+      .mocked(log.warn)
+      .mock.calls.filter((c) => String(c[1]).includes("изменён на другом устройстве"));
+    expect(warns, "и пользователю есть что прочитать в журнале").toHaveLength(1);
   });
 });

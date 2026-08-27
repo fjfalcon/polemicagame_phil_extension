@@ -385,6 +385,10 @@ export async function finishSession(): Promise<void> {
     } catch {
       /* хвост не записался — хуже уже не сделаем */
     }
+    // Финальное вытеснение могло отметить потерю — ДОЖИДАЕМСЯ её записи:
+    // resetBuffer поднимает поколение, и отложенный RMW был бы отброшен
+    // gen-гейтом (ревью 27.08.2026).
+    await lossChain;
     resetBuffer();
   })();
   closing = run;

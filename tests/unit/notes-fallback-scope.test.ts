@@ -19,24 +19,13 @@ vi.mock("@core/env", () => ({
 }));
 vi.mock("@core/log", () => ({ log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("@core/messaging", () => ({ sendRuntime: vi.fn(async () => undefined), onMessage: vi.fn(() => () => undefined) }));
-import { MAX_OWN_NOTE_TEXT, normalizeNoteRecord, type NotesMap } from "@core/notes-store";
+import { MAX_OWN_NOTE_TEXT, type NotesMap } from "@core/notes-store";
+import { normalizeTouched } from "@content/features/player-notes";
 
-/** Тот же алгоритм, что в player-notes.commitNoteOps (фолбэк-ветка). */
-function fallbackMap(raw: NotesMap, touchedKeys: string[]): NotesMap {
-  const touched = new Set(touchedKeys);
-  const map: NotesMap = { ...raw };
-  for (const key of touched) {
-    const note = map[key];
-    if (note === undefined) continue;
-    const safe = normalizeNoteRecord(note, MAX_OWN_NOTE_TEXT);
-    if (!safe) {
-      delete map[key];
-      continue;
-    }
-    map[key] = safe;
-  }
-  return map;
-}
+// Гоняем НАСТОЯЩУЮ функцию продакшена (ревью 27.08.2026: копия алгоритма в
+// тесте не доказывает ничего о самом продукте).
+const fallbackMap = (raw: NotesMap, keys: string[]): NotesMap =>
+  normalizeTouched(raw, keys).map;
 
 describe("фолбэк трогает только затронутые записи", () => {
   test("чужая длинная заметка не режется при сохранении другой", () => {

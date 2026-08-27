@@ -825,24 +825,37 @@ document.addEventListener("DOMContentLoaded", () => {
         const applySettings = async (): Promise<number> => {
           if (!Object.keys(settingsPatch).length) return 0;
           try {
+            // Пара «адрес+пароль» НЕ едет общим setSettings (ревью
+            // 27.08.2026): частичный отказ local при успешном sync давал
+            // «новый адрес + старый пароль» ещё до всякой транзакции.
+            const endpointFromFile = {
+              host: typeof settingsPatch.obs_host === "string" ? settingsPatch.obs_host : undefined,
+              password:
+                typeof settingsPatch.obs_password === "string"
+                  ? settingsPatch.obs_password
+                  : undefined,
+            };
+            const endpointInFile =
+              endpointFromFile.host !== undefined || endpointFromFile.password !== undefined;
+            delete (settingsPatch as Record<string, unknown>).obs_host;
+            delete (settingsPatch as Record<string, unknown>).obs_password;
             await setSettings(settingsPatch as Partial<Settings>);
+            if (endpointInFile) {
+              const tx = await sendRuntime<{ ok?: boolean }>({
+                type: "obs_endpoint_set",
+                host: String(endpointFromFile.host ?? lastKnown?.obs_host ?? ""),
+                password: String(endpointFromFile.password ?? ""),
+              });
+              if (!tx || tx.ok !== true) {
+                showPopupToast(
+                  "Настройки OBS из файла не применились — проверьте адрес и пароль вручную",
+                  "error",
+                );
+              }
+            }
             const applied = await getSettings();
             lastKnown = applied;
             reflectPatch(applied);
-            // Импорт тоже меняет пару «адрес+пароль» — применяем транзакцией,
-            // а не через расщеплённые storage-события (ревью 27.08.2026).
-            if ("obs_host" in applied || "obs_password" in applied) {
-              const tx = await sendRuntime<{ ok?: boolean }>({
-                type: "obs_endpoint_set",
-                host: String(applied.obs_host ?? lastKnown?.obs_host ?? ""),
-                password: String(applied.obs_password ?? lastKnown?.obs_password ?? ""),
-              });
-              // Недоставка/отказ — не успех: восстановление настроек OBS не
-              // должно рапортовать «готово» (ревью 27.08.2026).
-              if (!tx || tx.ok !== true) {
-                showPopupToast("Настройки OBS из файла не применились — проверьте вручную", "error");
-              }
-            }
             const { obs_password: _pw, ...safe } = applied;
             void broadcastToGameTabs({ type: "updateNotesSettings", settings: safe });
             return Object.keys(settingsPatch).length;
@@ -1608,6 +1621,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 : "Настройки OBS не применились — повторите",
               "error",
             );
+            // Бросаем: вызывающий (ручной «Подключиться») не должен ехать
+            // дальше по НЕзаписанному намерению (ревью 27.08.2026).
+            throw new Error("obs endpoint transaction failed");
           } else {
             lastKnown = { ...lastKnown, obs_host: endpointPatch.host, obs_password: endpointPatch.password };
           }

@@ -954,6 +954,12 @@ class PlayerNotesManager {
         // «Записалось» и «записалось ЦЕЛИКОМ» — разные утверждения: галочка
         // «Сохранено ✓» поверх обрезанного текста и была молчаливой потерей
         // (ревью 27.08.2026).
+        if (res.ok && (typeof res.truncated !== "number" || typeof res.skipped !== "number")) {
+          // Контракт требует счётчики при успехе. Их отсутствие означает
+          // ответ чужой/старой версии — записать могли неполно, и молчать
+          // об этом нельзя (ревью 27.08.2026).
+          log.warn("player-notes", "координатор ответил успехом без счётчиков — полнота не подтверждена");
+        }
         this.warnOnLossyWrite(res);
         return res.ok;
       }
@@ -968,23 +974,10 @@ class PlayerNotesManager {
     // Нормализуем ТОЛЬКО затронутые записи (ревью 27.08.2026): полная
     // нормализация карты резала ЧУЖУЮ давнюю длинную заметку при сохранении
     // совсем другой — правка одного игрока портила данные другого.
-    const touched = new Set(ops.map((o) => o.key));
-    const map: NotesMap = { ...raw };
-    let truncated = 0;
-    let skipped = 0;
-    for (const key of touched) {
-      const note = map[key];
-      if (note === undefined) continue;
-      const safe = normalizeNoteRecord(note, MAX_OWN_NOTE_TEXT);
-      if (!safe) {
-        delete map[key];
-        skipped++;
-        continue;
-      }
-      const original = typeof note === "string" ? note : (note as { text?: unknown })?.text;
-      if (typeof original === "string" && original.length > safe.text.length) truncated++;
-      map[key] = safe;
-    }
+    const { map, truncated, skipped } = normalizeTouched(
+      raw,
+      ops.map((o) => o.key),
+    );
     const ok = await saveNotesToStore(map);
     if (ok) {
       this.notes = map;
@@ -4266,6 +4259,34 @@ let manager: PlayerNotesManager | null = null;
 /** Вызывается единым URL-роутером content/index.ts. */
 export function syncPlayerNotesRoute(isMatch: boolean): void {
   manager?.syncMatchPageRoute(isMatch);
+}
+
+/**
+ * Нормализация ТОЛЬКО затронутых записей для аварийной прямой записи
+ * (ревью 27.08.2026). Экспорт — тестовый шов: тест обязан гонять ЭТУ
+ * функцию, а не свою копию алгоритма.
+ */
+export function normalizeTouched(
+  raw: NotesMap,
+  keys: string[],
+): { map: NotesMap; truncated: number; skipped: number } {
+  const map: NotesMap = { ...raw };
+  let truncated = 0;
+  let skipped = 0;
+  for (const key of new Set(keys)) {
+    const note = map[key];
+    if (note === undefined) continue;
+    const safe = normalizeNoteRecord(note, MAX_OWN_NOTE_TEXT);
+    if (!safe) {
+      delete map[key];
+      skipped++;
+      continue;
+    }
+    const original = typeof note === "string" ? note : (note as { text?: unknown })?.text;
+    if (typeof original === "string" && original.length > safe.text.length) truncated++;
+    map[key] = safe;
+  }
+  return { map, truncated, skipped };
 }
 
 export const playerNotesFeature: Feature = {
