@@ -14,6 +14,9 @@ vi.mock("@core/env", () => ({
 
 import {
   MAX_PAGES,
+  completeHistory,
+  fetchFirstPage,
+  FULL_HISTORY_LIMIT,
   PAGE_SIZE,
   RECENT_LIMIT,
   crossGames,
@@ -243,113 +246,88 @@ describe("загрузка истории страницами", () => {
     vi.unstubAllGlobals();
   });
 
-  test("обычная история — ОДИН запрос, а не восемь (жалоба 13.08.2026)", async () => {
-    // Сервер отдаёт столько строк, сколько попросишь, и тратит на это одно и
-    // то же время: 200 строк — 1.98 с, 6000 строк — 2.38 с (замер 13.08.2026).
-    // Значит цена сводки — это ЧИСЛО запросов, и просить по 200 было платой
-    // ни за что: восемь ожиданий вместо одного.
-    const fetchMock = serve(1500);
+  test("вся история — ОДИН запрос с большим лимитом (замер 27.08.2026)", async () => {
+    // Живой замер на аккаунте 4969 игр: страницами 2000+2000+остаток — 2.6-2.8 с,
+    // одним запросом limit=8000 — 1.4 с при том же трафике. Платили за ЧИСЛО
+    // ожиданий, а не за объём.
+    const fetchMock = serve(4969);
     vi.stubGlobal("fetch", fetchMock);
     const h = await fetchHistory(1);
-    expect(fetchMock.mock.calls.length, "полторы тысячи игр обязаны уместиться в один запрос").toBe(
-      1,
-    );
+    expect(fetchMock.mock.calls.length, "одно ожидание вместо трёх").toBe(1);
     expect(new URL(fetchMock.mock.calls[0][0] as string).searchParams.get("limit")).toBe(
-      String(PAGE_SIZE),
+      String(FULL_HISTORY_LIMIT),
     );
-    expect(h?.rows).toHaveLength(1500);
+    expect(h?.rows).toHaveLength(4969);
+    expect(h?.truncated).toBe(false);
     vi.unstubAllGlobals();
   });
 
-  test("остальные страницы едут ОДНОВРЕМЕННО, а не одна за другой", async () => {
-    // Число страниц известно из totalCount уже с первой — ждать каждую по
-    // очереди незачем. Именно эта очередь и делала первую сводку получасовой
-    // на глазок: две истории по восемь ожиданий.
-    let live = 0;
-    let peak = 0;
-    const inner = serve(PAGE_SIZE * 3);
-    const fetchMock = vi.fn(async (url: string) => {
-      live++;
-      peak = Math.max(peak, live);
-      await Promise.resolve();
-      live--;
-      return inner(url);
-    });
-    vi.stubGlobal("fetch", fetchMock);
+  test("аккаунт длиннее лимита помечается честно", async () => {
+    vi.stubGlobal("fetch", serve(FULL_HISTORY_LIMIT + 500));
     const h = await fetchHistory(1);
-    expect(h?.rows).toHaveLength(PAGE_SIZE * 3);
-    expect(peak, "вторая и третья страницы обязаны лететь вместе").toBeGreaterThan(1);
-    vi.unstubAllGlobals();
-  });
-
-  test("чужую историю не копает глубже своей самой старой игры", async () => {
-    // Раньше самой старой своей игры пересекаться нечему по определению:
-    // лишние страницы — это лишние запросы на одно наведение мыши.
-    const fetchMock = serve(PAGE_SIZE * 3);
-    vi.stubGlobal("fetch", fetchMock);
-    const h = await fetchHistory(1, day(PAGE_SIZE - 100));
-    expect(fetchMock.mock.calls.length, "первой страницы уже хватило").toBe(1);
-    expect(h?.rows).toHaveLength(PAGE_SIZE);
-    expect(h?.truncated, "это не обрыв: глубже просто нечего искать").toBe(false);
-    vi.unstubAllGlobals();
-  });
-
-  test("строка без даты не обрывает листание и не выдаётся за полноту", async () => {
-    // Пустая дата меньше любой границы: раньше один такой ответ и
-    // останавливал загрузку, и помечал историю ПОЛНОЙ — недобор выглядел бы
-    // точным итогом (находка самопроверки 09.08.2026).
-    const fetchMock = vi.fn(async (url: string) => {
-      const page = Number(new URL(url).searchParams.get("page") ?? 1);
-      const rows = Array.from({ length: PAGE_SIZE }, (_, i) => ({
-        id: page * 1000 + i,
-        role: { type: "civilian" },
-        result: { code: "success" },
-        // У последней строки страницы даты нет — так бывает у битой записи.
-        date_start: i === PAGE_SIZE - 1 ? null : "2026-12-01 10:00:00",
-      }));
-      return { ok: true, json: async () => ({ rows, totalCount: PAGE_SIZE * 3 }) };
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const h = await fetchHistory(1, "2020-01-01 00:00:00");
-    expect(h?.rows, "листание продолжилось").toHaveLength(PAGE_SIZE * 3);
-    vi.unstubAllGlobals();
-  });
-
-  test("упёрлись в предел страниц — говорим об этом честно", async () => {
-    vi.stubGlobal("fetch", serve(PAGE_SIZE * (MAX_PAGES + 5)));
-    const h = await fetchHistory(1);
-    expect(h?.rows).toHaveLength(PAGE_SIZE * MAX_PAGES);
+    expect(h?.rows).toHaveLength(FULL_HISTORY_LIMIT);
+    // «Вместе 12» и «12 за доступный отрезок» — разные утверждения.
     expect(h?.truncated, "иначе число читается как полный итог").toBe(true);
     vi.unstubAllGlobals();
   });
 
-  test("обрыв посреди листания не выдаёт огрызок за полную историю", async () => {
-    const full = serve(PAGE_SIZE * 2);
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-      const page = Number(new URL(url).searchParams.get("page") ?? 1);
-      return page === 1 ? full(url) : { ok: false, status: 500 };
-    }));
-    const h = await fetchHistory(1);
-    expect(h?.rows).toHaveLength(PAGE_SIZE);
-    expect(h?.truncated).toBe(true);
+  test("докачка после МЕЛКОЙ страницы прогрева: один запрос, полный результат", async () => {
+    // Ночной прогрев берёт 200 строк; ховер обязан достроить до полной
+    // истории — тоже одним запросом, а не листанием.
+    const fetchMock = serve(3000);
+    vi.stubGlobal("fetch", fetchMock);
+    const first = await fetchFirstPage(1, 200);
+    expect(first?.rows).toHaveLength(200);
+    const full = await completeHistory(1, first!, undefined);
+    expect(fetchMock.mock.calls.length, "мелкая + одна полная").toBe(2);
+    expect(full.rows).toHaveLength(3000);
+    expect(full.truncated).toBe(false);
     vi.unstubAllGlobals();
   });
 
-  test("выпавшая страница не сшивается через дыру", async () => {
-    // Страницы теперь едут разом, и уцелевшая четвёртая соблазнительно
-    // «дополняет» историю без третьей. Так делать нельзя: самая старая игра
-    // такой истории — ложная граница для ЧУЖОЙ (её копали бы вглубь зря), а
-    // число совместных игр молча недобирает середину.
-    const full = serve(PAGE_SIZE * 4);
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-      const page = Number(new URL(url).searchParams.get("page") ?? 1);
-      return page === 3 ? { ok: false, status: 500 } : full(url);
-    }));
-    const h = await fetchHistory(1);
-    expect(h?.rows, "остановились на дыре, а не сшили четвёртую со второй").toHaveLength(
-      PAGE_SIZE * 2,
+  test("хватило мелкой страницы — второго запроса нет", async () => {
+    // Глубже самой старой игры соперника искать нечего: докачка не нужна.
+    const fetchMock = serve(3000);
+    vi.stubGlobal("fetch", fetchMock);
+    const first = await fetchFirstPage(1, 200);
+    const full = await completeHistory(1, first!, day(150));
+    expect(fetchMock.mock.calls.length, "первой страницы уже хватило").toBe(1);
+    expect(full.rows).toHaveLength(200);
+    expect(full.truncated, "это не обрыв: глубже просто нечего искать").toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  test("докачка не пришла — огрызок не выдаётся за полную историю", async () => {
+    const small = serve(3000);
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => (++call === 1 ? small(url) : { ok: false, status: 500 })),
     );
-    expect(h?.truncated).toBe(true);
+    const first = await fetchFirstPage(1, 200);
+    const full = await completeHistory(1, first!, undefined);
+    expect(full.rows).toHaveLength(200);
+    expect(full.truncated).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  test("строка без даты не выдаётся за достигнутую глубину", async () => {
+    // Пустая дата меньше любой границы: раньше один такой ответ помечал
+    // историю ПОЛНОЙ — недобор выглядел бы точным итогом.
+    const fetchMock = vi.fn(async (url: string) => {
+      const size = Number(new URL(url).searchParams.get("limit") ?? PAGE_SIZE);
+      const rows = Array.from({ length: Math.min(size, 200) }, (_, i) => ({
+        id: 1000 + i,
+        role: { type: "civilian" },
+        result: { code: "success" },
+        date_start: i === 199 ? null : "2026-12-01 10:00:00",
+      }));
+      return { ok: true, json: async () => ({ rows, totalCount: 3000 }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const first = await fetchFirstPage(1, 200);
+    await completeHistory(1, first!, "2020-01-01 00:00:00");
+    expect(fetchMock.mock.calls.length, "докачка всё равно пошла").toBe(2);
     vi.unstubAllGlobals();
   });
 

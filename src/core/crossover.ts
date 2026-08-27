@@ -201,9 +201,23 @@ export function parseGameRows(payload: unknown): { rows: GameRow[]; total: numbe
  */
 export const PAGE_SIZE = 2000;
 /**
+ * Полная история — ОДНИМ запросом (живой замер 27.08.2026, аккаунт 4969 игр):
+ *   страницами 2000+2000+остаток — 2.61–2.85 с;
+ *   один запрос limit=8000    — 1.41–1.48 с (−45%).
+ * Трафик тот же (~126 КБ gzip): платили мы за КОЛИЧЕСТВО ожиданий, а размер
+ * страницы на серверную задержку почти не влияет (limit=8 — те же ~1.1–1.5 с).
+ * Аккаунт длиннее лимита честно помечается truncated/capped.
+ */
+export const FULL_HISTORY_LIMIT = 8000;
+/**
  * Сколько страниц готовы взять на одного игрока. Четыре по две тысячи — это
  * 8000 игр: больше, чем у самого играющего аккаунта сайта (6196 на 13.08.2026),
  * так что оговорка про «доступный отрезок» теперь почти никому не достанется.
+ */
+/**
+ * Исторический потолок листания. С 9.44.0 история берётся одним запросом
+ * (FULL_HISTORY_LIMIT), и константа осталась как ДОКУМЕНТИРОВАННАЯ граница
+ * покрытия: 8000 строк — больше, чем у самого играющего аккаунта сайта.
  */
 export const MAX_PAGES = 4;
 /** Страница теперь тяжелее (сотни КБ), и на медленной связи нужен запас. */
@@ -277,28 +291,27 @@ export async function completeHistory(
   userId: number | string,
   first: { rows: GameRow[]; total: number },
   until?: string,
-  maxPages = MAX_PAGES,
 ): Promise<History> {
-  const rows = [...first.rows];
-  const done = (truncated: boolean): History => ({ rows, total: first.total, truncated });
-  // Пустая первая страница при ненулевом счётчике — сервер темнит; листать
-  // такое бессмысленно, но и полнотой называть нельзя.
-  if (rows.length === 0 || rows.length >= first.total) return done(rows.length < first.total);
-  if (reachedDepth(rows, until)) return done(false);
+  const done = (rows: GameRow[], total: number, truncated: boolean): History => ({
+    rows,
+    total,
+    truncated,
+  });
+  // Пустая первая страница при ненулевом счётчике — сервер темнит; тянуть
+  // ещё бессмысленно, но и полнотой называть нельзя.
+  if (first.rows.length === 0) return done(first.rows, first.total, first.total > 0);
+  if (first.rows.length >= first.total) return done(first.rows, first.total, false);
+  // Хватило ли уже имеющегося отрезка (мелкая страница прогрева): глубже
+  // самой старой игры соперника пересекаться не с чем.
+  if (reachedDepth(first.rows, until)) return done(first.rows, first.total, false);
 
-  const pages = Math.min(maxPages, Math.ceil(first.total / PAGE_SIZE));
-  const rest = await Promise.all(
-    Array.from({ length: pages - 1 }, (_, i) => fetchPage(userId, i + 2)),
-  );
-  for (const page of rest) {
-    // Обрыв посреди листания — не выдумываем. Останавливаемся на ПЕРВОМ же:
-    // дыра в середине сделала бы «самую старую игру» ложной границей для
-    // второй истории, а число общих игр — молчаливым недобором.
-    if (!page || page.rows.length === 0) return done(true);
-    rows.push(...page.rows);
-    if (reachedDepth(rows, until)) return done(false);
-  }
-  return done(rows.length < first.total);
+  // ОДИН запрос вместо листания страницами (замер 27.08.2026: −45% времени
+  // при том же трафике). Результат заменяет первую страницу целиком: он её
+  // надмножество, склеивать нечего — а значит нет и «дыры в середине»,
+  // из-за которой прежний листающий путь обрывался с truncated.
+  const full = await fetchPage(userId, 1, FULL_HISTORY_LIMIT);
+  if (!full || full.rows.length === 0) return done(first.rows, first.total, true);
+  return done(full.rows, full.total, full.rows.length < full.total);
 }
 
 /**
@@ -311,11 +324,11 @@ export async function completeHistory(
 export async function fetchHistory(
   userId: number | string,
   until?: string,
-  maxPages = MAX_PAGES,
 ): Promise<History | null> {
-  const first = await fetchFirstPage(userId);
-  if (!first) return null;
-  return completeHistory(userId, first, until, maxPages);
+  void until; // одним запросом берём всё доступное — отсечка глубины не нужна
+  const page = await fetchPage(userId, 1, FULL_HISTORY_LIMIT);
+  if (!page) return null;
+  return { rows: page.rows, total: page.total, truncated: page.rows.length < page.total };
 }
 
 /** Самая старая дата в истории — граница, глубже которой искать нечего. */

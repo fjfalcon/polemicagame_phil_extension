@@ -331,7 +331,9 @@ describe("прогрев пересечений", () => {
     // стоил до 4×2000 строк на игрока.
     const gameLimits = askedLimits.filter((l) => l > 0);
     expect(gameLimits.length).toBeGreaterThan(0);
-    for (const l of gameLimits) expect(l).toBeLessThanOrEqual(2000); // своя история — полная (общий кэш)
+    // Своя история — одним большим запросом (9.44.0: −45% времени), чужая в
+    // прогреве — мелкой страницей; ховер докачает точную.
+    expect(gameLimits, "своя история — один запрос на всю глубину").toContain(8000);
     const theirLimit = askedLimits[askedLimits.length - 1];
     expect(theirLimit, "чужая история в прогреве — мелкая страница").toBe(200);
   });
@@ -527,6 +529,70 @@ describe("окно последних игр", () => {
     await start({ last_games_count: "8", last_games_first_killed: true });
     const html = await hover();
     expect(html.match(/ПУ/g) ?? [], "одна игра из двух — его").toHaveLength(1);
+  });
+
+  test("список показывается ДО разборов, «ПУ» дорисовывается поверх (замер 27.08)", async () => {
+    // Раньше UI ждал обе стадии подряд (список + ~0.57 с разборов). Разборы
+    // держим на гейте — так «ещё в полёте» наблюдаемо, а не вопрос тайминга.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    urls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        if (url.includes("/ratings/default/get-list")) {
+          return { ok: true, json: async () => [{ user_id: 11, username: "Alpha" }] };
+        }
+        if (url.includes("/profile/default/get-games")) {
+          return { ok: true, json: async () => ({ rows: [game(101)], totalCount: 1 }) };
+        }
+        if (/\/match\/\d+/.test(url)) {
+          await gate; // разбор матча «едет»
+          return {
+            ok: true,
+            text: async () => `<Gamestats :game-data='{"id": 101, "firstKilled": 11}'></Gamestats>`,
+          };
+        }
+        return { ok: false, status: 404 };
+      }) as unknown as typeof fetch,
+    );
+    await start({ last_games_count: "8", last_games_first_killed: true });
+    fire([rec({ target: document.body, added: [document.querySelector(".player") as Node] })]);
+    await vi.advanceTimersByTimeAsync(1);
+    const button = document.querySelector("#p0 .last-games-button") as HTMLElement;
+    const tip = button.querySelector(".pn-tooltip") as HTMLElement;
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(400);
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(1);
+    const early = tip.innerHTML;
+    expect(early, "игры уже видны, пока разборы в полёте").toContain("-28");
+    expect(early, "а «ПУ» ещё нет — не ждём его").not.toContain("ПУ");
+    // Разборы доехали — пометка появляется поверх БЕЗ нового наведения.
+    release();
+    for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(1);
+    expect(tip.innerHTML, "дорисовалось прогрессивно").toContain("ПУ");
+  });
+
+  test("повторное наведение показывает кэш МГНОВЕННО, без 350 мс намерения", async () => {
+    serveGames([game(101)], { "101": "11" });
+    await start({ last_games_count: "8", last_games_first_killed: true });
+    // Ссылку на тултип берём ДО первого наведения: показ уносит его порталом.
+    fire([rec({ target: document.body, added: [document.querySelector(".player") as Node] })]);
+    await vi.advanceTimersByTimeAsync(1);
+    const button = document.querySelector("#p0 .last-games-button") as HTMLElement;
+    const tip = button.querySelector(".pn-tooltip") as HTMLElement;
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(400);
+    for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(1);
+    expect(tip.innerHTML, "первый заход прогрел кэш").toContain("-28");
+
+    button.dispatchEvent(new MouseEvent("mouseleave"));
+    tip.innerHTML = "";
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    // НИ ОДНОГО тика таймеров: содержимое обязано быть уже на экране.
+    expect(tip.innerHTML, "кэш-хит рисуется синхронно").toContain("-28");
+    expect(tip.innerHTML).not.toContain("Загрузка");
   });
 
   test("матч не разобрался — пометки нет ВОВСЕ", async () => {

@@ -478,6 +478,8 @@ class PlayerNotesManager {
    * — коротко, иначе сетевая икота замораживала бы «не удалось» на полчаса.
    */
   private crossoverCache = new Map<string, { at: number; ttl: number; data: Crossover | null; shallow?: boolean }>();
+  /** Кто ждёт дорисовки «ПУ» по игроку (тултип открыт прямо сейчас). */
+  private lastGamesProgress = new Map<string, (games: LastGameEntry[]) => void>();
   private crossoverInFlight = new Map<string, Promise<Crossover | null | undefined>>();
   /** Прогрев занят одним игроком — по одному за проход, без залпа. */
   private warmBusy = false;
@@ -2270,6 +2272,17 @@ class PlayerNotesManager {
     tooltip.style.cssText = TOOLTIP_CSS;
 
     let intent: ReturnType<typeof setTimeout> | null = null;
+    const key = username.toLowerCase();
+    const paintGames = (games: LastGameEntry[] | null): void => {
+      if (tooltip.dataset.pnShown !== "1") return;
+      tooltip.innerHTML =
+        games === null
+          ? "Не удалось загрузить историю игр"
+          : games.length > 0
+            ? this.formatGamesHistory(games)
+            : "Нет данных о последних играх";
+      this.showTooltip(tooltip, button);
+    };
     const load = async (): Promise<void> => {
       const games = await this.getLastGames(username);
       // Курсор мог уйти до ответа — скрытый тултип не трогаем (запись DOM
@@ -2286,6 +2299,21 @@ class PlayerNotesManager {
     };
 
     button.addEventListener("mouseenter", () => {
+      // Дорисовка «ПУ» по мере готовности разборов (п.4): пока тултип открыт,
+      // он подписан на обновление того же списка.
+      this.lastGamesProgress.set(key, paintGames);
+      // Готовый список — мгновенно (п.6): 350 мс намерения нужны только
+      // перед ЕЩЁ НЕ начатыми дорогими запросами.
+      const ready = this.peekLastGames(username);
+      if (ready) {
+        // Сначала ПОКАЗАТЬ, потом красить: paintGames молчит при скрытом
+        // тултипе (страж записи в невидимый DOM), и кэш-хит рисовал пустоту
+        // — поймано тестом «кэш-хит рисуется синхронно».
+        tooltip.innerHTML =
+          ready.length > 0 ? this.formatGamesHistory(ready) : "Нет данных о последних играх";
+        this.showTooltip(tooltip, button);
+        return;
+      }
       tooltip.innerHTML = "Загрузка...";
       this.showTooltip(tooltip, button);
       // Задержка намерения — ТОЛЬКО когда включён «ПУ»: с ним окно стоит
@@ -2306,6 +2334,7 @@ class PlayerNotesManager {
         clearTimeout(intent);
         intent = null;
       }
+      this.lastGamesProgress.delete(key);
       this.hideTooltip(tooltip);
     });
 
@@ -3442,6 +3471,33 @@ class PlayerNotesManager {
    * иначе. `null` — не удалось загрузить историю; пустая сводка читалась бы
    * как «вы никогда не играли вместе», а это другое утверждение.
    */
+  /**
+   * Готовая ПОЛНАЯ сводка из кэша — синхронно (замер 27.08.2026, п.2):
+   * повторное наведение платило фиксированные 350 мс намерения, хотя
+   * данные уже лежали. null — нечего показать сразу.
+   */
+  private peekCrossover(username: string): Crossover | null {
+    const hit = this.crossoverCache.get(username.toLowerCase());
+    if (!hit || Date.now() - hit.at >= hit.ttl || !hit.data) return null;
+    return hit.data;
+  }
+
+  /** Мелкая (прогревочная) сводка из кэша — её показываем сразу, п.3. */
+  private peekShallowCrossover(username: string): Crossover | null {
+    const hit = this.crossoverCache.get(username.toLowerCase());
+    if (!hit || Date.now() - hit.at >= hit.ttl || !hit.data || !hit.shallow) return null;
+    return hit.data;
+  }
+
+  /** Готовый список последних игр из кэша — синхронно (п.6). */
+  private peekLastGames(username: string): LastGameEntry[] | null {
+    const key = username.toLowerCase();
+    const cached = this.lastGamesCache.get(key);
+    const at = this.gamesFetchedAt.get(key) ?? 0;
+    if (!cached || Date.now() - at >= STATS_TTL_MS) return null;
+    return cached;
+  }
+
   private getCrossover(
     username: string,
     /** Ночной прогрев: мелкая сводка первой страницей (PERF26-3) — полный
@@ -3499,6 +3555,23 @@ class PlayerNotesManager {
         return { id, first: await fetchFirstPage(id, shallow ? WARM_PAGE_LIMIT : undefined) };
       })();
       const [mine, start] = await Promise.all([this.getMyHistory(myId), theirs]);
+      // Первые строки уже скачанной истории — это и есть «последние игры»
+      // (замер 27.08.2026, п.5: их выбрасывали, а потом качали заново).
+      // Кладём в кэш ТОЛЬКО если там пусто: живой ховер мог уже дополнить
+      // список пометками «ПУ», затирать их нельзя.
+      if (start.first && start.first.rows.length > 0 && !this.peekLastGames(username)) {
+        const limit = lastGamesLimit(this.settings.last_games_count);
+        this.lastGamesCache.set(
+          key,
+          start.first.rows.slice(0, limit).map((r) => ({
+            id: r.id,
+            role: r.role === "don" ? "godfather" : r.role,
+            isWin: r.win,
+            mmrChange: typeof r.mmrDiff === "number" ? r.mmrDiff : 0,
+          })),
+        );
+        this.gamesFetchedAt.set(key, Date.now());
+      }
       let data: Crossover | null = null;
       if (mine && start.first) {
         if (shallow) {
@@ -3566,24 +3639,36 @@ class PlayerNotesManager {
     tooltip.style.cssText = TOOLTIP_CSS;
 
     let intent: ReturnType<typeof setTimeout> | null = null;
-    button.addEventListener("mouseenter", () => {
-      tooltip.innerHTML = "Загрузка...";
+    const paint = (data: Crossover | null | undefined): void => {
+      if (tooltip.dataset.pnShown !== "1") return;
+      tooltip.innerHTML =
+        data === undefined
+          ? "Не удалось определить твой профиль — открой страницу поиска игры, и он запомнится"
+          : data === null
+            ? "Не удалось посчитать пересечения"
+            : formatCrossover(data);
       this.showTooltip(tooltip, button);
-      // Задержка намерения: сводка стоит ДВУХ историй по 200 игр, и курсор,
+    };
+    button.addEventListener("mouseenter", () => {
+      // Готовая ПОЛНАЯ сводка — мгновенно, без «Загрузка…» и без намерения
+      // (замер 27.08.2026, п.2: повторный ховер платил 350 мс ни за что).
+      const ready = this.peekCrossover(username);
+      if (ready) {
+        tooltip.innerHTML = formatCrossover(ready);
+        this.showTooltip(tooltip, button);
+        return;
+      }
+      // Мелкая сводка ночного прогрева — показываем СРАЗУ (в ней уже стоит
+      // честная пометка «учтён доступный отрезок»), а точную докачиваем
+      // после намерения и дорисовываем поверх (п.3).
+      const shallow = this.peekShallowCrossover(username);
+      tooltip.innerHTML = shallow ? formatCrossover(shallow) : "Загрузка...";
+      this.showTooltip(tooltip, button);
+      // Задержка намерения: точная сводка стоит двух историй, и курсор,
       // мазнувший по столу, не должен поднимать десяток таких пар.
       intent = setTimeout(() => {
         intent = null;
-        void (async () => {
-          const data = await this.getCrossover(username);
-          if (tooltip.dataset.pnShown !== "1") return;
-          tooltip.innerHTML =
-            data === undefined
-              ? "Не удалось определить твой профиль — открой страницу поиска игры, и он запомнится"
-              : data === null
-                ? "Не удалось посчитать пересечения"
-                : formatCrossover(data);
-          this.showTooltip(tooltip, button);
-        })();
+        void this.getCrossover(username).then(paint);
       }, HOVER_INTENT_MS);
     });
     button.addEventListener("mouseleave", () => {
@@ -3662,7 +3747,18 @@ class PlayerNotesManager {
               mmrChange: parseInt(game.mmr?.mmr_diff, 10) || 0,
             }),
           );
-          await this.markFirstKilled(entries, userId);
+          // ПУ НЕ ждём: список готов уже сейчас (замер 27.08.2026, п.4 —
+          // пользователь ждал обе стадии подряд, ~0.57 с лишних). Разборы
+          // матчей дорисовывают пометки поверх, когда доедут.
+          if (this.settings.last_games_first_killed !== false) {
+            void this.markFirstKilled(entries, userId)
+              .then(() => {
+                this.lastGamesCache.set(key, entries);
+                const cb = this.lastGamesProgress.get(key);
+                if (cb) cb(entries);
+              })
+              .catch(() => undefined);
+          }
           return entries;
         } catch (err) {
           log.warn("player-notes", "fetching games history failed", err);
