@@ -61,6 +61,7 @@ import {
   record,
   resetBuffer,
   startSession,
+  finishSession,
   droppedCount,
   sweepStorage,
   sanitizeFrame,
@@ -238,6 +239,49 @@ describe("PERF26-4: учёт, backpressure, поколение (перф-ауд�
     storage.set.mockImplementation(async (items: Record<string, unknown>) => {
       for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
     });
+  });
+});
+
+describe("честность лога (ревью 27.08.2026)", () => {
+  const frame2 = (chars: number) => "42[\"x\"," + "a".repeat(Math.max(0, chars - 10)) + "]";
+
+  test("clearAll при отказе хранилища возвращает false — тост не соврёт", async () => {
+    storage.data.set(`${WS_LOG_PREFIX}x:0`, { at: Date.now(), frames: [] });
+    const orig = (browser.storage.local as unknown as { remove: ReturnType<typeof vi.fn> }).remove;
+    (browser.storage.local as unknown as { remove: ReturnType<typeof vi.fn> }).remove =
+      vi.fn(async () => {
+        throw new Error("storage busy");
+      });
+    try {
+      expect(await clearAll()).toBe(false);
+    } finally {
+      (browser.storage.local as unknown as { remove: unknown }).remove = orig;
+    }
+    expect(await clearAll(), "исправное хранилище — честное true").toBe(true);
+  });
+
+  test("выключение сразу после перегрузки: файл всё равно говорит о потере", async () => {
+    // Маркер уезжал только со СЛЕДУЮЩИМ принятым куском — при немедленном
+    // выключении экспорт молчал о дропе.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    storage.set.mockImplementation(async (items: Record<string, unknown>) => {
+      await gate;
+      for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
+    });
+    const framesPerChunk = Math.ceil(200_000 / MAX_FRAME_CHARS) + 1;
+    for (let c = 0; c < 12; c++) {
+      for (let i = 0; i < framesPerChunk; i++) record("in", frame2(MAX_FRAME_CHARS + 100));
+    }
+    expect(droppedCount(), "перегрузка случилась").toBeGreaterThan(0);
+    release();
+    storage.set.mockReset();
+    storage.set.mockImplementation(async (items: Record<string, unknown>) => {
+      for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
+    });
+    await finishSession();
+    const { dropped } = await collectAll();
+    expect(dropped, "число отброшенных доехало до файла").toBeGreaterThan(0);
   });
 });
 

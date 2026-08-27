@@ -135,6 +135,21 @@ describe("зачисление DOM-подписчиков (§4, механика
     expect(stale, "устаревшее исключение — убери строку, список должен быть честным").toEqual([]);
   });
 
+  test("число подписок ЗАПИНЕНО и у покрытых харнесом файлов", () => {
+    // Симметрия с exempt-пинами (ревью 27.08.2026): вторая подписка в
+    // покрытом файле проходила молча — сценарий харнеса гоняет только
+    // первую, и новая жила бы без fixpoint-проверки.
+    const COVERED_COUNTS: Record<string, number> = {
+      "src/content/features/profile-crossover.ts": 1,
+      "src/content/features/profile-mmr-chart.ts": 1,
+    };
+    const actual = domSubscribers();
+    const drift = Object.entries(COVERED_COUNTS)
+      .filter(([f, n]) => actual.get(f) !== n)
+      .map(([f, n]) => `${f}: было ${n}, стало ${actual.get(f) ?? 0}`);
+    expect(drift, "новая подписка в покрытом файле требует сценария в харнесе").toEqual([]);
+  });
+
   test("харнес реально покрывает хотя бы то, что обещает", () => {
     // Страж стража: если dom-fixpoint переименуют/выпотрошат, «покрытие»
     // не должно молча стать пустым при зелёном зачислении.

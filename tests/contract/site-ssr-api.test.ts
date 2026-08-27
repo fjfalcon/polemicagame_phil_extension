@@ -107,6 +107,10 @@ describe("вложенные формы HTTP API", () => {
       return;
     }
     const p = (withPlayers.players as Array<Record<string, unknown>>)[0];
+    // MMR проверяем ЯВНО (ревью 27.08.2026: заголовок обещал его, а проверка
+    // молчала). На нём стоит статистика игроков — молчаливая пропажа поля
+    // обнулила бы цифры в тултипах, а контракт бы этого не заметил.
+    expect(typeof p.mmr, "players[0].mmr — число").toBe("number");
     expect(p, "players[0] несёт id и username").toMatchObject({
       id: expect.anything(),
       username: expect.any(String),

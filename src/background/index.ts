@@ -767,8 +767,9 @@ async function runUpgradeMigrations(): Promise<void> {
       }
       await browser.storage.local.set({ pn_twitch_panel_restored_v1: true });
     }
-    // SEC26-1: уже засинканный obs_host мог нести креды/токен в URL —
-    // разово нормализуем (дальше их не пропускает санитайзер попапа).
+    // SEC26-1: уже засинканный obs_host мог нести креды/токен в URL. Чтение
+    // их и так не пропускает (граница getSettings, 27.08.2026), но диск
+    // чистим разово — чтобы секрет не лежал в облаке мёртвым грузом.
     const hostBag = (await browser.storage.sync.get("obs_host")) as { obs_host?: string };
     if (typeof hostBag.obs_host === "string") {
       const clean = sanitizeObsHost(hostBag.obs_host);

@@ -45,6 +45,12 @@ import { classifyMergeResponse, runCoordinatorImport, runImportFallback } from "
 import { sanitizeObsHost } from "@shared/safe-endpoint";
 
 /** Сколько игр с метками ролей принимаем из чужого файла (у фичи лимит 50). */
+/**
+ * Потолок игр в метках ролей ПОСЛЕ слияния (ревью 27.08.2026): раньше
+ * лимит считал только НОВЫЕ игры, и 50 существующих + 50 из файла давали
+ * 100 до следующей штатной подрезки. Значение совпадает с MAX_GAMES
+ * роль-маркера (src/content/features/role-marker.ts).
+ */
 const MAX_IMPORT_ROLE_GAMES = 50;
 /** Потолок меток в одной игре: за столом 10–12 человек, не десятки тысяч. */
 const MAX_IMPORT_MARKS_PER_GAME = 40;
@@ -281,8 +287,11 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch {
       /* вкладок нет — чистить больше нечего */
     }
-    await wsLog.clearAll();
-    showPopupToast("Полный лог очищен");
+    const cleared = await wsLog.clearAll();
+    showPopupToast(
+      cleared ? "Полный лог очищен" : "Не удалось очистить — хранилище браузера отказало",
+      cleared ? undefined : "error",
+    );
   });
 
   // ───────────────────────── Проверка обновления вручную ─────────────────────────
@@ -741,12 +750,8 @@ document.addEventListener("DOMContentLoaded", () => {
             );
             if (!ok) for (const k of risky) delete settingsPatch[k];
           }
-          // Импорт-путь обязан пройти тот же санитайзер, что и сохранение
-          // (adversarial 27.08, HIGH-1): чужой бэкап с кредами в obs_host
-          // иначе клал их в sync до ближайшего обновления расширения.
-          if (typeof settingsPatch.obs_host === "string") {
-            settingsPatch.obs_host = sanitizeObsHost(settingsPatch.obs_host);
-          }
+          // Санитайзер obs_host живёт НА ГРАНИЦЕ settings (setSettings /
+          // getSettings, ревью 27.08.2026) — здесь дублировать не нужно.
           // Смена адреса OBS = другой сервер: старый пароль ему не отдаём.
           if (
             typeof settingsPatch.obs_host === "string" &&
@@ -775,7 +780,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Палитра и мьюты (см. экспорт): восстанавливаем объединением, чтобы
         // импорт не стирал то, что уже есть у пользователя.
-        const applyExtras = async (): Promise<{ marksTruncated: boolean }> => {
+        const applyExtras = async (): Promise<{ marksTruncated: boolean; failed: boolean }> => {
           let marksTruncated = false;
           const tags = Array.isArray(data?.customTags)
             ? (data.customTags as unknown[]).filter(isSafeTag)
@@ -787,7 +792,7 @@ document.addEventListener("DOMContentLoaded", () => {
             : [];
           const hasMarks =
             !!data?.roleMarks && typeof data.roleMarks === "object" && !Array.isArray(data.roleMarks);
-          if (!tags.length && !muted.length && !hasMarks) return { marksTruncated };
+          if (!tags.length && !muted.length && !hasMarks) return { marksTruncated, failed: false };
           try {
             const cur = (await browser.storage.local.get({
               [TAGS_KEY]: [],
@@ -818,13 +823,17 @@ document.addEventListener("DOMContentLoaded", () => {
               // при следующей записи метки, а присланный файл мог влить
               // тысячи ключей в storage.local, квота которого общая с
               // заметками (ревью аудита lifecycle, находка 3).
-              let addedGames = 0;
+              // Считаем ИТОГ, а не прибавку: потолок общий с runtime-подрезкой.
+              let totalGames = Object.keys(merged).length;
               // Агрегатные потолки (SEC26-6): пер-ключевые лимиты не мешали
               // одной «игре» нести десятки тысяч записей и съесть остаток
               // квоты, общей с заметками.
               let addedBytes = 0;
               for (const [game, marks] of Object.entries(incomingMarks as Record<string, unknown>)) {
-                if (addedGames >= MAX_IMPORT_ROLE_GAMES) break;
+                if (totalGames >= MAX_IMPORT_ROLE_GAMES) {
+                  marksTruncated = true;
+                  break;
+                }
                 if (addedBytes >= MAX_IMPORT_ROLE_BYTES) break;
                 if (typeof game !== "string" || game.length > 200) continue;
                 if (!marks || typeof marks !== "object" || Array.isArray(marks)) continue;
@@ -846,27 +855,27 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Пустая игра слот не занимает (adversarial 27.08, №9).
                 if (perGame === 0) continue;
                 merged[game] = clean;
-                addedGames++;
+                totalGames++;
               }
-              if (
-                addedGames >= MAX_IMPORT_ROLE_GAMES &&
-                Object.keys(incomingMarks as Record<string, unknown>).length > addedGames
-              ) {
-                marksTruncated = true;
-              }
+
               patch.roleMarks = merged;
             }
             await browser.storage.local.set(patch);
           } catch (e) {
             log.error(SCOPE, "extras import failed", e);
+            // Тост обязан сказать правду: палитра/мьюты/метки не сохранены
+            // (ревью 27.08.2026 — раньше провал был виден только в логе).
+            return { marksTruncated, failed: true };
           }
-          return { marksTruncated };
+          return { marksTruncated, failed: false };
         };
 
         if (Object.keys(incoming).length === 0) {
           const restoredSettings = await applySettings();
           const extras = await applyExtras();
-          const cut = extras.marksTruncated ? " (метки ролей обрезаны потолками файла)" : "";
+          const cut =
+            (extras.marksTruncated ? " (метки ролей обрезаны потолками файла)" : "") +
+            (extras.failed ? " — палитра/мьюты/метки НЕ сохранены" : "");
           showPopupToast(
             restoredSettings
               ? `Восстановлено настроек: ${restoredSettings}. Заметок в файле нет${cut}`
@@ -999,9 +1008,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const notesMsg = replacedFinal
           ? `Добавлено: ${addedFinal}, обновлено: ${replacedFinal}`
           : `Импортировано заметок: ${addedFinal}`;
-        const cutMain = extras.marksTruncated ? " (метки ролей обрезаны потолками файла)" : "";
+        const cutMain =
+          (extras.marksTruncated ? " (метки ролей обрезаны потолками файла)" : "") +
+          (extras.failed ? " — палитра/мьюты/метки НЕ сохранены" : "");
         showPopupToast(
           (restoredSettings ? `${notesMsg}; настроек: ${restoredSettings}` : notesMsg) + cutMain,
+          extras.failed ? "error" : undefined,
         );
       } catch (e) {
         log.error(SCOPE, "import failed", e);

@@ -310,6 +310,16 @@ export async function finishSession(): Promise<void> {
   const run = (async () => {
     try {
       await flushNow();
+      // Хвост отброшенных, не уехавший ни в один принятый кусок: без этого
+      // «выключил сразу после перегрузки» давал файл, молчащий о потере
+      // (ревью 27.08.2026). Пустой кусок-маркер — только с числом.
+      const unreported = droppedByBackpressure - reportedDrops;
+      if (unreported > 0) {
+        reportedDrops = droppedByBackpressure;
+        const gen = generation;
+        const payload = { at: Date.now(), frames: [] as WsFrame[], dropped: unreported };
+        await writeChunk(payload, JSON.stringify(payload).length, gen);
+      }
     } catch {
       /* хвост не записался — хуже уже не сделаем */
     }
@@ -437,15 +447,21 @@ export async function collectAll(): Promise<{ frames: WsFrame[]; dropped: number
   }
 }
 
-/** Стереть всё сохранённое (кнопка «Очистить» в попапе). */
-export async function clearAll(): Promise<void> {
+/**
+ * Стереть всё сохранённое (кнопка «Очистить» в попапе).
+ * Возвращает false, если хранилище отказало: тост обязан сказать правду,
+ * а не рапортовать «очищен» поверх оставшегося на диске (ревью 27.08.2026).
+ */
+export async function clearAll(): Promise<boolean> {
   resetBuffer();
   try {
     const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
     const keys = Object.keys(all).filter(k => k.startsWith(WS_LOG_PREFIX));
     if (keys.length > 0) await browser.storage.local.remove(keys);
-  } catch {
-    /* нечего чистить или хранилище недоступно */
+    return true;
+  } catch (e) {
+    log.warn(SCOPE, "очистка полного лога не удалась", e);
+    return false;
   }
 }
 

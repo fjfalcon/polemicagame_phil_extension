@@ -22,7 +22,8 @@ vi.mock("@core/log", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { DEFAULT_SETTINGS, onSettingsChanged } from "@core/settings";
+import { DEFAULT_SETTINGS, getSettings, onSettingsChanged, setSettings } from "@core/settings";
+import { browser } from "@core/env";
 
 beforeEach(() => {
   state.listener = null;
@@ -69,5 +70,28 @@ describe("Firefox-compatible settings changes", () => {
     state.listener?.({ playerNotes: { oldValue: {}, newValue: { Alice: "x" } } }, "local");
     state.listener?.({ obs_enabled: { oldValue: false, newValue: true } }, "managed");
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe("граница настроек чистит секреты в obs_host (ревью 27.08.2026)", () => {
+  const local = browser.storage.local as unknown as { get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
+  const sync = browser.storage.sync as unknown as { get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
+
+  test("ЗАПИСЬ: креды не доезжают до storage, каким бы кодом ни принесены", async () => {
+    sync.set.mockResolvedValue(undefined);
+    local.set.mockResolvedValue(undefined);
+    await setSettings({ obs_host: "ws://admin:hunter2@10.0.0.5:4455/?token=SECRET" } as never);
+    const written = sync.set.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(written.obs_host).toBe("ws://10.0.0.5:4455");
+    expect(JSON.stringify(written)).not.toContain("hunter2");
+    expect(JSON.stringify(written)).not.toContain("SECRET");
+  });
+
+  test("ЧТЕНИЕ: грязный sync (второе устройство, коррупция) не утекает в экспорт", async () => {
+    // Санитайзер на call sites этого не ловил: writer мог быть любой.
+    sync.get.mockResolvedValue({ obs_host: "ws://user:pass@host:4455/?token=T" });
+    local.get.mockResolvedValue({});
+    const s = await getSettings();
+    expect(s.obs_host).toBe("ws://host:4455");
   });
 });

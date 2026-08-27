@@ -6,6 +6,7 @@
  * в облачную синхронизацию аккаунта (фикс прежнего поведения).
  */
 import { browser } from "./env";
+import { sanitizeObsHost } from "@shared/safe-endpoint";
 import { log } from "./log";
 import { DEFAULT_CUSTOM_COLOR } from "@shared/button-theme";
 import { DEFAULT_LAST_GAMES_COUNT } from "@shared/last-games";
@@ -156,6 +157,21 @@ function splitDefaults() {
   return { sync, local };
 }
 
+/**
+ * Нормализация значений НА ГРАНИЦЕ слоя настроек (ревью 27.08.2026).
+ *
+ * Раньше `sanitizeObsHost` стоял на трёх вызывающих (сохранение попапа,
+ * импорт бэкапа, разовая миграция) — то есть на call sites, а не на
+ * границе: любой новый писатель, грязный sync со второго устройства или
+ * порча хранилища снова вынесли бы логин/пароль/токен из URL в облако и
+ * в файл экспорта. Теперь чистим и на ЗАПИСИ, и на ЧТЕНИИ: чтение
+ * покрывает уже испорченное хранилище, ничего не переписывая на диск.
+ */
+function sanitizeSettingValue<K extends string>(key: K, value: unknown): unknown {
+  if (key === "obs_host" && typeof value === "string") return sanitizeObsHost(value);
+  return value;
+}
+
 /** Прочитать все настройки (с дефолтами). */
 export async function getSettings(): Promise<Settings> {
   const { sync, local } = splitDefaults();
@@ -163,14 +179,21 @@ export async function getSettings(): Promise<Settings> {
     browser.storage.sync.get(sync),
     browser.storage.local.get(local),
   ]);
-  return { ...DEFAULT_SETTINGS, ...(s as object), ...(l as object) } as Settings;
+  const merged = { ...DEFAULT_SETTINGS, ...(s as object), ...(l as object) } as Record<
+    string,
+    unknown
+  >;
+  // Грязное значение из sync (второе устройство до миграции, коррупция) не
+  // должно доехать ни до экспорта, ни до UI.
+  merged.obs_host = sanitizeSettingValue("obs_host", merged.obs_host);
+  return merged as unknown as Settings;
 }
 
 /** Прочитать одну настройку. */
 export async function getSetting<K extends SettingKey>(key: K): Promise<Settings[K]> {
   const area = isLocal(key) ? browser.storage.local : browser.storage.sync;
   const res = await area.get({ [key]: DEFAULT_SETTINGS[key] });
-  return res[key] as Settings[K];
+  return sanitizeSettingValue(key, res[key]) as Settings[K];
 }
 
 /** Записать частичный патч настроек (секреты автоматически уйдут в local). */
@@ -178,7 +201,9 @@ export async function setSettings(patch: Partial<Settings>): Promise<void> {
   const syncPatch: Record<string, unknown> = {};
   const localPatch: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(patch)) {
-    (isLocal(k) ? localPatch : syncPatch)[k] = v;
+    // Граница записи: секреты в obs_host не попадают в хранилище вообще,
+    // независимо от того, какой код их принёс (ревью 27.08.2026).
+    (isLocal(k) ? localPatch : syncPatch)[k] = sanitizeSettingValue(k, v);
   }
   const ops: Promise<void>[] = [];
   if (Object.keys(syncPatch).length) ops.push(browser.storage.sync.set(syncPatch));
