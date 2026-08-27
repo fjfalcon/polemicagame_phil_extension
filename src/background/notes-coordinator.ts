@@ -45,7 +45,7 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 /** Применить точечные правки. Возвращает свежую карту для синхронизации UI. */
 export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
   return enqueue(async () => {
-    if (!Array.isArray(ops) || ops.length === 0) return { ok: true };
+    if (!Array.isArray(ops) || ops.length === 0) return { ok: true, truncated: 0, skipped: 0 };
     const { notes, loadFailed } = await loadNotes({ persistMigration: true }); // координатор — единственный писатель миграции
     if (loadFailed) {
       // Пустая карта после сбоя чтения — не «заметок нет»: писать нельзя.
@@ -61,7 +61,9 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
       // Тот же фильтр, что в mergeNotes (ревью 27.08.2026): «непустая
       // строка» пропускала __proto__ и ключи любой длины.
       if (!op || typeof op.key !== "string" || !isSafeNoteKey(op.key)) {
-        if (op && typeof op.key === "string") skipped++;
+        // Считаем ЛЮБУЮ негодную операцию, включая нестроковый ключ
+        // (ревью 27.08.2026: такие уходили молча).
+        if (op) skipped++;
         continue;
       }
       if (op.record === null) {

@@ -550,9 +550,27 @@ onMessage((msg: ExtMessage, sender) => {
     return enqueueObs(async () => {
       await obsIntentReady;
       const changed = host !== lastObsIntent.host || password !== lastObsIntent.password;
-      lastObsIntent.host = host;
-      lastObsIntent.password = password;
       if (!changed) return { ok: true, changed: false };
+      // ТРАНЗАКЦИЯ ВЛАДЕЕТ ОБЕИМИ ЗАПИСЯМИ (ревью 27.08.2026): попап больше
+      // не пишет эту пару сам. Порядок: сначала пароль (local), потом адрес
+      // (sync) — если пароль не лёг, адрес не пишем вовсе, и расширение
+      // физически не может пойти на новый сервер со старым паролем.
+      try {
+        await browser.storage.local.set({ obs_password: password });
+      } catch (e) {
+        log.error("background", "OBS: пароль не записался — адрес не трогаем", e);
+        return { ok: false, stage: "password" };
+      }
+      // Снимок намерения обновляем ДО записи адреса: догоняющее
+      // storage-событие не должно устроить второй, расщеплённый переход.
+      lastObsIntent.password = password;
+      try {
+        await browser.storage.sync.set({ obs_host: host });
+      } catch (e) {
+        log.error("background", "OBS: адрес не записался — пара не согласована", e);
+        return { ok: false, stage: "host" };
+      }
+      lastObsIntent.host = host;
       log.info("background", "переход настроек OBS: транзакция адрес+пароль");
       // Правка кредов снимает ручную паузу: пользователь ждёт подключения.
       await obs.allowAutoReconnect();

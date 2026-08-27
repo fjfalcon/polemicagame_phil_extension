@@ -104,6 +104,7 @@ vi.mock("../../src/background/notes-coordinator", () => ({
   mergeNotesViaCoordinator: vi.fn(async () => undefined),
 }));
 
+import { browser } from "@core/env";
 import { log } from "@core/log";
 import { OBS_RECONNECT_ATTEMPTS_KEY } from "../../src/background/obs-client";
 
@@ -434,5 +435,63 @@ describe("транзакция «адрес+пароль» (ревью 27.08.202
       .mocked(log.info)
       .mock.calls.filter((c) => String(c[1]).includes("переход настроек OBS")).length;
     expect(total, "снимок намерения уже обновлён транзакцией").toBe(afterTx);
+  });
+});
+
+describe("частичная запись storage не пускает расщеплённую пару (ревью 27.08.2026)", () => {
+  async function send(msg: unknown): Promise<{ ok?: boolean; stage?: string } | undefined> {
+    for (const fn of wiring.onMessage) {
+      const res = fn(msg, { tab: undefined });
+      if (res !== undefined) return (await res) as never;
+    }
+    return undefined;
+  }
+
+  test("пароль не записался — адрес НЕ пишем и к новому серверу НЕ идём", async () => {
+    await bootBackground();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+    FakeSocket.created = 0;
+
+    const localSet = vi.mocked(browser.storage.local.set);
+    localSet.mockRejectedValueOnce(new Error("QuotaExceededError"));
+
+    const res = await send({
+      type: "obs_endpoint_set",
+      host: "ws://new-host:4455",
+      password: "новый",
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+
+    expect(res?.ok, "отказ виден вызывающему").toBe(false);
+    expect(res?.stage).toBe("password");
+    // Главное: никакого подключения к НОВОМУ адресу со старым паролем.
+    expect(FakeSocket.created, "нового сокета нет").toBe(0);
+    expect(store.data.obs_host, "адрес не записан — пара не расщеплена").toBeUndefined();
+  });
+
+  test("адрес не записался — честный отказ, пара помечена несогласованной", async () => {
+    await bootBackground();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+    FakeSocket.created = 0;
+
+    vi.mocked(browser.storage.sync.set).mockRejectedValueOnce(new Error("sync unavailable"));
+    const res = await send({
+      type: "obs_endpoint_set",
+      host: "ws://new-host:4455",
+      password: "новый",
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+
+    expect(res?.ok).toBe(false);
+    expect(res?.stage).toBe("host");
+    expect(FakeSocket.created, "к новому адресу не пошли").toBe(0);
   });
 });

@@ -15,33 +15,25 @@ vi.mock("@core/env", () => ({
     runtime: { id: "test" },
   },
 }));
-vi.mock("@core/notes-store", () => ({
-  MAX_OWN_NOTE_TEXT: 20_000,
-  loadNotes: vi.fn(async () =>
-    state.readFailed ? { notes: {}, customTags: [], loadFailed: true } : { notes: state.notes, customTags: [] },
-  ),
-  saveNotes: vi.fn(async (notes: Record<string, unknown>) => {
-    await Promise.resolve();
-    state.notes = notes;
-    state.saves++;
-    return true;
-  }),
-  // Ведёт себя как настоящий: битая запись — null (иначе мок скрывал бы
-  // ровно тот путь, который мы проверяем).
-  normalizeNoteRecord: vi.fn((record: unknown, maxText = 20_000) => {
-    if (typeof record === "string") return { text: record.slice(0, maxText), timestamp: 0 };
-    const r = record as { text?: unknown } | null;
-    if (!r || typeof r !== "object" || typeof r.text !== "string") return null;
-    return { ...(r as object), text: r.text.slice(0, maxText) };
-  }),
-  // Тот же фильтр ключей, что в проде: координатор теперь им пользуется.
-  isSafeNoteKey: vi.fn((k: string) => typeof k === "string" && k.length > 0 && k.length <= 200 && k !== "__proto__"),
-  mergeNotes: vi.fn((base: Record<string, unknown>, incoming: Record<string, unknown>) => ({
-    merged: { ...base, ...incoming },
-    added: Object.keys(incoming).filter((key) => !(key in base)).length,
-    replaced: Object.keys(incoming).filter((key) => key in base).length,
-  })),
-}));
+// Чистые функции берём НАСТОЯЩИЕ (ревью 27.08.2026): самодельные заглушки
+// уже дважды скрывали проверяемый путь — normalizeNoteRecord пропускал битую
+// запись, isSafeNoteKey пускал constructor/prototype.
+vi.mock("@core/notes-store", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@core/notes-store")>();
+  return {
+    ...real,
+    // loadNotes/saveNotes остаются управляемыми — это ввод-вывод теста.
+    loadNotes: vi.fn(async () =>
+      state.readFailed ? { notes: {}, customTags: [], loadFailed: true } : { notes: state.notes, customTags: [] },
+    ),
+    saveNotes: vi.fn(async (notes: Record<string, unknown>) => {
+      await Promise.resolve();
+      state.notes = notes;
+      state.saves++;
+      return true;
+    }),
+  };
+});
 vi.mock("@core/log", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -89,9 +81,9 @@ describe("notes background coordinator", () => {
   test("граница согласия: замен больше одобренного — consent_exceeded БЕЗ записи", async () => {
     // Ревью 26.08.2026: цифры диалога считались по снимку попапа, а карта у
     // координатора свежая — писать больше одобренного нельзя молча.
-    state.notes = { "u:1": { text: "старая" }, "u:2": { text: "тоже" } };
+    state.notes = { "u:1": { text: "старая", timestamp: 1 }, "u:2": { text: "тоже", timestamp: 1 } };
     const result = await mergeNotesViaCoordinator(
-      { "u:1": { text: "новая" }, "u:2": { text: "новее" } },
+      { "u:1": { text: "новая", timestamp: 9 }, "u:2": { text: "новее", timestamp: 9 } },
       1, // пользователь одобрил ОДНУ замену, реально будет две
     );
     expect(result.ok).toBe(false);
@@ -101,8 +93,8 @@ describe("notes background coordinator", () => {
   });
 
   test("замен ровно в пределах одобренного — пишем как обычно", async () => {
-    state.notes = { "u:1": { text: "старая" } };
-    const result = await mergeNotesViaCoordinator({ "u:1": { text: "новая" } }, 1);
+    state.notes = { "u:1": { text: "старая", timestamp: 1 } };
+    const result = await mergeNotesViaCoordinator({ "u:1": { text: "новая", timestamp: 9 } }, 1);
     expect(result.ok).toBe(true);
     expect(state.saves).toBe(1);
   });
@@ -110,9 +102,9 @@ describe("notes background coordinator", () => {
   test("FAIL-CLOSED: без предела согласия мерж не выполняется (bad_request)", async () => {
     // Шестая волна 26.08.2026: отсутствующий/битый предел раньше молча
     // выключал границу согласия — теперь это отказ без записи.
-    state.notes = { "u:1": { text: "старая" } };
+    state.notes = { "u:1": { text: "старая", timestamp: 1 } };
     for (const bad of [undefined, Number.NaN, -1, Number.POSITIVE_INFINITY]) {
-      const result = await mergeNotesViaCoordinator({ "u:1": { text: "новая" } }, bad as never);
+      const result = await mergeNotesViaCoordinator({ "u:1": { text: "новая", timestamp: 9 } }, bad as never);
       expect(result).toEqual({ ok: false, reason: "bad_request" });
     }
     expect(state.saves, "ни одной записи").toBe(0);

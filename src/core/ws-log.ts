@@ -169,6 +169,9 @@ function noteLoss(n: number): void {
         string,
         unknown
       >;
+      // ПОВТОРНАЯ проверка после await (ревью 27.08.2026): очистка могла
+      // случиться, пока мы читали — иначе set воскресил бы счётчик.
+      if (gen !== generation) return;
       const cur = bag[WS_LOSS_KEY] as { n?: unknown; at?: unknown } | number | null;
       const now = Date.now();
       let prev = 0;
@@ -467,15 +470,20 @@ export async function sweepStorage(budget = MAX_TOTAL_CHARS): Promise<number> {
     // Потолок общий, а не «на сессию»: свежие куски дороже старых.
     mine.sort((a, b) => b.at - a.at);
     let kept = 0;
+    const overBudget: string[] = [];
     for (const c of mine) {
-      if (kept + c.chars > budget && kept > 0) doomed.push(c.key);
-      else kept += c.chars;
+      if (kept + c.chars > budget && kept > 0) {
+        doomed.push(c.key);
+        overBudget.push(c.key);
+      } else kept += c.chars;
     }
     if (doomed.length > 0) {
       // Уборка тоже уносит кадры из будущего файла (№8): признак неполноты
       // обязан это включать, иначе «единый» он только на словах.
+      // Потерей считаем ТОЛЬКО вытесненное по БЮДЖЕТУ: протухшее по TTL —
+      // ретенция, и подписывать ею свежий лог нечестно (ревью 27.08.2026).
       let lostFrames = 0;
-      for (const key of doomed) {
+      for (const key of overBudget) {
         const chunk = all[key] as StoredChunk | undefined;
         if (Array.isArray(chunk?.frames)) lostFrames += chunk.frames.length;
       }
@@ -505,14 +513,16 @@ export async function collectAll(): Promise<{
     const now = Date.now();
     const frames: WsFrame[] = [];
     let dropped = 0;
+    let legacyDropped = 0;
     for (const [key, value] of Object.entries(all)) {
       if (!key.startsWith(WS_LOG_PREFIX)) continue;
       const chunk = value as StoredChunk;
       if (typeof chunk?.at === "number" && now - chunk.at > WS_LOG_TTL_MS) continue;
       if (Array.isArray(chunk?.frames)) frames.push(...chunk.frames);
-      // chunk.dropped (формат 9.45–9.46) НЕ складываем: те же потери уже
-      // учтены персистентным счётчиком, и сумма давала двойной счёт. Куски
-      // живут максимум сутки — легаси-поле уйдёт само (ревью 27.08.2026).
+      // chunk.dropped (формат 9.45–9.46) складываем ТОЛЬКО если нового
+      // счётчика на диске нет: иначе это двойной счёт, а без него —
+      // недосчёт после обновления с той версии (ревью 27.08.2026).
+      if (typeof chunk?.dropped === "number" && chunk.dropped > 0) legacyDropped += chunk.dropped;
     }
     // Персистентный признак: то, что не доехало ни до одного куска.
     const lossBag = (await browser.storage.local.get({ [WS_LOSS_KEY]: null })) as Record<
@@ -520,8 +530,12 @@ export async function collectAll(): Promise<{
       unknown
     >;
     const loss = lossBag[WS_LOSS_KEY] as { n?: unknown; at?: unknown } | number | null;
+    if (loss === null || loss === undefined) dropped += legacyDropped;
     if (typeof loss === "number") {
-      dropped += loss; // формат до 9.48 — без метки времени
+      // Формат до 9.48 — без метки времени. Учитываем один раз и переводим
+      // в новый формат, чтобы TTL начал течь (ревью 27.08.2026).
+      dropped += loss;
+      void browser.storage.local.set({ [WS_LOSS_KEY]: { n: loss, at: now } }).catch(() => undefined);
     } else if (loss && typeof loss === "object") {
       const at = typeof loss.at === "number" ? loss.at : 0;
       // Счётчик живёт столько же, сколько куски: иначе вчерашняя потеря

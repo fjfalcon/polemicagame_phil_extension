@@ -103,6 +103,10 @@ export function classifyMergeResponse(
   if (applied.reason === "read_failed") return "read_failed";
   if (
     applied.ok === true &&
+    // Успех без счётчиков — неполный контракт: именно он прикрывал
+    // молчаливую обрезку (ревью 27.08.2026).
+    typeof applied.truncated === "number" &&
+    typeof applied.skipped === "number" &&
     typeof applied.added === "number" &&
     Number.isFinite(applied.added) &&
     applied.added >= 0 &&

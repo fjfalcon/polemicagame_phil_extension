@@ -136,8 +136,9 @@ describe("AGENTS §4 storage and data ownership", () => {
 
   test("obs_host пишется только через границу settings (ревью 27.08.2026)", () => {
     // Санитайзер стоит в setSettings; прямая запись ключа мимо него снова
-    // вынесла бы креды в облако. Исключение — разовая самолечащая запись
-    // фона, которая САМА нормализует значение.
+    // вынесла бы креды в облако. Исключения — записи ФОНА, которые сами
+    // нормализуют значение: разовое самолечение и транзакция endpoint
+    // (она владеет обеими частями пары, ревью 27.08.2026).
     const offenders: string[] = [];
     for (const file of sourceFiles()) {
       const source = read(file);
@@ -145,6 +146,8 @@ describe("AGENTS §4 storage and data ownership", () => {
         const line = lineOf(source, m.index);
         const around = source.slice(Math.max(0, (m.index ?? 0) - 400), (m.index ?? 0) + 200);
         if (/sanitizeObsHost/.test(around)) continue; // самолечение фона
+        // Транзакция: host уже прошёл sanitizeObsHost в начале обработчика.
+        if (/OBS: адрес не записался|storage\.sync\.set\(\{ obs_host: host \}\)/.test(around)) continue;
         offenders.push(`${file}:${line}`);
       }
     }

@@ -251,13 +251,20 @@ document.addEventListener("DOMContentLoaded", () => {
     let silentTabs = 0;
     try {
       const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/*" });
+      // Таймаут на вкладку (ревью 27.08.2026): одна зависшая вкладка не
+      // должна блокировать скачивание навсегда.
+      const withTimeout = <T>(p: Promise<T>): Promise<T | undefined> =>
+        Promise.race([
+          p.catch(() => undefined),
+          new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500)),
+        ]);
       const answers = await Promise.all(
         tabs
           .filter((t) => t.id != null)
           .map((t) =>
-            browser.tabs
-              .sendMessage(t.id as number, { type: "ws_log_flush" })
-              .catch(() => undefined),
+            withTimeout(
+              browser.tabs.sendMessage(t.id as number, { type: "ws_log_flush" }) as Promise<unknown>,
+            ),
           ),
       );
       // Молчание вкладки — не «ок»: её хвост в файл не попадёт, и об этом
@@ -269,6 +276,9 @@ document.addEventListener("DOMContentLoaded", () => {
     // Заодно уборка: попап — единственное место, куда человек приходит сам,
     // и удобный момент вернуть браузеру место.
     await wsLog.sweepStorage();
+    // Уборка могла отметить потери — ждём их записи, иначе файл соберётся
+    // раньше собственного признака неполноты (ревью 27.08.2026).
+    await wsLog.lossSettled();
     const { frames, dropped, readFailed } = await wsLog.collectAll();
     if (readFailed) {
       // Пустота из-за отказа ЧТЕНИЯ — не «лог не включали» (ревью 27.08, п.3).
@@ -822,11 +832,16 @@ document.addEventListener("DOMContentLoaded", () => {
             // Импорт тоже меняет пару «адрес+пароль» — применяем транзакцией,
             // а не через расщеплённые storage-события (ревью 27.08.2026).
             if ("obs_host" in applied || "obs_password" in applied) {
-              void sendRuntime({
+              const tx = await sendRuntime<{ ok?: boolean }>({
                 type: "obs_endpoint_set",
                 host: String(applied.obs_host ?? lastKnown?.obs_host ?? ""),
                 password: String(applied.obs_password ?? lastKnown?.obs_password ?? ""),
               });
+              // Недоставка/отказ — не успех: восстановление настроек OBS не
+              // должно рапортовать «готово» (ревью 27.08.2026).
+              if (!tx || tx.ok !== true) {
+                showPopupToast("Настройки OBS из файла не применились — проверьте вручную", "error");
+              }
             }
             const { obs_password: _pw, ...safe } = applied;
             void broadcastToGameTabs({ type: "updateNotesSettings", settings: safe });
@@ -1568,18 +1583,33 @@ document.addEventListener("DOMContentLoaded", () => {
     // успевал подключиться к новому серверу со старым паролем. Сообщение
     // несёт обе части; storage остаётся источником правды для синка и UI.
     const endpointTouched = "obs_host" in patch || "obs_password" in patch;
+    // Пару «адрес+пароль» пишет ФОН одной транзакцией (ревью 27.08.2026):
+    // параллельные sync/local-записи попапа давали частичное состояние —
+    // адрес новый, пароль старый — и storage-события успевали это применить.
+    const endpointPatch = {
+      host: String(settings.obs_host ?? ""),
+      password: String(settings.obs_password ?? ""),
+    };
+    delete (patch as Record<string, unknown>).obs_host;
+    delete (patch as Record<string, unknown>).obs_password;
     return setSettings(patch)
       .then(async () => {
         lastKnown = { ...prevKnown, ...patch };
         if (endpointTouched) {
-          const tx = await sendRuntime<{ ok?: boolean }>({
+          const tx = await sendRuntime<{ ok?: boolean; stage?: string }>({
             type: "obs_endpoint_set",
-            host: settings.obs_host,
-            password: settings.obs_password,
+            ...endpointPatch,
           });
-          // Молчаливый отказ транзакции = «сохранил, но не применилось».
-          if (tx && tx.ok === false) {
-            showPopupToast("Настройки OBS сохранены, но применить их не удалось", "error");
+          // Недоставка (undefined) — тоже отказ: молчание фона не «ок».
+          if (!tx || tx.ok !== true) {
+            showPopupToast(
+              tx?.stage === "host"
+                ? "Пароль OBS сохранён, а адрес — нет: повторите"
+                : "Настройки OBS не применились — повторите",
+              "error",
+            );
+          } else {
+            lastKnown = { ...lastKnown, obs_host: endpointPatch.host, obs_password: endpointPatch.password };
           }
         }
         // Живое обновление фич в content (FeatureManager также реагирует на storage).
@@ -1594,6 +1624,9 @@ document.addEventListener("DOMContentLoaded", () => {
       .catch((e) => {
         log.error(SCOPE, "saveSettings failed", e);
         showPopupToast("Не удалось сохранить настройки", "error");
+        // Ошибку НЕ глотаем: вызывающий (ручной connect) обязан знать, что
+        // намерение не записано (ревью 27.08.2026).
+        throw e;
       });
   };
 
@@ -2046,7 +2079,13 @@ document.addEventListener("DOMContentLoaded", () => {
           // соединение (аудит lifecycle 01.08.2026, находка 14).
           // ЖДЁМ сохранения: fire-and-forget оставлял окно, где команда
           // connect уходила раньше записи намерения (ревью 27.08.2026).
-          await saveSettings();
+          // Падение — стоп: подключаться по незаписанному намерению нельзя.
+          try {
+            await saveSettings();
+          } catch {
+            updateOBSStatus("Настройки не сохранились", false);
+            return;
+          }
 
           // Значения из ТОГО ЖЕ снимка, что ушёл в сохранение и транзакцию
           // (ревью 27.08.2026): раньше команда могла унести host, набранный

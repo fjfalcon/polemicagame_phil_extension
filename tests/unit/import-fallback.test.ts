@@ -155,9 +155,15 @@ describe("петля согласия координаторного пути", 
 });
 
 describe("классификация ответа координатора (fail-closed, шестая волна)", () => {
-  test("успех — только строгий ok:true с конечными неотрицательными числами", () => {
-    expect(classifyMergeResponse({ ok: true, added: 0, replaced: 0 })).toBe("success");
-    expect(classifyMergeResponse({ ok: true, added: 3, replaced: 1 })).toBe("success");
+  test("успех — строгий ok:true СО СЧЁТЧИКАМИ (ревью 27.08.2026)", () => {
+    expect(
+      classifyMergeResponse({ ok: true, added: 0, replaced: 0, truncated: 0, skipped: 0 }),
+    ).toBe("success");
+    expect(
+      classifyMergeResponse({ ok: true, added: 3, replaced: 1, truncated: 2, skipped: 1 }),
+    ).toBe("success");
+    // Без счётчиков — не успех: именно такой ответ прикрывал обрезку.
+    expect(classifyMergeResponse({ ok: true, added: 3, replaced: 1 })).toBe("refused");
   });
   test("malformed НЕ уходит ни в успех, ни в прямую запись — отказ", () => {
     for (const bad of [

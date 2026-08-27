@@ -267,6 +267,11 @@ export interface NotesMergeMsg {
 /** Ответ координатора: ok=false — писать НЕ удалось (UI обязан сказать). */
 export interface NotesResultMsg {
   ok: boolean;
+  /**
+   * Счётчики ОБЯЗАТЕЛЬНЫ при ok:true (ревью 27.08.2026): «успех» без них
+   * снова означал бы «сохранено» поверх молча обрезанного текста. Для
+   * ok:false остаются необязательными — там нечего было применять.
+   */
   /** Почему отказ. read_failed — писать нельзя, фолбэк запрещён;
    *  consent_exceeded — замен больше одобренного, нужен новый вопрос. */
   reason?: "read_failed" | "consent_exceeded" | "bad_request";
