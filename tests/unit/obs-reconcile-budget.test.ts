@@ -537,5 +537,50 @@ describe("адрес приехал по sync с другого устройст
       .mocked(log.warn)
       .mock.calls.filter((c) => String(c[1]).includes("изменён на другом устройстве"));
     expect(warns, "и пользователю есть что прочитать в журнале").toHaveLength(1);
+    // Пароль ПРЕЖНЕГО сервера стёрт, а запрет записан на диск.
+    expect(store.data.obs_password, "старый пароль не остаётся лежать").toBe("");
+    expect(store.data.obs_awaiting_password).toBe(true);
+  });
+
+  test("ЗАПРЕТ ПЕРЕЖИВАЕТ РЕСТАРТ воркера: после boot подключения всё ещё нет", async () => {
+    await bootBackground();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+
+    settings.current.obs_host = "ws://other-device:4455";
+    for (const fn of wiring.onSettings) fn({ obs_host: "ws://other-device:4455" });
+    await vi.advanceTimersByTimeAsync(300);
+    await flushMicrotasks();
+
+    // Новая инкарнация SW (обновление, пробуждение) — состояние с диска.
+    settings.current.obs_password = ""; // пароль стёрт транзакцией запрета
+    FakeSocket.created = 0;
+    await bootBackground();
+    await vi.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+    expect(FakeSocket.created, "рестарт не уносит нас на чужой адрес").toBe(0);
+
+    // Пользователь ввёл пароль ЗДЕСЬ — запрет снят, подключаемся.
+    settings.current.obs_password = "местный";
+    const tx = (async () => {
+      for (const fn of wiring.onMessage) {
+        const res = fn(
+          { type: "obs_endpoint_set", host: "ws://other-device:4455", password: "местный" },
+          { tab: undefined },
+        );
+        if (res !== undefined) return await res;
+      }
+      return undefined;
+    })();
+    await flushMicrotasks();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+    await tx;
+    expect(FakeSocket.created, "после ввода пароля здесь — подключение").toBeGreaterThan(0);
+    expect(store.data.obs_awaiting_password, "запрет снят").toBeUndefined();
   });
 });

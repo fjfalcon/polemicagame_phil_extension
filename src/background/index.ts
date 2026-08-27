@@ -49,6 +49,13 @@ const STALE_ALARM_CUTOFF_MS = 90_000;
 const OBS_MANUAL_DISCONNECT_KEY = "obs_manual_disconnect";
 /** Запись начата НАМИ (автозапись игр): только такую имеем право останавливать. */
 const OBS_AUTO_RECORD_KEY = "obs_auto_record_started";
+/**
+ * Адрес OBS сменился на другом устройстве, а пароль здесь от прежнего
+ * сервера: до ввода пароля ЗДЕСЬ подключаться нельзя (ревью 27.08.2026).
+ * Флаг на диске — иначе рестарт service worker забывал запрет и уходил на
+ * новый сервер со старым паролем, который переживал разрыв связи.
+ */
+const OBS_AWAIT_PASSWORD_KEY = "obs_awaiting_password";
 /** Длина буфера повторов, которую последний раз выставляли МЫ (секунды). */
 const OBS_CLIP_RB_SET_KEY = "obs_clip_rb_set";
 /** Последняя попытка редкого режима (бюджет исчерпан). В storage: SW смертен. */
@@ -157,6 +164,17 @@ async function setObsWatchdog(enabled: boolean): Promise<void> {
 
 async function reconcileObsConnection(probe = false, ignorePersistedBlock = false): Promise<void> {
   const s = await getSettings();
+  // Ждём пароль для нового адреса — не подключаемся НИ В ЭТОЙ инкарнации,
+  // ни после рестарта воркера (ревью 27.08.2026).
+  const awaiting = (await browser.storage.local.get({ [OBS_AWAIT_PASSWORD_KEY]: false })) as Record<
+    string,
+    unknown
+  >;
+  if (awaiting[OBS_AWAIT_PASSWORD_KEY] === true) {
+    if (obs.hasConnectionActivity()) obs.disconnect();
+    log.info("background", "OBS: ждём пароль для нового адреса — подключение отложено");
+    return;
+  }
   const suspended = await isManuallyDisconnected();
   if (!s.extension_enabled || !s.obs_enabled || !s.obs_host || suspended) {
     try {
@@ -571,6 +589,12 @@ onMessage((msg: ExtMessage, sender) => {
         return { ok: false, stage: "host" };
       }
       lastObsIntent.host = host;
+      // Пароль введён ЗДЕСЬ — запрет снят (ревью 27.08.2026).
+      try {
+        await browser.storage.local.remove(OBS_AWAIT_PASSWORD_KEY);
+      } catch {
+        /* флаг снимет следующая успешная транзакция */
+      }
       log.info("background", "переход настроек OBS: транзакция адрес+пароль");
       // Правка кредов снимает ручную паузу: пользователь ждёт подключения.
       await obs.allowAutoReconnect();
@@ -1065,6 +1089,18 @@ function applyObsIntent(patch: Partial<Settings>): void {
           "background",
           "адрес OBS изменён на другом устройстве — нужен пароль для нового сервера",
         );
+        // Пароль от ПРЕЖНЕГО сервера стираем: разрыв связи не переживал
+        // рестарт воркера, и restore подхватывал «новый адрес + старый
+        // пароль» — состояние, которого быть не должно (ревью 27.08.2026).
+        try {
+          await browser.storage.local.set({
+            obs_password: "",
+            [OBS_AWAIT_PASSWORD_KEY]: true,
+          });
+          lastObsIntent.password = "";
+        } catch (e) {
+          log.error("background", "не удалось стереть пароль прежнего сервера", e);
+        }
         obs.disconnect();
         return;
       }
