@@ -114,6 +114,8 @@ export interface Settings {
   ws_full_log_enabled: boolean;
   /** Свернуть ники игроков «гармошкой» — видна только цифра. */
   compact_nicknames_enabled: boolean;
+  /** Клик по номеру игрока переключает ник (иначе клик остаётся сайту). */
+  nick_click_toggle_enabled: boolean;
   /** Угол плитки для плашки игрока: default | top-left | top-right | bottom-right. */
   nick_plate_position: string;
   /** «В поиск»: подтверждать модалку «Покинуть лобби» автоматически.
@@ -356,7 +358,8 @@ export interface ObsRoomProbeMsg {
 export interface ObsEndpointMsg {
   type: "obs_endpoint_set";
   host: string;
-  password: string;
+  /** Не передан — пароль НЕ трогаем (в бэкапе его нет никогда). */
+  password?: string;
 }
 
 /** Контент/попап просят фон выполнить разовую миграцию заметок sync→local

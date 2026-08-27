@@ -524,6 +524,23 @@ describe("окно последних игр", () => {
     board();
   }
 
+  test("ночной прогрев НЕ отравляет кэш: «ПУ» остаётся на месте", async () => {
+    // Блокер 27.08.2026: прогрев пересечений клал свой список игр в кэш
+    // окна — готовый, но БЕЗ разбора матчей. Ховер брал его как готовый,
+    // разбор не запрашивался, и «ПУ» молча пропадал на всё время жизни кэша.
+    serveGames([game(101), game(102)], { "101": "11", "102": "99" });
+    await start({
+      last_games_count: "8",
+      last_games_first_killed: true,
+      btn_crossover_enabled: true,
+    });
+    // Ночь = прогрев историй соперников при первом же проходе по столу.
+    document.body.classList.add("night");
+    fire([rec({ target: document.body, added: [document.querySelector(".player") as Node] })]);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await hover(), "разбор всё равно состоялся").toContain("ПУ");
+  });
+
   test("«ПУ» стоит ровно там, где первым убили именно его", async () => {
     serveGames([game(101), game(102)], { "101": "11", "102": "99" });
     await start({ last_games_count: "8", last_games_first_killed: true });

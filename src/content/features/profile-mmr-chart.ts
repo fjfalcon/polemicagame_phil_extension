@@ -94,11 +94,13 @@ let unsubDom: (() => void) | null = null;
  *  зацикливало вставку/удаление через onDomChange (см. profile-crossover,
  *  adversarial 26.08.2026, блокер). */
 let hiddenFor: string | null = null;
-let cache: { at: number; facts: MmrFacts } | null = null;
+let cache: { at: number; id: number; facts: MmrFacts } | null = null;
 let inFlight: Promise<MmrFacts | null> | null = null;
 
 async function loadFacts(myId: number): Promise<MmrFacts | null> {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.facts;
+  // Ключ по аккаунту: после перелогина рисовался путь ПРЕЖНЕГО
+  // (adversarial 27.08.2026 — та же жалоба «неправильный MMR», другая причина).
+  if (cache && cache.id === myId && Date.now() - cache.at < TTL_MS) return cache.facts;
   if (inFlight) return inFlight;
   // ПОЛНАЯ история (жалоба 27.08.2026): карьерный максимум мог быть глубже
   // первой страницы, и подпись «макс» врала. Это общий кэш @core/crossover —
@@ -107,7 +109,7 @@ async function loadFacts(myId: number): Promise<MmrFacts | null> {
     .then((h) => {
       if (!h) return null;
       const facts = mmrFacts(h.rows, h.truncated);
-      cache = { at: Date.now(), facts };
+      cache = { at: Date.now(), id: myId, facts };
       return facts;
     })
     .catch((e) => {

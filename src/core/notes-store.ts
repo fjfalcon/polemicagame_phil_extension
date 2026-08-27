@@ -516,8 +516,24 @@ async function migrateFromSync(
     // на обоих слияниях древняя запись побеждала бы более новую (ревью
     // 02.08.2026). А уже готовый мост вносим в local только новыми ключами:
     // он старше любой локальной заметки и переписывать её не должен.
-    const bridge = mergeNotes(fromLegacy, fromSync).merged;
-    const merged = mergeNotes(localNotes, bridge, { onlyNew: true, maxText: MAX_OWN_NOTE_TEXT }).merged;
+    // СВОИ заметки из sync-моста — своим потолком (adversarial 27.08.2026):
+    // чужой потолок 5000 резал собственную длинную заметку молча и навсегда.
+    const bridgeMerge = mergeNotes(fromLegacy, fromSync, { maxText: MAX_OWN_NOTE_TEXT });
+    const bridge = bridgeMerge.merged;
+    const mergeResult = mergeNotes(localNotes, bridge, {
+      onlyNew: true,
+      maxText: MAX_OWN_NOTE_TEXT,
+    });
+    const merged = mergeResult.merged;
+    // Миграция одноразовая: молча потерянное здесь не вернуть никогда —
+    // значит потери обязаны быть хотя бы в журнале (adversarial 27.08.2026).
+    const lost = bridgeMerge.truncated + bridgeMerge.skipped + mergeResult.truncated + mergeResult.skipped;
+    if (lost > 0) {
+      log.warn(
+        "notes",
+        `перенос из облака прошёл не целиком: обрезано ${bridgeMerge.truncated + mergeResult.truncated}, пропущено ${bridgeMerge.skipped + mergeResult.skipped}`,
+      );
+    }
 
     await browser.storage.local.set({
       [NOTES_KEY]: merged,
@@ -593,8 +609,24 @@ async function migratedView(
     if (!Object.keys(fromSync).length && !Object.keys(fromLegacy).length) {
       return { notes: localNotes, customTags: [...new Set([...localTags, ...syncTags])] };
     }
-    const bridge = mergeNotes(fromLegacy, fromSync).merged;
-    const merged = mergeNotes(localNotes, bridge, { onlyNew: true, maxText: MAX_OWN_NOTE_TEXT }).merged;
+    // СВОИ заметки из sync-моста — своим потолком (adversarial 27.08.2026):
+    // чужой потолок 5000 резал собственную длинную заметку молча и навсегда.
+    const bridgeMerge = mergeNotes(fromLegacy, fromSync, { maxText: MAX_OWN_NOTE_TEXT });
+    const bridge = bridgeMerge.merged;
+    const mergeResult = mergeNotes(localNotes, bridge, {
+      onlyNew: true,
+      maxText: MAX_OWN_NOTE_TEXT,
+    });
+    const merged = mergeResult.merged;
+    // Миграция одноразовая: молча потерянное здесь не вернуть никогда —
+    // значит потери обязаны быть хотя бы в журнале (adversarial 27.08.2026).
+    const lost = bridgeMerge.truncated + bridgeMerge.skipped + mergeResult.truncated + mergeResult.skipped;
+    if (lost > 0) {
+      log.warn(
+        "notes",
+        `перенос из облака прошёл не целиком: обрезано ${bridgeMerge.truncated + mergeResult.truncated}, пропущено ${bridgeMerge.skipped + mergeResult.skipped}`,
+      );
+    }
     return { notes: merged, customTags: [...new Set([...localTags, ...syncTags])] };
   } catch {
     return { notes: localNotes, customTags: localTags };

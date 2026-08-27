@@ -22,6 +22,7 @@ import { log } from "@core/log";
 import {
   completeHistory,
   crossGames,
+  FULL_HISTORY_LIMIT,
   fetchFirstPage,
   getOwnHistory,
   oldestDate,
@@ -64,31 +65,39 @@ const crossCache = new Map<string, { at: number; ttl: number; data: Crossover | 
 const inFlight = new Map<string, Promise<Crossover | null>>();
 
 async function computeCrossover(profileId: string, myId: number): Promise<Crossover | null> {
-  const hit = crossCache.get(profileId);
+  // Ключ включает СВОЙ id: после перелогина кэш отдавал пересечения с
+  // историей прежнего аккаунта (adversarial 27.08.2026).
+  const cacheKey = `${myId}:${profileId}`;
+  const hit = crossCache.get(cacheKey);
   if (hit && Date.now() - hit.at < hit.ttl) return hit.data;
-  const running = inFlight.get(profileId);
+  const running = inFlight.get(cacheKey);
   if (running) return running;
   const p = (async () => {
     try {
       // Обе истории едут одновременно (урок ховера: ждать по очереди — вдвое дольше).
-      const [mine, first] = await Promise.all([getOwnHistory(myId), fetchFirstPage(profileId)]);
+      // Один запрос на всю глубину: пара «2000 + 8000» выбрасывала первый
+      // ответ целиком (adversarial 27.08.2026, блокер 2).
+      const [mine, first] = await Promise.all([
+        getOwnHistory(myId),
+        fetchFirstPage(profileId, FULL_HISTORY_LIMIT),
+      ]);
       if (!mine || !first) {
-        crossCache.set(profileId, { at: Date.now(), ttl: BAD_TTL_MS, data: null });
+        crossCache.set(cacheKey, { at: Date.now(), ttl: BAD_TTL_MS, data: null });
         return null;
       }
       const full = await completeHistory(profileId, first, oldestDate(mine.rows));
       const data = crossGames(mine.rows, full.rows, mine.truncated || full.truncated);
-      crossCache.set(profileId, { at: Date.now(), ttl: GOOD_TTL_MS, data });
+      crossCache.set(cacheKey, { at: Date.now(), ttl: GOOD_TTL_MS, data });
       return data;
     } catch (e) {
       log.warn(SCOPE, "пересечения профиля не сложились", e);
-      crossCache.set(profileId, { at: Date.now(), ttl: BAD_TTL_MS, data: null });
+      crossCache.set(cacheKey, { at: Date.now(), ttl: BAD_TTL_MS, data: null });
       return null;
     } finally {
-      inFlight.delete(profileId);
+      inFlight.delete(cacheKey);
     }
   })();
-  inFlight.set(profileId, p);
+  inFlight.set(cacheKey, p);
   return p;
 }
 

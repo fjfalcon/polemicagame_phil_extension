@@ -58,16 +58,21 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
     let truncated = 0;
     let skipped = 0;
     for (const op of ops) {
-      // Тот же фильтр, что в mergeNotes (ревью 27.08.2026): «непустая
-      // строка» пропускала __proto__ и ключи любой длины.
-      if (!op || typeof op.key !== "string" || !isSafeNoteKey(op.key)) {
-        // Считаем ЛЮБУЮ негодную операцию, включая нестроковый ключ
-        // (ревью 27.08.2026: такие уходили молча).
+      if (!op || typeof op.key !== "string" || !op.key) {
         if (op) skipped++;
         continue;
       }
+      // УДАЛЕНИЕ проходит по мягкому правилу (adversarial 27.08.2026):
+      // ключ вроде «constructor» мог доехать до диска со старых версий, и
+      // строгий фильтр делал такую запись НЕУДАЛЯЕМОЙ — «удалил, а она
+      // вернулась» плюс ложный счётчик потерь. Симметрия с isPlainKey.
       if (op.record === null) {
-        delete next[op.key];
+        if (op.key !== "__proto__") delete next[op.key];
+        continue;
+      }
+      // Для ЗАПИСИ фильтр строгий: новый опасный ключ создавать нельзя.
+      if (!isSafeNoteKey(op.key)) {
+        skipped++;
         continue;
       }
       // Запись пересобирается нормализатором: сюда приходит структура из

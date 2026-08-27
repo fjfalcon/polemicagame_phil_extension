@@ -23,6 +23,7 @@ import { log } from "@core/log";
 import {
   completeHistory,
   crossGames,
+  FULL_HISTORY_LIMIT,
   fetchFirstPage,
   fetchHistory,
   oldestDate,
@@ -761,6 +762,7 @@ class PlayerNotesManager {
     this.lastGamesInFlight.clear();
     this.crossoverCache.clear();
     this.crossoverInFlight.clear();
+    this.lastGamesProgress.clear();
     this.warmBusy = false;
     this.warmStopped = false;
     this.statsErrorAt.clear();
@@ -960,7 +962,10 @@ class PlayerNotesManager {
           // об этом нельзя (ревью 27.08.2026).
           log.warn("player-notes", "координатор ответил успехом без счётчиков — полнота не подтверждена");
         }
-        this.warnOnLossyWrite(res);
+        // Только при УСПЕХЕ: при отказе записи «сохранена не полностью»
+        // врало бы в другую сторону — будто часть текста уцелела
+        // (adversarial 27.08.2026).
+        if (res.ok) this.warnOnLossyWrite(res);
         return res.ok;
       }
     } catch (e) {
@@ -1911,6 +1916,10 @@ class PlayerNotesManager {
       tooltip.style.zIndex = "1001";
     } else if (tooltip.parentElement === document.body) {
       // Кнопка исчезла (плитка пересобрана) — не оставляем сироту в body.
+      // Снимаем маркер показа: иначе поздний рендер (прогресс «ПУ»,
+      // пересечения) видел pnShown === "1" и ПРИКЛЕИВАЛ удалённый тултип
+      // обратно в body — призрак в углу (adversarial 27.08.2026).
+      delete tooltip.dataset.pnShown;
       tooltip.remove();
     }
   }
@@ -3588,18 +3597,29 @@ class PlayerNotesManager {
       // первая нужна всегда. Ожидание было ровно вдвое длиннее необходимого.
       const theirs = (async () => {
         const id = await this.resolveUserId(username, key);
-        // Прогрев берёт МЕЛКУЮ первую страницу: стол из десяти завсегдатаев
-        // ночью стоил до 4 страниц × 2000 строк на каждого (PERF26-3). К утру
-        // сводка готова по свежему отрезку, а полная глубина докачивается
-        // при живом ховере.
-        return { id, first: await fetchFirstPage(id, shallow ? WARM_PAGE_LIMIT : undefined) };
+        // Прогрев — МЕЛКАЯ страница (200 строк). Полный путь берёт всю
+        // историю ОДНИМ запросом: прежняя пара «2000 + 8000» выбрасывала
+        // первый ответ целиком и была медленнее листания (adversarial
+        // 27.08.2026, блокер 2).
+        return {
+          id,
+          first: await fetchFirstPage(id, shallow ? WARM_PAGE_LIMIT : FULL_HISTORY_LIMIT),
+        };
       })();
       const [mine, start] = await Promise.all([this.getMyHistory(myId), theirs]);
       // Первые строки уже скачанной истории — это и есть «последние игры»
       // (замер 27.08.2026, п.5: их выбрасывали, а потом качали заново).
       // Кладём в кэш ТОЛЬКО если там пусто: живой ховер мог уже дополнить
       // список пометками «ПУ», затирать их нельзя.
-      if (start.first && start.first.rows.length > 0 && !this.peekLastGames(username)) {
+      // ТОЛЬКО когда «ПУ» выключен (adversarial 27.08.2026): иначе посев
+      // отдавал готовый список БЕЗ пометок, markFirstKilled по этому пути не
+      // зовётся, и фича молча выключалась на 5 минут кэша.
+      if (
+        this.settings.last_games_first_killed === false &&
+        start.first &&
+        start.first.rows.length > 0 &&
+        !this.peekLastGames(username)
+      ) {
         const limit = lastGamesLimit(this.settings.last_games_count);
         this.lastGamesCache.set(
           key,

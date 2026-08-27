@@ -844,7 +844,12 @@ document.addEventListener("DOMContentLoaded", () => {
               const tx = await sendRuntime<{ ok?: boolean }>({
                 type: "obs_endpoint_set",
                 host: String(endpointFromFile.host ?? lastKnown?.obs_host ?? ""),
-                password: String(endpointFromFile.password ?? ""),
+                // Пароля в бэкапе нет никогда (экспорт его вырезает) — не
+                // передаём вовсе, иначе фон стирал существующий пароль
+                // (adversarial 27.08.2026, блокер 1).
+                ...(endpointFromFile.password !== undefined
+                  ? { password: endpointFromFile.password }
+                  : {}),
               });
               if (!tx || tx.ok !== true) {
                 showPopupToast(
@@ -1388,6 +1393,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("role_marker_icons_enabled", items.role_marker_icons_enabled);
     syncRoleMarkerIconsRow();
     set("compact_nicknames_enabled", items.compact_nicknames_enabled);
+    set("nick_click_toggle_enabled", items.nick_click_toggle_enabled);
     const npp = $<HTMLSelectElement>("nick_plate_position");
     // Нормализация: мусор в storage иначе оставил бы селект пустым.
     if (npp) {
@@ -1509,6 +1515,7 @@ document.addEventListener("DOMContentLoaded", () => {
       role_marker_enabled: cb("role_marker_enabled", false),
       role_marker_icons_enabled: cb("role_marker_icons_enabled", true),
       compact_nicknames_enabled: cb("compact_nicknames_enabled", false),
+      nick_click_toggle_enabled: cb("nick_click_toggle_enabled", true),
       nick_plate_position: $<HTMLSelectElement>("nick_plate_position")?.value || "default",
       ws_full_log_enabled: cb("ws_full_log_enabled", false),
       safe_controls_layout_enabled: cb("safe_controls_layout_enabled", true),
@@ -1697,6 +1704,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "role_marker_enabled",
     "role_marker_icons_enabled",
     "compact_nicknames_enabled",
+    "nick_click_toggle_enabled",
     "nick_plate_position",
     "ws_full_log_enabled",
     "safe_controls_layout_enabled",
@@ -2138,17 +2146,11 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
-    if (obsHost) {
-      obsHost.addEventListener("change", () => {
-        // Сменился сервер — старый пароль ему не принадлежит (ревью
-        // 27.08.2026): очищаем СРАЗУ, иначе между двумя правками полей
-        // расширение успевало постучаться к новому OBS чужим паролем.
-        if (obsHost.value.trim() !== (lastKnown?.obs_host ?? "") && obsPassword) {
-          obsPassword.value = "";
-        }
-        saveSettings();
-      });
-    }
+    // Поле пароля НЕ чистим автоматически (adversarial 27.08.2026, №10):
+    // это порождало подключение с пустым паролем и персистентный auth-блок
+    // ещё до того, как человек дошёл до поля. Защиту даёт привязка пароля к
+    // адресу в фоне: чужому серверу старый пароль не отдадут.
+    if (obsHost) obsHost.addEventListener("change", saveSettings);
     if (obsPassword) obsPassword.addEventListener("change", saveSettings);
     if (obsFloatingEnabled) obsFloatingEnabled.addEventListener("change", saveSettings);
 
@@ -2208,8 +2210,10 @@ document.addEventListener("DOMContentLoaded", () => {
       if (st?.connected) {
         updateOBSStatus("Подключено", true);
         if (st.scenes && st.scenes.length > 0) updateScenesList(st.scenes, st.currentScene);
-      } else {
+      } else if (!reflectNeedsPassword(status)) {
         updateOBSStatus("Не подключено", false);
+        updateScenesList([]);
+      } else {
         updateScenesList([]);
       }
     } catch (error) {
@@ -2232,6 +2236,20 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     if (response && response.success) return response.data;
     throw new Error(response?.error || "Unknown error");
+  }
+
+  /** Показать «нужен пароль», если фон сообщил о несовпадении привязки. */
+  function reflectNeedsPassword(st: unknown): boolean {
+    const needs = (st as { needsPassword?: boolean } | null)?.needsPassword === true;
+    if (needs) {
+      updateOBSStatus("Нужен пароль для нового адреса", false);
+      showPopupToast(
+        "Адрес OBS изменился — введите пароль для нового сервера и нажмите «Подключиться»",
+        "error",
+        8000,
+      );
+    }
+    return needs;
   }
 
   function updateOBSStatus(status: string, connected: boolean) {

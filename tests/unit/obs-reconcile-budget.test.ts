@@ -518,69 +518,90 @@ describe("частичная запись storage не пускает расще
   });
 });
 
-describe("адрес приехал по sync с другого устройства (ревью 27.08.2026)", () => {
-  test("к новому серверу со СВОИМ старым паролем не идём — рвём связь и ждём пароль", async () => {
+describe("пароль привязан к адресу (финальная модель 27.08.2026)", () => {
+  async function send(msg: unknown): Promise<{ ok?: boolean; stage?: string } | undefined> {
+    for (const fn of wiring.onMessage) {
+      const res = fn(msg, { tab: undefined });
+      if (res !== undefined) return (await res) as never;
+    }
+    return undefined;
+  }
+
+  test("адрес приехал по sync: со СВОИМ старым паролем на чужой сервер не идём", async () => {
+    // Пароль введён для прежнего адреса — привязка это помнит.
+    store.data.obs_password_host = "ws://localhost:4455";
+    settings.current.obs_password = "секрет";
     await bootBackground();
     FakeSocket.last?.hello();
     await flushMicrotasks();
     FakeSocket.last?.identified();
     await flushMicrotasks();
     FakeSocket.created = 0;
-
-    // Только host (пароль в sync не ходит — он local и остался прежним).
-    for (const fn of wiring.onSettings) fn({ obs_host: "ws://other-device:4455" });
-    await vi.advanceTimersByTimeAsync(300);
-    await flushMicrotasks();
-
-    expect(FakeSocket.created, "нового подключения нет").toBe(0);
-    const warns = vi
-      .mocked(log.warn)
-      .mock.calls.filter((c) => String(c[1]).includes("изменён на другом устройстве"));
-    expect(warns, "и пользователю есть что прочитать в журнале").toHaveLength(1);
-    // Пароль ПРЕЖНЕГО сервера стёрт, а запрет записан на диск.
-    expect(store.data.obs_password, "старый пароль не остаётся лежать").toBe("");
-    expect(store.data.obs_awaiting_password).toBe(true);
-  });
-
-  test("ЗАПРЕТ ПЕРЕЖИВАЕТ РЕСТАРТ воркера: после boot подключения всё ещё нет", async () => {
-    await bootBackground();
-    FakeSocket.last?.hello();
-    await flushMicrotasks();
-    FakeSocket.last?.identified();
-    await flushMicrotasks();
 
     settings.current.obs_host = "ws://other-device:4455";
     for (const fn of wiring.onSettings) fn({ obs_host: "ws://other-device:4455" });
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(500);
     await flushMicrotasks();
 
-    // Новая инкарнация SW (обновление, пробуждение) — состояние с диска.
-    settings.current.obs_password = ""; // пароль стёрт транзакцией запрета
+    expect(FakeSocket.created, "к чужому адресу не пошли").toBe(0);
+    const said = vi
+      .mocked(log.info)
+      .mock.calls.filter((c) => String(c[1]).includes("пароль сохранён для другого адреса"));
+    expect(said.length, "и объяснили почему").toBeGreaterThan(0);
+  });
+
+  test("ЗАПРЕТ ПЕРЕЖИВАЕТ РЕСТАРТ: привязка лежит на диске, а не в памяти", async () => {
+    store.data.obs_password_host = "ws://localhost:4455";
+    settings.current.obs_password = "секрет";
+    settings.current.obs_host = "ws://other-device:4455";
     FakeSocket.created = 0;
-    await bootBackground();
+    await bootBackground(); // свежая инкарнация читает состояние с диска
     await vi.advanceTimersByTimeAsync(1000);
     await flushMicrotasks();
     expect(FakeSocket.created, "рестарт не уносит нас на чужой адрес").toBe(0);
 
-    // Пользователь ввёл пароль ЗДЕСЬ — запрет снят, подключаемся.
+    // Пользователь ввёл пароль ЗДЕСЬ — транзакция привязывает его к адресу.
     settings.current.obs_password = "местный";
-    const tx = (async () => {
-      for (const fn of wiring.onMessage) {
-        const res = fn(
-          { type: "obs_endpoint_set", host: "ws://other-device:4455", password: "местный" },
-          { tab: undefined },
-        );
-        if (res !== undefined) return await res;
-      }
-      return undefined;
-    })();
+    const tx = send({
+      type: "obs_endpoint_set",
+      host: "ws://other-device:4455",
+      password: "местный",
+    });
     await flushMicrotasks();
     FakeSocket.last?.hello();
     await flushMicrotasks();
     FakeSocket.last?.identified();
     await flushMicrotasks();
     await tx;
+    expect(store.data.obs_password_host, "привязка обновлена").toBe("ws://other-device:4455");
     expect(FakeSocket.created, "после ввода пароля здесь — подключение").toBeGreaterThan(0);
-    expect(store.data.obs_awaiting_password, "запрет снят").toBeUndefined();
+  });
+
+  test("транзакция БЕЗ пароля (импорт бэкапа) существующий пароль не трогает", async () => {
+    // В файле бэкапа пароля нет никогда — «пустая строка» стирала креды.
+    store.data.obs_password = "секрет";
+    store.data.obs_password_host = "ws://localhost:4455";
+    settings.current.obs_password = "секрет";
+    await bootBackground();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+
+    await send({ type: "obs_endpoint_set", host: "ws://localhost:4455" });
+    await flushMicrotasks();
+    expect(store.data.obs_password, "пароль на месте").toBe("секрет");
+  });
+
+  test("пустой пароль (OBS без аутентификации) не запирает подключение", async () => {
+    settings.current.obs_password = "";
+    store.data.obs_password_host = "ws://localhost:4455";
+    settings.current.obs_host = "ws://elsewhere:4455";
+    FakeSocket.created = 0;
+    await bootBackground();
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+    // Уносить нечего — привязка не мешает.
+    expect(FakeSocket.created, "подключаемся как обычно").toBeGreaterThan(0);
   });
 });

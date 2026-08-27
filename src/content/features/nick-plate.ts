@@ -166,7 +166,12 @@ export function positionCss(position: PlatePosition): string {
  * (ревью 08.08.2026, блокер). !important обязателен: селектор сайта
  * специфичнее нашего.
  */
-function styleText(): string {
+function styleText(position: PlatePosition = "default"): string {
+  // Правила позиций (в т.ч. :has() по плитке) собираем ТОЛЬКО когда позиция
+  // выбрана: в комнате childList мутирует непрерывно, и :has() у всех
+  // пользователей — постоянный пересчёт стилей ни за что (adversarial
+  // 27.08.2026).
+  const positions = position === "default" ? "" : positionCss(position);
   return `
     .${ROOT_CLASS} .player__info:not([${OPEN_ATTR}="open"]) {
       gap: 0 !important;
@@ -206,17 +211,17 @@ function styleText(): string {
     }
     /* Номер — ручка гармошки ВСЕГДА (клик работает независимо от дефолта). */
     .player__info ${SITE.playerNumber} { cursor: pointer; }
-${PLATE_POSITIONS.map(positionCss).join("")}
+${positions}
   `;
 }
 
-function syncStyles(needed: boolean): void {
+function syncStyles(needed: boolean, position: PlatePosition = "default"): void {
   const existing = document.getElementById(STYLE_ID);
   if (!needed) {
     existing?.remove();
     return;
   }
-  const css = styleText();
+  const css = styleText(position);
   if (existing) {
     if (existing.textContent !== css) existing.textContent = css;
     return;
@@ -264,7 +269,7 @@ function applyState(): void {
   const compact = defaultCollapsed();
   const position = readPlatePosition(settings?.nick_plate_position);
   // Стили нужны всегда: клик-сворачивание доступно независимо от дефолта.
-  syncStyles(true);
+  syncStyles(true, position);
   syncRootClasses(compact, position);
   if (compact !== appliedCompact) {
     // Тумблер честно ставит ЕДИНОЕ состояние: ручные исключения прошлого
@@ -298,7 +303,10 @@ export const nickPlateFeature: Feature = {
   enable(ctx: FeatureContext) {
     settings = ctx.settings;
     clickListener = (e: Event) => {
-      // Клик работает ВСЕГДА (модель 26.08.2026): настройка — только дефолт.
+      // Клик работает независимо от дефолта стола (модель 26.08.2026), но
+      // ОТКЛЮЧАЕМ его отдельным тумблером: перехват без выключателя отбирал
+      // у сайта его превью игрока навсегда (adversarial 27.08.2026).
+      if (settings?.nick_click_toggle_enabled === false) return;
       if (!(e.target instanceof Element)) return;
       const hit = resolveToggleTarget(e.target);
       if (!hit) return;

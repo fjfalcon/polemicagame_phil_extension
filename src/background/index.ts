@@ -50,12 +50,15 @@ const OBS_MANUAL_DISCONNECT_KEY = "obs_manual_disconnect";
 /** Запись начата НАМИ (автозапись игр): только такую имеем право останавливать. */
 const OBS_AUTO_RECORD_KEY = "obs_auto_record_started";
 /**
- * Адрес OBS сменился на другом устройстве, а пароль здесь от прежнего
- * сервера: до ввода пароля ЗДЕСЬ подключаться нельзя (ревью 27.08.2026).
- * Флаг на диске — иначе рестарт service worker забывал запрет и уходил на
- * новый сервер со старым паролем, который переживал разрыв связи.
+ * АДРЕС, ДЛЯ КОТОРОГО ВВЕДЁН ТЕКУЩИЙ ПАРОЛЬ (ревью 27.08.2026, финальная
+ * модель). Прежние попытки ловили «чужой адрес» событиями и флагом-запретом
+ * и оставляли дыры: гонку с top-level reconcile у спящего воркера, вечный
+ * замок при пустом пароле, стирание пароля импортом. Привязка решает это
+ * СОСТОЯНИЕМ, а не порядком событий: перед каждым подключением сверяем, для
+ * того ли сервера у нас пароль. Не совпало — не подключаемся и ждём ввода.
+ * Пустой пароль привязки не требует: уносить нечего.
  */
-const OBS_AWAIT_PASSWORD_KEY = "obs_awaiting_password";
+const OBS_PASSWORD_HOST_KEY = "obs_password_host";
 /** Длина буфера повторов, которую последний раз выставляли МЫ (секунды). */
 const OBS_CLIP_RB_SET_KEY = "obs_clip_rb_set";
 /** Последняя попытка редкого режима (бюджет исчерпан). В storage: SW смертен. */
@@ -102,10 +105,16 @@ function enqueueRecord<T>(task: () => Promise<T> | T): Promise<T> {
  */
 async function countRoomTabs(excludeTabId?: number): Promise<number> {
   const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/*" });
+  // Таймаут на вкладку (adversarial 27.08.2026, №6): sendToTab ловит отказ,
+  // но не ЗАВИСАНИЕ — заблокированный main-thread игровой вкладки держал
+  // очередь записи навсегда (тот же урок, что у scene-owner).
+  const ask = (id: number): Promise<{ inRoom?: boolean } | undefined> =>
+    Promise.race([
+      sendToTab<{ inRoom?: boolean }>(id, { type: "obs_room_probe" }),
+      new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500)),
+    ]);
   const answers = await Promise.all(
-    tabs
-      .filter((t) => t.id != null && t.id !== excludeTabId)
-      .map((t) => sendToTab<{ inRoom?: boolean }>(t.id as number, { type: "obs_room_probe" })),
+    tabs.filter((t) => t.id != null && t.id !== excludeTabId).map((t) => ask(t.id as number)),
   );
   return answers.filter((a) => a?.inRoom === true).length;
 }
@@ -162,17 +171,44 @@ async function setObsWatchdog(enabled: boolean): Promise<void> {
   if (!alarm) await browser.alarms.create(OBS_WATCHDOG_ALARM, { periodInMinutes: 1 });
 }
 
+/** Пароль относится к этому адресу? (пустой пароль — вопрос не стоит) */
+async function passwordFitsHost(host: string): Promise<boolean> {
+  try {
+    const bag = (await browser.storage.local.get({ [OBS_PASSWORD_HOST_KEY]: null })) as Record<
+      string,
+      unknown
+    >;
+    const bound = bag[OBS_PASSWORD_HOST_KEY];
+    // Привязки нет (обновились со старой версии) — считаем, что пароль от
+    // текущего адреса: ломать работающую связь апдейтом нельзя.
+    if (typeof bound !== "string" || !bound) return true;
+    return sanitizeObsHost(bound) === sanitizeObsHost(host);
+  } catch {
+    return true; // не смогли прочитать — не мешаем работать
+  }
+}
+
+/** Запомнить, для какого адреса действителен текущий пароль. */
+async function bindPasswordToHost(host: string): Promise<void> {
+  try {
+    await browser.storage.local.set({ [OBS_PASSWORD_HOST_KEY]: sanitizeObsHost(host) });
+  } catch (e) {
+    log.warn("background", "не удалось запомнить привязку пароля к адресу", e);
+  }
+}
+
 async function reconcileObsConnection(probe = false, ignorePersistedBlock = false): Promise<void> {
   const s = await getSettings();
-  // Ждём пароль для нового адреса — не подключаемся НИ В ЭТОЙ инкарнации,
-  // ни после рестарта воркера (ревью 27.08.2026).
-  const awaiting = (await browser.storage.local.get({ [OBS_AWAIT_PASSWORD_KEY]: false })) as Record<
-    string,
-    unknown
-  >;
-  if (awaiting[OBS_AWAIT_PASSWORD_KEY] === true) {
+  // Пароль введён для ДРУГОГО адреса — на новый сервер он не поедет.
+  // Проверка стоит перед КАЖДЫМ подключением, поэтому не зависит ни от
+  // порядка событий, ни от того, жив ли воркер (ревью 27.08.2026).
+  if (s.obs_password && !(await passwordFitsHost(s.obs_host))) {
     if (obs.hasConnectionActivity()) obs.disconnect();
-    log.info("background", "OBS: ждём пароль для нового адреса — подключение отложено");
+    await setObsWatchdog(false);
+    log.info(
+      "background",
+      "OBS: пароль сохранён для другого адреса — введите пароль для нового сервера",
+    );
     return;
   }
   const suspended = await isManuallyDisconnected();
@@ -281,6 +317,11 @@ async function handleObsCommand(cmd: ObsCommandMsg["command"], data: ObsCommandM
         await obs.allowAutoReconnect();
         await setObsWatchdog(true);
         obs.resetReconnectAttempts();
+        // Пользователь нажал «Подключиться» ЗДЕСЬ, с этими кредами — значит
+        // пароль относится к этому адресу (adversarial 27.08.2026, №4:
+        // раньше ручной connect проходил мимо запрета и связь отваливалась
+        // через минуту без объяснений).
+        await bindPasswordToHost(data?.url ?? "");
         return obs.connect(data?.url ?? "", data?.password ?? "");
       case "disconnect":
         try {
@@ -439,8 +480,13 @@ async function handleObsQuery(
   // держит очередь до 10-20с, и get_status попапа / set_scene автомода
   // стояли бы за ним — «сцена переключилась через 15 секунд после фазы».
   switch (cmd) {
-    case "get_status":
-      return obs.getStatus();
+    case "get_status": {
+      const st = obs.getStatus();
+      const s = await getSettings();
+      // UI обязан объяснить молчание OBS (adversarial 27.08.2026, №5).
+      const needsPassword = Boolean(s.obs_password) && !(await passwordFitsHost(s.obs_host));
+      return { ...st, needsPassword };
+    }
     case "set_scene": {
       // Только владелец автосцены; ручной клик проходит всегда.
       if (!(await claimSceneOwnership(tabId, data?.manual === true))) {
@@ -564,24 +610,35 @@ onMessage((msg: ExtMessage, sender) => {
     // разом и гасим последующие storage-события, обновив снимок намерения —
     // иначе они устроили бы второй, уже расщеплённый, переход.
     const host = sanitizeObsHost(String(msg.host ?? ""));
-    const password = String(msg.password ?? "");
+    // Пароль ОПЦИОНАЛЕН: в файле бэкапа его нет никогда, и «пустая строка»
+    // раньше означала «сотри пароль» — импорт своего же бэкапа уничтожал
+    // креды (adversarial 27.08.2026, блокер 1).
+    const password = typeof msg.password === "string" ? msg.password : undefined;
     return enqueueObs(async () => {
       await obsIntentReady;
-      const changed = host !== lastObsIntent.host || password !== lastObsIntent.password;
-      if (!changed) return { ok: true, changed: false };
+      const passwordChanged = password !== undefined && password !== lastObsIntent.password;
+      const hostChanged = host !== lastObsIntent.host;
+      // Привязка могла разъехаться (адрес приехал по sync) — тогда работа
+      // есть даже при «ничего не поменялось»: подтвердить пароль для адреса.
+      const rebindNeeded = password !== undefined && !(await passwordFitsHost(host));
+      if (!hostChanged && !passwordChanged && !rebindNeeded) {
+        return { ok: true, changed: false };
+      }
       // ТРАНЗАКЦИЯ ВЛАДЕЕТ ОБЕИМИ ЗАПИСЯМИ (ревью 27.08.2026): попап больше
       // не пишет эту пару сам. Порядок: сначала пароль (local), потом адрес
       // (sync) — если пароль не лёг, адрес не пишем вовсе, и расширение
       // физически не может пойти на новый сервер со старым паролем.
-      try {
-        await browser.storage.local.set({ obs_password: password });
-      } catch (e) {
-        log.error("background", "OBS: пароль не записался — адрес не трогаем", e);
-        return { ok: false, stage: "password" };
+      if (password !== undefined) {
+        try {
+          await browser.storage.local.set({ obs_password: password });
+        } catch (e) {
+          log.error("background", "OBS: пароль не записался — адрес не трогаем", e);
+          return { ok: false, stage: "password" };
+        }
+        // Снимок намерения обновляем ДО записи адреса: догоняющее
+        // storage-событие не должно устроить второй, расщеплённый переход.
+        lastObsIntent.password = password;
       }
-      // Снимок намерения обновляем ДО записи адреса: догоняющее
-      // storage-событие не должно устроить второй, расщеплённый переход.
-      lastObsIntent.password = password;
       try {
         await browser.storage.sync.set({ obs_host: host });
       } catch (e) {
@@ -589,27 +646,20 @@ onMessage((msg: ExtMessage, sender) => {
         return { ok: false, stage: "host" };
       }
       lastObsIntent.host = host;
-      // Пароль введён ЗДЕСЬ — запрет снят (ревью 27.08.2026).
-      try {
-        await browser.storage.local.remove(OBS_AWAIT_PASSWORD_KEY);
-      } catch {
-        /* флаг снимет следующая успешная транзакция */
-      }
+      // Пароль (введённый ЗДЕСЬ или подтверждённый) относится к ЭТОМУ адресу.
+      if (password !== undefined) await bindPasswordToHost(host);
       log.info("background", "переход настроек OBS: транзакция адрес+пароль");
       // Правка кредов снимает ручную паузу: пользователь ждёт подключения.
       await obs.allowAutoReconnect();
       await setManualDisconnect(false);
-      // Подключаемся ЗНАЧЕНИЯМИ ИЗ ТРАНЗАКЦИИ, а не повторным чтением
-      // расщеплённого хранилища (ревью 27.08.2026): второе чтение снова
-      // могло застать пароль от прошлого сервера.
-      const s = await getSettings();
-      if (!s.extension_enabled || !s.obs_enabled || !host) {
-        obs.disconnect();
-        return { ok: true, changed: true };
-      }
-      await setObsWatchdog(true);
       obs.resetReconnectAttempts();
-      await obs.connect(host, password);
+      // Подключение — отдельно от ЗАПИСИ (adversarial 27.08.2026, №7):
+      // отказ OBS (закрыт, неверный пароль) не должен читаться попапом как
+      // «настройки не сохранились». Ошибку подключения глотаем — её покажет
+      // статус соединения, а не результат транзакции.
+      void reconcileObsConnection(false, true).catch((e) =>
+        log.warn("background", "подключение после смены настроек не удалось", e),
+      );
       return { ok: true, changed: true };
     }).catch((e) => {
       log.error("background", "OBS endpoint transaction failed", e);
@@ -1079,30 +1129,6 @@ function applyObsIntent(patch: Partial<Settings>): void {
       ) {
         await setManualDisconnect(false);
         await obs.allowAutoReconnect();
-      }
-      if (hostChanged && !passwordChanged) {
-        // Адрес приехал ПО SYNC с другого устройства, а пароль здесь свой,
-        // от прежнего сервера (ревью 27.08.2026): идти с ним на новый OBS
-        // нельзя — это ровно то, что мы запретили. Рвём соединение и ждём,
-        // пока пользователь введёт пароль здесь (тогда сработает транзакция).
-        log.warn(
-          "background",
-          "адрес OBS изменён на другом устройстве — нужен пароль для нового сервера",
-        );
-        // Пароль от ПРЕЖНЕГО сервера стираем: разрыв связи не переживал
-        // рестарт воркера, и restore подхватывал «новый адрес + старый
-        // пароль» — состояние, которого быть не должно (ревью 27.08.2026).
-        try {
-          await browser.storage.local.set({
-            obs_password: "",
-            [OBS_AWAIT_PASSWORD_KEY]: true,
-          });
-          lastObsIntent.password = "";
-        } catch (e) {
-          log.error("background", "не удалось стереть пароль прежнего сервера", e);
-        }
-        obs.disconnect();
-        return;
       }
       if (hostChanged || passwordChanged) {
         // Правка кредов снимает и ручную паузу: пользователь исправил пароль
