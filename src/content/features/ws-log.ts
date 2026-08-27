@@ -15,7 +15,7 @@
  */
 import { log } from "@core/log";
 import { onMessage } from "@core/messaging";
-import { finishSession, flushNow, record, resetBuffer, size, startSession } from "@core/ws-log";
+import { finishSession, record, resetBuffer, settleAll, size, startSession } from "@core/ws-log";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const SCOPE = "ws-log";
@@ -76,20 +76,18 @@ export const wsLogFeature: Feature = {
       if (t === "ws_log_reset") resetBuffer();
       // Выгрузка ждёт наш хвост: до 5 секунд кадров жили только в памяти
       // вкладки и в файл не попадали (ревью 27.08.2026).
-      if (t === "ws_log_flush") return flushNow().then(() => ({ ok: true }));
+      if (t === "ws_log_flush") return settleAll().then(() => ({ ok: true }));
       return undefined;
     });
     commandProbe(true);
     // Сброс на уходе со страницы: F5 посреди игры не должен стирать
     // собранное — ровно ради этого кадры вообще уезжают в storage.
-    onHide = () => void flushNow();
+    onHide = () => void settleAll();
     window.addEventListener("pagehide", onHide);
     log.info(SCOPE, "полный лог кадров ВКЛЮЧЁН (медиа и ключи сессии в него не пишутся)");
   },
 
   disable() {
-    unsubReset?.();
-    unsubReset = null;
     commandProbe(false);
     if (listener) {
       window.removeEventListener("message", listener);
@@ -104,7 +102,12 @@ export const wsLogFeature: Feature = {
     log.info(SCOPE, `полный лог кадров выключен (в памяти ${size()}, пропущено медиа: ${skipped})`);
     // Хвост ДОЖИДАЕТСЯ записи до закрытия поколения: прежний порядок терял
     // последние секунды — ровно те, ради которых лог включали (adversarial
-    // 26.08.2026, HIGH-1).
-    void finishSession();
+    // 26.08.2026, HIGH-1). Слушателя снимаем ПОСЛЕ: «выключил и сразу
+    // скачал» иначе не заставало ни хвоста, ни ответа на ws_log_flush
+    // (ревью 27.08.2026).
+    void finishSession().finally(() => {
+      unsubReset?.();
+      unsubReset = null;
+    });
   },
 };

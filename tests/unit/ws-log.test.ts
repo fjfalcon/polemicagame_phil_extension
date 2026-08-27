@@ -67,6 +67,7 @@ const storage = browser.storage.local as unknown as {
 };
 
 import {
+  settleAll,
   MAX_CHUNKS,
   MAX_FRAME_CHARS,
   MAX_TOTAL_CHARS,
@@ -349,6 +350,36 @@ describe("единый признак неполноты (ревью 27.08.2026,
     } finally {
       (browser.storage.local as unknown as { get: unknown }).get = orig;
     }
+  });
+});
+
+describe("барьеры и поколение счётчика (ревью 27.08.2026)", () => {
+  const f = (chars: number) => "42[\"x\"," + "a".repeat(Math.max(0, chars - 10)) + "]";
+
+  test("settleAll — полный барьер: и куски, и счётчик на диске", async () => {
+    record("in", f(200));
+    await settleAll();
+    const keys = [...storage.data.keys()].filter((k) => k.startsWith(WS_LOG_PREFIX));
+    expect(keys.length, "кадры дописаны").toBeGreaterThan(0);
+  });
+
+  test("очистка не воскресает отложенной записью счётчика", async () => {
+    // Потеря отмечена, RMW ещё в полёте — clearAll поднимает поколение,
+    // и старая запись не имеет права вернуть счётчик на диск.
+    for (let i = 0; i < MAX_CHUNKS + 3; i++) {
+      record("in", f(100));
+      await flushNow();
+    }
+    await clearAll();
+    await lossSettled();
+    const bag = storage.data.get(WS_LOSS_KEY);
+    expect(bag, "после очистки счётчика нет").toBeUndefined();
+  });
+
+  test("протухший счётчик не подписывает свежий лог «перегрузкой»", async () => {
+    storage.data.set(WS_LOSS_KEY, { n: 500, at: Date.now() - WS_LOG_TTL_MS - 1000 });
+    const { dropped } = await collectAll();
+    expect(dropped, "вчерашняя потеря — не сегодняшняя").toBe(0);
   });
 });
 

@@ -557,7 +557,17 @@ onMessage((msg: ExtMessage, sender) => {
       // Правка кредов снимает ручную паузу: пользователь ждёт подключения.
       await obs.allowAutoReconnect();
       await setManualDisconnect(false);
-      await reconcileObsConnection(false, true);
+      // Подключаемся ЗНАЧЕНИЯМИ ИЗ ТРАНЗАКЦИИ, а не повторным чтением
+      // расщеплённого хранилища (ревью 27.08.2026): второе чтение снова
+      // могло застать пароль от прошлого сервера.
+      const s = await getSettings();
+      if (!s.extension_enabled || !s.obs_enabled || !host) {
+        obs.disconnect();
+        return { ok: true, changed: true };
+      }
+      await setObsWatchdog(true);
+      obs.resetReconnectAttempts();
+      await obs.connect(host, password);
       return { ok: true, changed: true };
     }).catch((e) => {
       log.error("background", "OBS endpoint transaction failed", e);

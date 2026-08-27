@@ -141,6 +141,17 @@ let lossChain: Promise<void> = Promise.resolve();
 export function lossSettled(): Promise<void> {
   return lossChain;
 }
+
+/**
+ * ПОЛНЫЙ барьер перед чтением: и куски, и счётчик потерь на диске.
+ * Раньше выгрузка успевала прочитать состояние «до» (ревью 27.08.2026).
+ */
+export async function settleAll(): Promise<void> {
+  await flushNow();
+  await lossChain;
+  // flushNow мог породить новые потери (вытеснение) — досушиваем.
+  await lossChain;
+}
 function noteLoss(n: number): void {
   if (n <= 0) return;
   droppedByBackpressure += n;
@@ -148,11 +159,25 @@ function noteLoss(n: number): void {
   // вкладки терялись (ревью 27.08.2026). Между вкладками остаётся
   // best-effort — общий счётчик без координатора не сделать, а заводить
   // ради выключенной по умолчанию фичи фоновую очередь мы не станем.
+  const gen = generation;
   lossChain = lossChain.then(async () => {
+    // Очистка/перевключение подняли поколение — отложенный RMW прошлой
+    // жизни не имеет права воскресить счётчик (ревью 27.08.2026).
+    if (gen !== generation) return;
     try {
-      const bag = (await browser.storage.local.get({ [WS_LOSS_KEY]: 0 })) as Record<string, unknown>;
-      const prev = typeof bag[WS_LOSS_KEY] === "number" ? (bag[WS_LOSS_KEY] as number) : 0;
-      await browser.storage.local.set({ [WS_LOSS_KEY]: prev + n });
+      const bag = (await browser.storage.local.get({ [WS_LOSS_KEY]: null })) as Record<
+        string,
+        unknown
+      >;
+      const cur = bag[WS_LOSS_KEY] as { n?: unknown; at?: unknown } | number | null;
+      const now = Date.now();
+      let prev = 0;
+      if (typeof cur === "number") prev = cur;
+      else if (cur && typeof cur === "object" && typeof cur.n === "number") {
+        const at = typeof cur.at === "number" ? cur.at : 0;
+        prev = now - at <= WS_LOG_TTL_MS ? cur.n : 0; // протухшее не наследуем
+      }
+      await browser.storage.local.set({ [WS_LOSS_KEY]: { n: prev + n, at: now } });
     } catch {
       /* даже признак не влез — честнее промолчать, чем упасть */
     }
@@ -328,10 +353,11 @@ async function writeChunk(
     const oldest = chunks.shift();
     if (!oldest) break;
     storedChars -= oldest.chars;
-    // Вытеснение — тоже потеря: файл обязан это признать (п.3).
-    noteLoss(oldest.frames);
     try {
       await browser.storage.local.remove(oldest.key);
+      // Потерю отмечаем ПОСЛЕ успешного удаления (ревью 27.08.2026):
+      // неудавшийся remove оставляет кадры на диске — они не потеряны.
+      noteLoss(oldest.frames);
     } catch {
       /* не удалилось — уберёт следующая уборка (sweepStorage) */
     }
@@ -484,16 +510,24 @@ export async function collectAll(): Promise<{
       const chunk = value as StoredChunk;
       if (typeof chunk?.at === "number" && now - chunk.at > WS_LOG_TTL_MS) continue;
       if (Array.isArray(chunk?.frames)) frames.push(...chunk.frames);
-      // chunk.dropped больше не пишется (ревью 27.08.2026: двойной счёт с
-      // WS_LOSS_KEY). Старые куски прошлых версий читаем как есть.
-      if (typeof chunk?.dropped === "number" && chunk.dropped > 0) dropped += chunk.dropped;
+      // chunk.dropped (формат 9.45–9.46) НЕ складываем: те же потери уже
+      // учтены персистентным счётчиком, и сумма давала двойной счёт. Куски
+      // живут максимум сутки — легаси-поле уйдёт само (ревью 27.08.2026).
     }
     // Персистентный признак: то, что не доехало ни до одного куска.
-    const lossBag = (await browser.storage.local.get({ [WS_LOSS_KEY]: 0 })) as Record<
+    const lossBag = (await browser.storage.local.get({ [WS_LOSS_KEY]: null })) as Record<
       string,
       unknown
     >;
-    if (typeof lossBag[WS_LOSS_KEY] === "number") dropped += lossBag[WS_LOSS_KEY] as number;
+    const loss = lossBag[WS_LOSS_KEY] as { n?: unknown; at?: unknown } | number | null;
+    if (typeof loss === "number") {
+      dropped += loss; // формат до 9.48 — без метки времени
+    } else if (loss && typeof loss === "object") {
+      const at = typeof loss.at === "number" ? loss.at : 0;
+      // Счётчик живёт столько же, сколько куски: иначе вчерашняя потеря
+      // подписывала бы сегодняшний пустой лог (ревью 27.08.2026).
+      if (now - at <= WS_LOG_TTL_MS && typeof loss.n === "number") dropped += loss.n;
+    }
     return { frames: frames.sort((a, b) => a.t - b.t), dropped };
   } catch (e) {
     log.warn(SCOPE, "чтение полного лога не удалось", e);

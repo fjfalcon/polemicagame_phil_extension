@@ -951,6 +951,10 @@ class PlayerNotesManager {
         // Координатор возвращает свежую карту — подхватываем её целиком,
         // чтобы память вкладки сразу видела и чужие правки.
         if (res.ok && res.notes) this.notes = res.notes as NotesMap;
+        // «Записалось» и «записалось ЦЕЛИКОМ» — разные утверждения: галочка
+        // «Сохранено ✓» поверх обрезанного текста и была молчаливой потерей
+        // (ревью 27.08.2026).
+        this.warnOnLossyWrite(res);
         return res.ok;
       }
     } catch (e) {
@@ -961,16 +965,45 @@ class PlayerNotesManager {
     // поведения, зато правка пользователя не теряется молча.
     log.warn("player-notes", "координатор недоступен — пишем карту напрямую");
     const raw = fallbackMap ?? this.notes;
-    // Нормализуем ТЕМ ЖЕ правилом, что координатор (ревью 27.08.2026):
-    // прямой путь писал карту как есть — мимо потолков и фильтров полей.
-    const map: NotesMap = {};
-    for (const [key, note] of Object.entries(raw)) {
+    // Нормализуем ТОЛЬКО затронутые записи (ревью 27.08.2026): полная
+    // нормализация карты резала ЧУЖУЮ давнюю длинную заметку при сохранении
+    // совсем другой — правка одного игрока портила данные другого.
+    const touched = new Set(ops.map((o) => o.key));
+    const map: NotesMap = { ...raw };
+    let truncated = 0;
+    let skipped = 0;
+    for (const key of touched) {
+      const note = map[key];
+      if (note === undefined) continue;
       const safe = normalizeNoteRecord(note, MAX_OWN_NOTE_TEXT);
-      if (safe) map[key] = safe;
+      if (!safe) {
+        delete map[key];
+        skipped++;
+        continue;
+      }
+      const original = typeof note === "string" ? note : (note as { text?: unknown })?.text;
+      if (typeof original === "string" && original.length > safe.text.length) truncated++;
+      map[key] = safe;
     }
     const ok = await saveNotesToStore(map);
-    if (ok && fallbackMap) this.notes = map;
+    if (ok) {
+      this.notes = map;
+      this.warnOnLossyWrite({ truncated, skipped });
+    }
     return ok;
+  }
+
+  /** Сказать вслух, если запись прошла НЕ целиком (обрезка/выброс). */
+  private warnOnLossyWrite(res: { truncated?: number; skipped?: number }): void {
+    const cut = res.truncated ?? 0;
+    const lost = res.skipped ?? 0;
+    if (cut === 0 && lost === 0) return;
+    const parts = [
+      cut > 0 ? `обрезано по длине: ${cut}` : "",
+      lost > 0 ? `не сохранено записей: ${lost}` : "",
+    ].filter(Boolean);
+    log.warn("player-notes", "запись заметок прошла не целиком —", parts.join(", "));
+    showToast(`Заметка сохранена не полностью (${parts.join(", ")})`);
   }
 
   /** userId игрока, если статистика его уже резолвила (иначе undefined). */

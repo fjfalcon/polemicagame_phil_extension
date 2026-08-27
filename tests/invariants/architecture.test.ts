@@ -443,7 +443,9 @@ describe("logging and popup invariants", () => {
     const source = read("src/popup/index.ts");
     expect(source).toContain("if (!lastKnown) return");
     expect(source).toMatch(/const patch:\s*Partial<Settings>\s*=\s*\{\}/);
-    expect(source).toMatch(/void setSettings\(patch\)/);
+    expect(source).// saveSettings стал асинхронным (ревью 27.08.2026: ручной connect его
+    // ЖДЁТ) — вызов через return, а не void.
+    toMatch(/return setSettings\(patch\)/);
     expect(source).not.toMatch(/await setSettings\(settings\)/);
     expect(source).toContain("onSettingsChanged(");
   });

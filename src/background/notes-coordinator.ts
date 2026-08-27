@@ -18,6 +18,7 @@
  * не трогаем; loadFailed по-прежнему запрещает писать поверх непрочитанного.
  */
 import {
+  isSafeNoteKey,
   loadNotes,
   MIGRATED_KEY,
   saveNotes,
@@ -57,7 +58,12 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
     let truncated = 0;
     let skipped = 0;
     for (const op of ops) {
-      if (!op || typeof op.key !== "string" || !op.key) continue;
+      // Тот же фильтр, что в mergeNotes (ревью 27.08.2026): «непустая
+      // строка» пропускала __proto__ и ключи любой длины.
+      if (!op || typeof op.key !== "string" || !isSafeNoteKey(op.key)) {
+        if (op && typeof op.key === "string") skipped++;
+        continue;
+      }
       if (op.record === null) {
         delete next[op.key];
         continue;
@@ -109,7 +115,7 @@ export function mergeNotesViaCoordinator(
   return enqueue(async () => {
     const { notes, loadFailed } = await loadNotes({ persistMigration: true }); // координатор — единственный писатель миграции
     if (loadFailed) return { ok: false, reason: "read_failed" };
-    const { merged, added, replaced } = mergeNotes(notes, incoming as NotesMap, {
+    const { merged, added, replaced, truncated, skipped } = mergeNotes(notes, incoming as NotesMap, {
       // Импорт бэкапа: потолок СВОЕЙ заметки, иначе round-trip собственного
       // файла молча резал хвост (ревью 27.08.2026, п.1).
       maxText: MAX_OWN_NOTE_TEXT,
@@ -132,11 +138,13 @@ export function mergeNotesViaCoordinator(
     if (replaced > approvedReplaced) {
       return { ok: false, reason: "consent_exceeded", added, replaced };
     }
-    if (!added && !replaced) return { ok: true, added: 0, replaced: 0 };
+    if (!added && !replaced) return { ok: true, added: 0, replaced: 0, truncated, skipped };
     const ok = await saveNotes(merged);
+    // Счётчики едут ВСЕГДА: UI обязан говорить правду с авторитетного
+    // пути, а не с предварительного расчёта (ревью 27.08.2026).
     return ok
-      ? { ok, notes: merged as Record<string, unknown>, added, replaced }
-      : { ok: false, added, replaced };
+      ? { ok, notes: merged as Record<string, unknown>, added, replaced, truncated, skipped }
+      : { ok: false, added, replaced, truncated, skipped };
   });
 }
 

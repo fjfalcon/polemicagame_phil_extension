@@ -26,7 +26,16 @@ vi.mock("@core/notes-store", () => ({
     state.saves++;
     return true;
   }),
-  normalizeNoteRecord: vi.fn((record: unknown) => record),
+  // Ведёт себя как настоящий: битая запись — null (иначе мок скрывал бы
+  // ровно тот путь, который мы проверяем).
+  normalizeNoteRecord: vi.fn((record: unknown, maxText = 20_000) => {
+    if (typeof record === "string") return { text: record.slice(0, maxText), timestamp: 0 };
+    const r = record as { text?: unknown } | null;
+    if (!r || typeof r !== "object" || typeof r.text !== "string") return null;
+    return { ...(r as object), text: r.text.slice(0, maxText) };
+  }),
+  // Тот же фильтр ключей, что в проде: координатор теперь им пользуется.
+  isSafeNoteKey: vi.fn((k: string) => typeof k === "string" && k.length > 0 && k.length <= 200 && k !== "__proto__"),
   mergeNotes: vi.fn((base: Record<string, unknown>, incoming: Record<string, unknown>) => ({
     merged: { ...base, ...incoming },
     added: Object.keys(incoming).filter((key) => !(key in base)).length,
@@ -64,6 +73,17 @@ describe("notes background coordinator", () => {
     const result = await applyNoteOps([{ key: "u:1", record: { text: "x", timestamp: 1 } }]);
     expect(result).toEqual({ ok: false, reason: "read_failed" });
     expect(state.saves).toBe(0);
+  });
+
+  test("успех НЕ прячет потерю: счётчики едут наверх (ревью 27.08.2026)", async () => {
+    const res = await applyNoteOps([
+      { key: "u:1", record: { text: "норм", timestamp: 1 } },
+      { key: "__proto__", record: { text: "опасный ключ", timestamp: 1 } },
+      { key: "u:2", record: { text: 12345 } as never },
+    ]);
+    expect(res.ok).toBe(true);
+    expect(res.skipped, "опасный ключ и битая запись — потери").toBe(2);
+    expect(res.truncated).toBe(0);
   });
 
   test("граница согласия: замен больше одобренного — consent_exceeded БЕЗ записи", async () => {

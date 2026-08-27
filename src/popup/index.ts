@@ -248,9 +248,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("download_ws_log")?.addEventListener("click", async () => {
     // Сначала просим живые вкладки дописать хвост (ревью 27.08.2026): до
     // пяти секунд кадров лежали только в их памяти и в файл не попадали.
+    let silentTabs = 0;
     try {
       const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/*" });
-      await Promise.all(
+      const answers = await Promise.all(
         tabs
           .filter((t) => t.id != null)
           .map((t) =>
@@ -259,6 +260,9 @@ document.addEventListener("DOMContentLoaded", () => {
               .catch(() => undefined),
           ),
       );
+      // Молчание вкладки — не «ок»: её хвост в файл не попадёт, и об этом
+      // честнее сказать, чем выдать неполный лог за полный (ревью 27.08).
+      silentTabs = answers.filter((a) => (a as { ok?: boolean } | undefined)?.ok !== true).length;
     } catch {
       /* вкладок нет — собираем что есть на диске */
     }
@@ -302,8 +306,14 @@ document.addEventListener("DOMContentLoaded", () => {
     a.download = `polemica-ws-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`;
     a.click();
     URL.revokeObjectURL(url);
+    const tail = [
+      dropped > 0 ? `отброшено при перегрузке: ${dropped}` : "",
+      silentTabs > 0 ? `вкладок не ответило: ${silentTabs} (их хвост мог не попасть)` : "",
+    ].filter(Boolean);
     showPopupToast(
-      dropped > 0 ? `Кадров: ${frames.length} (отброшено при перегрузке: ${dropped})` : `Кадров: ${frames.length}`,
+      tail.length ? `Кадров: ${frames.length} (${tail.join("; ")})` : `Кадров: ${frames.length}`,
+      tail.length ? "error" : undefined,
+      tail.length ? 8000 : undefined,
     );
   });
   $("clear_ws_log")?.addEventListener("click", async () => {
@@ -809,6 +819,15 @@ document.addEventListener("DOMContentLoaded", () => {
             const applied = await getSettings();
             lastKnown = applied;
             reflectPatch(applied);
+            // Импорт тоже меняет пару «адрес+пароль» — применяем транзакцией,
+            // а не через расщеплённые storage-события (ревью 27.08.2026).
+            if ("obs_host" in applied || "obs_password" in applied) {
+              void sendRuntime({
+                type: "obs_endpoint_set",
+                host: String(applied.obs_host ?? lastKnown?.obs_host ?? ""),
+                password: String(applied.obs_password ?? lastKnown?.obs_password ?? ""),
+              });
+            }
             const { obs_password: _pw, ...safe } = applied;
             void broadcastToGameTabs({ type: "updateNotesSettings", settings: safe });
             return Object.keys(settingsPatch).length;
@@ -1075,8 +1094,10 @@ document.addEventListener("DOMContentLoaded", () => {
           : `Импортировано заметок: ${addedFinal}`;
         // Честность берём с ТОГО пути, который реально писал (фолбэк или
         // координатор), а не с предварительного расчёта (adversarial HIGH-1).
-        const truncatedFinal = fallbackCounts?.truncated ?? preview.truncated;
-        const skippedFinal = preview.skipped;
+        // Авторитет — тот путь, который РЕАЛЬНО писал: координатор или
+        // фолбэк. preview только предсказывал (ревью 27.08.2026).
+        const truncatedFinal = applied?.truncated ?? fallbackCounts?.truncated ?? preview.truncated;
+        const skippedFinal = applied?.skipped ?? preview.skipped;
         const cutNotes =
           (truncatedFinal > 0 ? ` — ВНИМАНИЕ: ${truncatedFinal} заметок обрезано по длине` : "") +
           // Выброшенная запись хуже обрезанной — о ней тоже говорим (№11).
@@ -1415,7 +1436,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ───────────────────────── Сохранение настроек ─────────────────────────
-  const saveSettings = () => {
+  const saveSettings = (): Promise<void> => {
     const cb = (id: string, fallback = false): boolean =>
       $<HTMLInputElement>(id)?.checked ?? fallback;
     const val = (id: string, fallback = ""): string => $<HTMLInputElement>(id)?.value || fallback;
@@ -1531,12 +1552,12 @@ document.addEventListener("DOMContentLoaded", () => {
     // Пишем ТОЛЬКО изменившиеся ключи. До завершения загрузки не пишем вовсе —
     // раньше клик до загрузки уезжал в storage снимком HTML-дефолтов
     // (включая пустой пароль OBS).
-    if (!lastKnown) return;
+    if (!lastKnown) return Promise.resolve();
     const patch: Partial<Settings> = {};
     for (const key of Object.keys(settings) as Array<keyof Settings>) {
       if (settings[key] !== lastKnown[key]) (patch as Record<string, unknown>)[key] = settings[key];
     }
-    if (Object.keys(patch).length === 0) return;
+    if (Object.keys(patch).length === 0) return Promise.resolve();
     // lastKnown обновляем ТОЛЬКО после успешной записи: оптимистичное
     // обновление при reject (квота sync) навсегда прятало настройку от диффа.
     const prevKnown = lastKnown;
@@ -1547,15 +1568,19 @@ document.addEventListener("DOMContentLoaded", () => {
     // успевал подключиться к новому серверу со старым паролем. Сообщение
     // несёт обе части; storage остаётся источником правды для синка и UI.
     const endpointTouched = "obs_host" in patch || "obs_password" in patch;
-    void setSettings(patch)
+    return setSettings(patch)
       .then(async () => {
         lastKnown = { ...prevKnown, ...patch };
         if (endpointTouched) {
-          await sendRuntime({
+          const tx = await sendRuntime<{ ok?: boolean }>({
             type: "obs_endpoint_set",
             host: settings.obs_host,
             password: settings.obs_password,
           });
+          // Молчаливый отказ транзакции = «сохранил, но не применилось».
+          if (tx && tx.ok === false) {
+            showPopupToast("Настройки OBS сохранены, но применить их не удалось", "error");
+          }
         }
         // Живое обновление фич в content (FeatureManager также реагирует на storage).
         // Пароль OBS в вкладки не рассылаем — content он не нужен, а любой
@@ -2019,7 +2044,9 @@ document.addEventListener("DOMContentLoaded", () => {
           // background подключался по данным команды, а host/пароль в
           // настройках оставались прежними — следующий reconcile рвал
           // соединение (аудит lifecycle 01.08.2026, находка 14).
-          saveSettings();
+          // ЖДЁМ сохранения: fire-and-forget оставлял окно, где команда
+          // connect уходила раньше записи намерения (ревью 27.08.2026).
+          await saveSettings();
 
           // Значения из ТОГО ЖЕ снимка, что ушёл в сохранение и транзакцию
           // (ревью 27.08.2026): раньше команда могла унести host, набранный
@@ -2056,7 +2083,17 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
-    if (obsHost) obsHost.addEventListener("change", saveSettings);
+    if (obsHost) {
+      obsHost.addEventListener("change", () => {
+        // Сменился сервер — старый пароль ему не принадлежит (ревью
+        // 27.08.2026): очищаем СРАЗУ, иначе между двумя правками полей
+        // расширение успевало постучаться к новому OBS чужим паролем.
+        if (obsHost.value.trim() !== (lastKnown?.obs_host ?? "") && obsPassword) {
+          obsPassword.value = "";
+        }
+        saveSettings();
+      });
+    }
     if (obsPassword) obsPassword.addEventListener("change", saveSettings);
     if (obsFloatingEnabled) obsFloatingEnabled.addEventListener("change", saveSettings);
 
