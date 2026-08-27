@@ -221,6 +221,50 @@ describe("подсматривание ролей: возврат скрытия
     autoStartFeature.disable();
   });
 
+  test("«подсмотреть» показывает и СВОЮ роль, скрытую нативно (жалоба стримера 27.08.2026)", () => {
+    // Скрытие живёт двумя слоями: CSS прячет роли ВСЕХ, а свою роль сайт
+    // прячет ещё и сам (#stop вместо иконки). Клавиша снимала только CSS —
+    // стример видел роли всех, КРОМЕ своей, то есть ровно ту, ради которой
+    // клавишу и держат.
+    const kb = vi.mocked(keyboard);
+    document.body.innerHTML = `
+      <div class="players">
+        <div class="player my-player">
+          <div class="player__role role role my-role"><svg><use href="#stop"></use></svg></div>
+        </div>
+      </div>`;
+    const dKeys: string[] = [];
+    // Сайт на свой D переворачивает иконку роли — без этого проверка возврата
+    // была бы ложно-зелёной: «уже скрыто» и без нашего участия.
+    const use = document.querySelector("use") as SVGElement;
+    const spy = vi.spyOn(document, "dispatchEvent").mockImplementation((e: Event) => {
+      if (e.type === "keydown") {
+        dKeys.push((e as KeyboardEvent).code);
+        const now = use.getAttribute("href") ?? "";
+        use.setAttribute("href", now.includes("#stop") ? "#role-mafia" : "#stop");
+      }
+      return true;
+    });
+    autoStartFeature.enable({ settings: { auto_hide_roles_enabled: true } } as never);
+    vi.advanceTimersByTime(1_100);
+    expect(document.getElementById("polemica-role-hide"), "роли скрыты CSS").not.toBeNull();
+
+    const holdCall = kb.registerHold.mock.calls.at(-1)!;
+    dKeys.length = 0;
+    (holdCall[1] as () => void)();
+    expect(document.getElementById("polemica-role-hide"), "CSS снят").toBeNull();
+    expect(dKeys, "сайту дослан D — иначе своя роль осталась бы под #stop").toContain("KeyD");
+
+    // Отпускание обязано вернуть ОБА слоя: роль, оставшаяся на экране, уедет
+    // в эфир — это ровно то, от чего фича защищает.
+    dKeys.length = 0;
+    (holdCall[2] as () => void)();
+    expect(document.getElementById("polemica-role-hide"), "CSS вернулся").not.toBeNull();
+    expect(dKeys, "нативное скрытие вернулось").toContain("KeyD");
+    spy.mockRestore();
+    autoStartFeature.disable();
+  });
+
   test("после отпускания прячем ВСЕГДА, когда авто-скрытие включено", () => {
     // Решение считается по настройкам и фазе, а не по «роли сейчас видны»:
     // во время удержания они видны по определению, и сверка с DOM успевала

@@ -635,8 +635,19 @@ let roleePeekKey = "";
 let unsubPeek: (() => void) | null = null;
 /** Скрытие, снятое на время подсматривания: вернуть ровно то, что было. */
 let peekRestoreHidden = false;
+/**
+ * СВОЯ роль была скрыта нативно (сайт рисует #stop вместо иконки) — вернуть
+ * это скрытие при отпускании. Отдельный слой: CSS прячет ролей ВСЕХ, нативное
+ * скрытие — только свою (жалоба стримера 27.08.2026).
+ */
+let peekRestoreNative = false;
+/** Своя роль была спрятана inline-стилями (наш же путь setRoleVisibility). */
+let peekRestoreInline = false;
 /** Клавиша сейчас зажата. Пока да — состояние видимости НЕ учитываем. */
 let peeking = false;
+/** Проверка возврата нативного скрытия после отпускания. */
+let peekRestoreTimer: ReturnType<typeof setTimeout> | null = null;
+let peekRestoreAttempts = 0;
 
 /** Идёт ли подсматривание (тестовый шов и гейт для учёта состояния). */
 export function isPeeking(): boolean {
@@ -670,24 +681,90 @@ export function shouldRehideAfterPeek(
   return !(opts.rolePhaseSwitch && phase === "night");
 }
 
+/**
+ * Подсмотреть роли, пока клавиша зажата.
+ *
+ * Скрытие живёт в ТРЁХ слоях, и снимать надо все: CSS прячет роли всех
+ * игроков, нативное скрытие сайта (#stop вместо иконки) и наши inline-стили —
+ * только СВОЮ. До 27.08.2026 снимался лишь CSS, поэтому у стримера, чья роль
+ * была скрыта ещё и нативно (свой D, авто-скрытие при входе), «подсмотреть»
+ * показывало роли всех, КРОМЕ его собственной — то есть ровно то, ради чего
+ * клавишу и держат. Так же — тремя слоями — снимают скрытие handleRoleKey и
+ * ночной автопоказ.
+ */
 function startPeek(): void {
+  if (peeking) return;
+  if (peekRestoreTimer) {
+    clearTimeout(peekRestoreTimer);
+    peekRestoreTimer = null;
+  }
+  const roleElements = getRoleVisibilityTargets();
+  const ownState = getOwnRoleState(roleElements);
   peekRestoreHidden = isRolesHiddenByCSS();
-  if (!peekRestoreHidden) return;
+  peekRestoreNative = ownState.nativeHidden;
+  peekRestoreInline = ownState.inlineHidden;
+  // Нечего снимать — и показывать нечего: клавиша не должна ничего трогать.
+  if (!peekRestoreHidden && !peekRestoreNative && !peekRestoreInline) return;
   peeking = true;
-  showAllRolesCSS();
-  log.info(SCOPE, "роли показаны, пока удерживается клавиша");
+  if (peekRestoreHidden) showAllRolesCSS();
+  if (peekRestoreInline) applyInlineRoleVisibility(roleElements, true);
+  if (peekRestoreNative) dispatchNativeRoleToggle();
+  log.info(
+    SCOPE,
+    "роли показаны, пока удерживается клавиша; снято скрытие:",
+    [peekRestoreHidden && "css", peekRestoreNative && "нативное", peekRestoreInline && "inline"]
+      .filter(Boolean)
+      .join("+"),
+  );
 }
 
 function stopPeek(): void {
-  if (!peekRestoreHidden) return;
+  if (!peeking) return;
+  const restoreCss = peekRestoreHidden;
+  const restoreNative = peekRestoreNative;
+  const restoreInline = peekRestoreInline;
   peekRestoreHidden = false;
+  peekRestoreNative = false;
+  peekRestoreInline = false;
   peeking = false;
-  if (shouldRehideAfterPeek(cfg, lastDetectedRolePhase)) {
+  if (restoreCss && shouldRehideAfterPeek(cfg, lastDetectedRolePhase)) {
     hideAllRolesCSS();
     // Состояние могло «испортиться» за время удержания (сверка с DOM видела
     // показанные роли) — возвращаем его вместе со скрытием.
     trackedRolesVisible = false;
   }
+  if (restoreInline) applyInlineRoleVisibility(getRoleVisibilityTargets(), false);
+  // Нативное скрытие возвращаем ВСЕГДА, без оглядки на настройки и фазу: до
+  // нажатия роль была скрыта, и «подсмотреть» не имеет права оставить её на
+  // экране. Ночной автопоказ, если он положен, покажет её сам.
+  if (restoreNative) {
+    trackedRolesVisible = false;
+    peekRestoreAttempts = 0;
+    restoreNativeHide();
+  }
+}
+
+/**
+ * Вернуть нативное скрытие своей роли. Синтетический D мог не доехать (сайт
+ * перерисовал плитку, dBlocker), а роль, оставшаяся на экране после отпускания
+ * клавиши, — это утечка в эфир. Проверяем и повторяем, как ночной автопоказ.
+ */
+function restoreNativeHide(): void {
+  if (peeking) return;
+  const primary = getPrimaryOwnRoleElement();
+  if (!primary) return;
+  if (getRoleUseHref(primary).includes("#stop")) return; // уже скрыта
+  dispatchNativeRoleToggle();
+  peekRestoreAttempts += 1;
+  if (peekRestoreAttempts >= 5) {
+    log.warn(SCOPE, "своя роль не вернулась в скрытое состояние после «подсмотреть»");
+    return;
+  }
+  if (peekRestoreTimer) clearTimeout(peekRestoreTimer);
+  peekRestoreTimer = setTimeout(() => {
+    peekRestoreTimer = null;
+    restoreNativeHide();
+  }, 150);
 }
 
 function bindPeekKey(code: string): void {
@@ -1456,6 +1533,17 @@ export const autoStartFeature: Feature = {
       autoHideRoles: false,
       rolePhaseSwitch: false,
     };
+    // Возврат нативного скрытия отменяем: фича выключена, роли показаны
+    // намеренно — иначе таймер пережил бы disable() и спрятал роль обратно.
+    if (peekRestoreTimer) {
+      clearTimeout(peekRestoreTimer);
+      peekRestoreTimer = null;
+    }
+    peeking = false;
+    peekRestoreHidden = false;
+    peekRestoreNative = false;
+    peekRestoreInline = false;
+    peekRestoreAttempts = 0;
     trackedRolesVisible = null;
     rolePhaseInitialized = false;
     lastDetectedRolePhase = null;
