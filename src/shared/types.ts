@@ -273,6 +273,9 @@ export interface NotesResultMsg {
   notes?: Record<string, unknown>;
   added?: number;
   replaced?: number;
+  /** Сколько записей обрезано/выброшено при нормализации (ревью 27.08.2026). */
+  truncated?: number;
+  skipped?: number;
 }
 
 /**
@@ -338,10 +341,28 @@ export interface ObsRoomProbeMsg {
   type: "obs_room_probe";
 }
 
+/**
+ * Попап меняет ПАРУ «адрес + пароль» OBS одной транзакцией (ревью
+ * 27.08.2026): они живут в разных областях хранилища (host — sync, пароль —
+ * local), события приходят порознь, и любой таймер-склейкой это не лечится —
+ * пользователь дописывает пароль СЕКУНДЫ спустя. Сообщение несёт обе части
+ * сразу, фон применяет их атомарно.
+ */
+export interface ObsEndpointMsg {
+  type: "obs_endpoint_set";
+  host: string;
+  password: string;
+}
+
 /** Контент/попап просят фон выполнить разовую миграцию заметок sync→local
  *  (SEC26-5: запись миграции — только сериализованный координатор). */
 export interface NotesMigrateMsg {
   type: "notes_migrate";
+}
+
+/** Попап собирается выгружать лог: вкладки дописывают хвост на диск. */
+export interface WsLogFlushMsg {
+  type: "ws_log_flush";
 }
 
 /** Попап очистил полный лог: контент-контексты сбрасывают свой буфер/учёт. */
@@ -359,7 +380,9 @@ export type ExtMessage =
   | ObsRoomProbeMsg
   | DiagStateMsg
   | NotesMigrateMsg
+  | ObsEndpointMsg
   | WsLogResetMsg
+  | WsLogFlushMsg
   | ObsEventMsg
   | UpdateNotesSettingsMsg
   | TwitchControlMsg

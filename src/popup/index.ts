@@ -246,6 +246,22 @@ document.addEventListener("DOMContentLoaded", () => {
   // Отдельный файл, а не раздел обычного журнала: кадров за игру тысячи, и в
   // общем логе они утопили бы записи о наших собственных решениях.
   $("download_ws_log")?.addEventListener("click", async () => {
+    // Сначала просим живые вкладки дописать хвост (ревью 27.08.2026): до
+    // пяти секунд кадров лежали только в их памяти и в файл не попадали.
+    try {
+      const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/*" });
+      await Promise.all(
+        tabs
+          .filter((t) => t.id != null)
+          .map((t) =>
+            browser.tabs
+              .sendMessage(t.id as number, { type: "ws_log_flush" })
+              .catch(() => undefined),
+          ),
+      );
+    } catch {
+      /* вкладок нет — собираем что есть на диске */
+    }
     // Заодно уборка: попап — единственное место, куда человек приходит сам,
     // и удобный момент вернуть браузеру место.
     await wsLog.sweepStorage();
@@ -1526,9 +1542,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const prevKnown = lastKnown;
 
     // setSettings сам разложит obs_password в storage.local.
+    // Пара «адрес+пароль» OBS — ОДНОЙ транзакцией фону (ревью 27.08.2026):
+    // они лежат в разных областях, storage-события приходят порознь, и фон
+    // успевал подключиться к новому серверу со старым паролем. Сообщение
+    // несёт обе части; storage остаётся источником правды для синка и UI.
+    const endpointTouched = "obs_host" in patch || "obs_password" in patch;
     void setSettings(patch)
-      .then(() => {
+      .then(async () => {
         lastKnown = { ...prevKnown, ...patch };
+        if (endpointTouched) {
+          await sendRuntime({
+            type: "obs_endpoint_set",
+            host: settings.obs_host,
+            password: settings.obs_password,
+          });
+        }
         // Живое обновление фич в content (FeatureManager также реагирует на storage).
         // Пароль OBS в вкладки не рассылаем — content он не нужен, а любой
         // будущий дамп настроек в лог превратил бы это в утечку.
@@ -1993,6 +2021,9 @@ document.addEventListener("DOMContentLoaded", () => {
           // соединение (аудит lifecycle 01.08.2026, находка 14).
           saveSettings();
 
+          // Значения из ТОГО ЖЕ снимка, что ушёл в сохранение и транзакцию
+          // (ревью 27.08.2026): раньше команда могла унести host, набранный
+          // после/до сохранения — расхождение, которое потом не отладить.
           const result = await sendOBSCommand("connect", { url: host, password });
           if (result) {
             updateOBSStatus("Подключено", true);

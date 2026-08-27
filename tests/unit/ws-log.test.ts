@@ -23,7 +23,27 @@ vi.mock("@core/env", () => {
       storage: {
         local: {
           data,
-          get: vi.fn(async (keys: unknown) => (keys === null ? Object.fromEntries(data) : {})),
+          // Мок обязан УМЕТЬ читать по ключам с дефолтами: прежний всегда
+          // отдавал {} и скрыл бы любой чтение-зависимый путь (ревью 27.08).
+          get: vi.fn(async (keys: unknown) => {
+            if (keys === null) return Object.fromEntries(data);
+            if (typeof keys === "string") {
+              return data.has(keys) ? { [keys]: data.get(keys) } : {};
+            }
+            if (Array.isArray(keys)) {
+              const out: Record<string, unknown> = {};
+              for (const k of keys) if (data.has(k)) out[k] = data.get(k);
+              return out;
+            }
+            if (keys && typeof keys === "object") {
+              const out: Record<string, unknown> = {};
+              for (const [k, def] of Object.entries(keys as Record<string, unknown>)) {
+                out[k] = data.has(k) ? data.get(k) : def;
+              }
+              return out;
+            }
+            return {};
+          }),
           set: vi.fn(async (items: Record<string, unknown>) => {
             for (const [k, v] of Object.entries(items)) data.set(k, v);
           }),
@@ -57,6 +77,7 @@ import {
   clearAll,
   collectAll,
   flushNow,
+  lossSettled,
   formatFrames,
   isGameFrame,
   record,
@@ -281,6 +302,7 @@ describe("честность лога (ревью 27.08.2026)", () => {
       for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
     });
     await finishSession();
+    await lossSettled(); // запись признака потерь сериализована и асинхронна
     const { dropped } = await collectAll();
     expect(dropped, "число отброшенных доехало до файла").toBeGreaterThan(0);
   });
@@ -296,6 +318,7 @@ describe("единый признак неполноты (ревью 27.08.2026,
       record("in", f(100));
       await flushNow();
     }
+    await lossSettled();
     const { dropped } = await collectAll();
     expect(dropped, "вытесненные кадры признаны потерянными").toBeGreaterThan(0);
   });

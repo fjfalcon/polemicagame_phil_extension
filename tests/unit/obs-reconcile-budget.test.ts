@@ -354,3 +354,85 @@ describe("смена OBS-настроек: один упорядоченный �
     ).toHaveLength(0);
   });
 });
+
+describe("транзакция «адрес+пароль» (ревью 27.08.2026, блокер)", () => {
+  /** Отправить сообщение фону, как это делает попап. */
+  async function send(msg: unknown): Promise<unknown> {
+    for (const fn of wiring.onMessage) {
+      const res = fn(msg, { tab: undefined });
+      if (res !== undefined) return await res;
+    }
+    return undefined;
+  }
+
+  test("разрыв событий БОЛЬШЕ окна склейки: пароль не отстаёт от адреса", async () => {
+    await bootBackground();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+    FakeSocket.created = 0;
+
+    // Пользователь сменил адрес, ушёл, и лишь ЧЕРЕЗ СЕКУНДЫ дописал пароль:
+    // никакая коалесценция окном 200 мс это не склеит.
+    settings.current.obs_host = "ws://new-host:4455";
+    settings.current.obs_password = "новый-пароль";
+    const tx = send({
+      type: "obs_endpoint_set",
+      host: "ws://new-host:4455",
+      password: "новый-пароль",
+    });
+    await flushMicrotasks();
+    // Новый сокет ждёт хендшейка — подтверждаем, иначе транзакция висит.
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await tx;
+
+    // Один переход — и он несёт ОБА значения (сокет открыт к новому адресу).
+    const transitions = vi
+      .mocked(log.info)
+      .mock.calls.filter((c) => String(c[1]).includes("переход настроек OBS"));
+    expect(transitions).toHaveLength(1);
+    expect(String(transitions[0][1])).toContain("транзакция адрес+пароль");
+    expect(FakeSocket.last?.url).toBe("ws://new-host:4455");
+  });
+
+  test("догоняющие storage-события после транзакции второго перехода не рождают", async () => {
+    await bootBackground();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+
+    settings.current.obs_host = "ws://new-host:4455";
+    settings.current.obs_password = "новый-пароль";
+    const tx2 = send({
+      type: "obs_endpoint_set",
+      host: "ws://new-host:4455",
+      password: "новый-пароль",
+    });
+    await flushMicrotasks();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+    await tx2;
+    const afterTx = vi
+      .mocked(log.info)
+      .mock.calls.filter((c) => String(c[1]).includes("переход настроек OBS")).length;
+
+    // Те же значения приезжают storage-событиями (их порядок неважен).
+    for (const fn of wiring.onSettings) fn({ obs_host: "ws://new-host:4455" });
+    for (const fn of wiring.onSettings) fn({ obs_password: "новый-пароль" });
+    await vi.advanceTimersByTimeAsync(300);
+    await flushMicrotasks();
+
+    const total = vi
+      .mocked(log.info)
+      .mock.calls.filter((c) => String(c[1]).includes("переход настроек OBS")).length;
+    expect(total, "снимок намерения уже обновлён транзакцией").toBe(afterTx);
+  });
+});

@@ -393,7 +393,12 @@ export function mergeNotes(
     // Канонизация id-ключа: "u:0123" и "u:123" — один игрок, иначе присланный
     // файл плодил вторую невидимую запись (аудит безопасности, №12).
     const key = canonicalNoteKey(rawKey);
-    if (!isSafeNoteKey(key)) continue;
+    if (!isSafeNoteKey(key)) {
+      // Опасный/слишком длинный ключ — тоже потерянная запись (ревью
+      // 27.08.2026): раньше он уходил в continue ДО счётчика, и тост молчал.
+      skipped++;
+      continue;
+    }
     // Запись пересобирается из разрешённых полей: сырой объект из чужого
     // файла в карту больше не попадает (№4).
     const safe = normalizeNoteRecord(note, maxText);

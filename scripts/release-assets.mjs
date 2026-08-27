@@ -37,6 +37,18 @@ async function readVersion() {
   );
   // Версия живёт в двух местах без автосинки — расхождение ломает обновление
   // у пользователей (баннер сравнивает версию манифеста с тегом релиза).
+  // package-lock отставал на 45 версий и никто не замечал (ревью 27.08.2026).
+  try {
+    const lock = JSON.parse(await fs.readFile(path.join(root, "package-lock.json"), "utf8"));
+    if (lock.version && lock.version !== pkg.version) {
+      throw new Error(
+        `версии разошлись: package-lock.json ${lock.version} ≠ package.json ${pkg.version} (npm i)`,
+      );
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("версии разошлись")) throw e;
+    // lock-файла нет — не наша забота
+  }
   if (pkg.version !== manifest.version) {
     throw new Error(
       `версии разошлись: package.json ${pkg.version} ≠ manifest.base.json ${manifest.version}`,

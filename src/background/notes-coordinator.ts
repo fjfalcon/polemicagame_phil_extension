@@ -54,6 +54,8 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
       return { ok: false, reason: "read_failed" };
     }
     const next: NotesMap = { ...notes };
+    let truncated = 0;
+    let skipped = 0;
     for (const op of ops) {
       if (!op || typeof op.key !== "string" || !op.key) continue;
       if (op.record === null) {
@@ -65,10 +67,23 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
       // Локальная правка — потолок текста «свой», а не импортный: обрезать
       // набранную руками заметку на 5000 символах пользователь не просил.
       const rec = normalizeNoteRecord(op.record, MAX_OWN_NOTE_TEXT);
+      // Считаем факты записи: молчаливая обрезка/выброс с ok:true — та же
+      // молчаливая потеря, что чинили в импорте (ревью 27.08.2026).
+      if (!rec) skipped++;
+      else if (
+        typeof (op.record as { text?: unknown })?.text === "string" &&
+        ((op.record as { text: string }).text.length > rec.text.length)
+      ) {
+        truncated++;
+      }
       if (rec) next[op.key] = rec;
     }
     const ok = await saveNotes(next);
-    return ok ? { ok, notes: next as Record<string, unknown> } : { ok };
+    // truncated/skipped едут наверх ВСЕГДА: вызывающий обязан иметь
+    // возможность сказать пользователю правду (ревью 27.08.2026).
+    return ok
+      ? { ok, notes: next as Record<string, unknown>, truncated, skipped }
+      : { ok, truncated, skipped };
   });
 }
 

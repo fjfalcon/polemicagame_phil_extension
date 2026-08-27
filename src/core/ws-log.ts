@@ -136,10 +136,19 @@ let droppedByBackpressure = 0;
  */
 /** ВНЕ префикса кусков: иначе попадал бы во все фильтры «мои куски». */
 export const WS_LOSS_KEY = "polemica:wslog-loss";
+let lossChain: Promise<void> = Promise.resolve();
+/** Признак потерь дописан на диск — тестовый шов и точка ожидания. */
+export function lossSettled(): Promise<void> {
+  return lossChain;
+}
 function noteLoss(n: number): void {
   if (n <= 0) return;
   droppedByBackpressure += n;
-  void (async () => {
+  // Чтение-изменение-запись СЕРИАЛИЗУЕМ: параллельные инкременты внутри
+  // вкладки терялись (ревью 27.08.2026). Между вкладками остаётся
+  // best-effort — общий счётчик без координатора не сделать, а заводить
+  // ради выключенной по умолчанию фичи фоновую очередь мы не станем.
+  lossChain = lossChain.then(async () => {
     try {
       const bag = (await browser.storage.local.get({ [WS_LOSS_KEY]: 0 })) as Record<string, unknown>;
       const prev = typeof bag[WS_LOSS_KEY] === "number" ? (bag[WS_LOSS_KEY] as number) : 0;
@@ -147,10 +156,8 @@ function noteLoss(n: number): void {
     } catch {
       /* даже признак не влез — честнее промолчать, чем упасть */
     }
-  })();
+  });
 }
-/** Сколько из droppedByBackpressure уже уехало маркером в куски. */
-let reportedDrops = 0;
 /** Символы, стоящие в ЦЕПОЧКЕ записи (захвачены замыканиями writeChunk):
  *  именно она растёт без предела при медленном хранилище — pending режет
  *  порог CHUNK_CHARS сам (PERF26-4, механизм 2). */
@@ -252,15 +259,10 @@ export function flushNow(): Promise<void> {
   const gen = generation;
   // Отброшенное с прошлой записи — В КУСОК: счётчик модуля живёт в контенте,
   // а файл собирает ПОПАП (другой контекст; adversarial 26.08.2026, №3).
-  const dropped = droppedByBackpressure - reportedDrops;
-  reportedDrops = droppedByBackpressure;
   // Учёт — по СЕРИАЛИЗОВАННОМУ размеру (SEC26-3): голые тела кадров занижали
   // фактический storage в ~5 раз (timestamp/direction/JSON-обвязка каждого
   // кадра), и «потолок 2М» подбирался к квоте вплотную.
-  const payload =
-    dropped > 0
-      ? { at: Date.now(), frames, dropped }
-      : { at: Date.now(), frames };
+  const payload = { at: Date.now(), frames };
   const serialized = JSON.stringify(payload).length;
   chainBacklogChars += serialized;
   flushChain = flushChain.then(
@@ -351,30 +353,6 @@ export async function finishSession(): Promise<void> {
       // Хвост отброшенных, не уехавший ни в один принятый кусок: без этого
       // «выключил сразу после перегрузки» давал файл, молчащий о потере
       // (ревью 27.08.2026). Пустой кусок-маркер — только с числом.
-      const unreported = droppedByBackpressure - reportedDrops;
-      // stopped = хранилище уже отказало дважды: маркер туда не пролезет, а
-      // попытка стоит двух set + полного sweep (adversarial 27.08).
-      if (unreported > 0 && !stopped) {
-        reportedDrops = droppedByBackpressure;
-        const gen = generation;
-        const payload = { at: Date.now(), frames: [] as WsFrame[], dropped: unreported };
-        // Маркер не должен вытеснять РЕАЛЬНЫЙ кусок кадров: он весит
-        // десятки байт, а MAX_CHUNKS считает ключи — освобождаем место
-        // заранее только если упёрлись.
-        if (chunks.length >= MAX_CHUNKS) {
-          const oldest = chunks.shift();
-          if (oldest) {
-            storedChars -= oldest.chars;
-            noteLoss(oldest.frames); // маркер не должен съедать кадры молча (№6)
-            try {
-              await browser.storage.local.remove(oldest.key);
-            } catch {
-              /* приберёт следующий sweep */
-            }
-          }
-        }
-        await writeChunk(payload, JSON.stringify(payload).length, gen);
-      }
     } catch {
       /* хвост не записался — хуже уже не сделаем */
     }
@@ -400,7 +378,6 @@ export function resetBuffer(): void {
   storedChars = 0;
   foreignChars = 0;
   droppedByBackpressure = 0;
-  reportedDrops = 0;
   chainBacklogChars = 0;
   if (flushTimer) {
     clearTimeout(flushTimer);
@@ -507,6 +484,8 @@ export async function collectAll(): Promise<{
       const chunk = value as StoredChunk;
       if (typeof chunk?.at === "number" && now - chunk.at > WS_LOG_TTL_MS) continue;
       if (Array.isArray(chunk?.frames)) frames.push(...chunk.frames);
+      // chunk.dropped больше не пишется (ревью 27.08.2026: двойной счёт с
+      // WS_LOSS_KEY). Старые куски прошлых версий читаем как есть.
       if (typeof chunk?.dropped === "number" && chunk.dropped > 0) dropped += chunk.dropped;
     }
     // Персистентный признак: то, что не доехало ни до одного куска.

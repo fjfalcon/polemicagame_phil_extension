@@ -541,6 +541,29 @@ onMessage((msg: ExtMessage, sender) => {
   if ("type" in msg && msg.type === "notes_apply_ops") {
     return applyNoteOps(msg.ops);
   }
+  if ("type" in msg && msg.type === "obs_endpoint_set") {
+    // Транзакция «адрес+пароль» (ревью 27.08.2026): применяем ОБА значения
+    // разом и гасим последующие storage-события, обновив снимок намерения —
+    // иначе они устроили бы второй, уже расщеплённый, переход.
+    const host = sanitizeObsHost(String(msg.host ?? ""));
+    const password = String(msg.password ?? "");
+    return enqueueObs(async () => {
+      await obsIntentReady;
+      const changed = host !== lastObsIntent.host || password !== lastObsIntent.password;
+      lastObsIntent.host = host;
+      lastObsIntent.password = password;
+      if (!changed) return { ok: true, changed: false };
+      log.info("background", "переход настроек OBS: транзакция адрес+пароль");
+      // Правка кредов снимает ручную паузу: пользователь ждёт подключения.
+      await obs.allowAutoReconnect();
+      await setManualDisconnect(false);
+      await reconcileObsConnection(false, true);
+      return { ok: true, changed: true };
+    }).catch((e) => {
+      log.error("background", "OBS endpoint transaction failed", e);
+      return { ok: false };
+    });
+  }
   if ("type" in msg && msg.type === "notes_migrate") {
     return migrateViaCoordinator();
   }

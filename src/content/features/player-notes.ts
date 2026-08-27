@@ -48,6 +48,8 @@ const WARM_PAGE_LIMIT = 200;
 import { escapeHtml } from "@core/escape";
 import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
 import {
+  MAX_OWN_NOTE_TEXT,
+  normalizeNoteRecord,
   loadNotes as loadNotesFromStore,
   saveNotes as saveNotesToStore,
   saveCustomTags as saveCustomTagsToStore,
@@ -958,9 +960,16 @@ class PlayerNotesManager {
     // расширения, воркер недоступен). Пишем как раньше — не хуже прежнего
     // поведения, зато правка пользователя не теряется молча.
     log.warn("player-notes", "координатор недоступен — пишем карту напрямую");
-    const map = fallbackMap ?? this.notes;
+    const raw = fallbackMap ?? this.notes;
+    // Нормализуем ТЕМ ЖЕ правилом, что координатор (ревью 27.08.2026):
+    // прямой путь писал карту как есть — мимо потолков и фильтров полей.
+    const map: NotesMap = {};
+    for (const [key, note] of Object.entries(raw)) {
+      const safe = normalizeNoteRecord(note, MAX_OWN_NOTE_TEXT);
+      if (safe) map[key] = safe;
+    }
     const ok = await saveNotesToStore(map);
-    if (ok && fallbackMap) this.notes = fallbackMap;
+    if (ok && fallbackMap) this.notes = map;
     return ok;
   }
 
@@ -2386,6 +2395,9 @@ class PlayerNotesManager {
     }
 
     const textarea = document.createElement("textarea");
+    // Потолок ввода = потолок хранения (ревью 27.08.2026): раньше поле
+    // принимало сколько угодно, а координатор молча резал при записи.
+    textarea.maxLength = MAX_OWN_NOTE_TEXT;
     textarea.value = this.getNoteText(username);
     textarea.style.cssText = `
       width: 100%;
@@ -3003,6 +3015,7 @@ class PlayerNotesManager {
       // Заметка прямо здесь: игрока можно завести и без цвета — например,
       // записать «шумный, играет агрессивно» до первой встречи за столом.
       const area = document.createElement("textarea");
+      area.maxLength = MAX_OWN_NOTE_TEXT; // см. выше: ввод не длиннее хранения
       area.placeholder = "Заметка (необязательно)";
       area.style.cssText = `
         width: 100%; min-height: 56px; box-sizing: border-box; resize: vertical;
@@ -3236,6 +3249,7 @@ class PlayerNotesManager {
           editor.style.cssText =
             "padding:8px 0 12px;border-bottom:1px solid rgba(255,255,255,.08);";
           const area = document.createElement("textarea");
+          area.maxLength = MAX_OWN_NOTE_TEXT;
           area.value = entry.text;
           area.placeholder = "Что важно помнить об этом игроке";
           area.style.cssText = `

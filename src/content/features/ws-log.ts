@@ -72,7 +72,12 @@ export const wsLogFeature: Feature = {
     // «Очистить» в попапе стирает диск — наша копия модуля обязана забыть
     // буфер и учёт, иначе следующий flush воскресит очищенное (SEC26-9).
     unsubReset = onMessage((msg) => {
-      if ((msg as { type?: string })?.type === "ws_log_reset") resetBuffer();
+      const t = (msg as { type?: string })?.type;
+      if (t === "ws_log_reset") resetBuffer();
+      // Выгрузка ждёт наш хвост: до 5 секунд кадров жили только в памяти
+      // вкладки и в файл не попадали (ревью 27.08.2026).
+      if (t === "ws_log_flush") return flushNow().then(() => ({ ok: true }));
+      return undefined;
     });
     commandProbe(true);
     // Сброс на уходе со страницы: F5 посреди игры не должен стирать
