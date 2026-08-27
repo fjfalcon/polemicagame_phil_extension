@@ -355,7 +355,7 @@ export function mergeNotes(
      */
     maxText?: number;
   } = {},
-): { merged: NotesMap; added: number; replaced: number; truncated: number } {
+): { merged: NotesMap; added: number; replaced: number; truncated: number; skipped: number } {
   const merged: NotesMap = {};
   for (const [rawKey, note] of Object.entries(base)) {
     // Ключи базы канонизируем ТОЖЕ: "u:007" из старого хранилища и "u:7" из
@@ -386,8 +386,9 @@ export function mergeNotes(
   // Входящие записи нормализуем ДО слияния, чтобы id-ключи попали в индекс
   // ников раньше, чем встретится ник-ключ того же игрока. Иначе порядок ключей
   // в файле решал, получится один игрок или два (тест-набор, №2).
-  const items: Array<[string, NoteRecord]> = [];
+  const items: Array<[string, NoteRecord, boolean]> = [];
   let truncated = 0;
+  let skipped = 0;
   for (const [rawKey, note] of Object.entries(incoming)) {
     // Канонизация id-ключа: "u:0123" и "u:123" — один игрок, иначе присланный
     // файл плодил вторую невидимую запись (аудит безопасности, №12).
@@ -396,18 +397,24 @@ export function mergeNotes(
     // Запись пересобирается из разрешённых полей: сырой объект из чужого
     // файла в карту больше не попадает (№4).
     const safe = normalizeNoteRecord(note, maxText);
-    if (!safe) continue;
-    // Факт обрезки считаем: молчаливое усечение чужого/своего текста
-    // пользователь обязан увидеть (ревью 27.08.2026).
+    if (!safe) {
+      // Запись выброшена целиком (битый text, чужой тип, опасный ключ) —
+      // это ХУЖЕ обрезки, и молчать о ней нельзя (adversarial 27.08, №11).
+      skipped++;
+      continue;
+    }
     const original = typeof note === "string" ? note : (note as { text?: unknown })?.text;
-    if (typeof original === "string" && original.length > safe.text.length) truncated++;
-    items.push([key, safe]);
+    // Обрезку помечаем НА ЗАПИСИ, а считаем ниже — только для тех, что
+    // реально применились (adversarial №10: onlyNew, проигрыш по времени и
+    // дубли ключей давали ложные числа).
+    const wasCut = typeof original === "string" && original.length > safe.text.length;
+    items.push([key, safe, wasCut]);
   }
   for (const [key, safe] of items) indexNick(key, safe);
 
   let added = 0;
   let replaced = 0;
-  for (const [key, safe] of items) {
+  for (const [key, safe, wasCut] of items) {
     // Ник-ключ уводим в id-запись того же игрока ТОЛЬКО если такого ник-ключа
     // ещё нет в карте. Иначе мы бы вливали заметку в чужую запись: ник на
     // сайте освобождается и достаётся другому человеку, а id вечен — и у нас
@@ -421,6 +428,7 @@ export function mergeNotes(
     if (!Object.hasOwn(merged, targetKey)) {
       merged[targetKey] = safe;
       added++;
+      if (wasCut) truncated++;
     } else if (!onlyNew) {
       const existing = merged[targetKey];
       // `nick` — не пользовательский текст, а СВЯЗКА ИДЕНТИЧНОСТИ: по нему
@@ -437,13 +445,15 @@ export function mergeNotes(
       if (!sameNote(existing, next)) {
         merged[targetKey] = next;
         replaced++;
+        // Обрезанный текст реально попал в карту только если победил он.
+        if (wasCut && next.text === safe.text) truncated++;
       }
     }
     // Новая id-запись с ником должна попасть в индекс: иначе ник-ключ того же
     // игрока, идущий дальше по файлу, создавал бы дубль (№12).
     indexNick(targetKey, merged[targetKey]);
   }
-  return { merged, added, replaced, truncated };
+  return { merged, added, replaced, truncated, skipped };
 }
 
 /** Канонический вид ключа: у id-ключей убираем ведущие нули. */
@@ -502,7 +512,7 @@ async function migrateFromSync(
     // 02.08.2026). А уже готовый мост вносим в local только новыми ключами:
     // он старше любой локальной заметки и переписывать её не должен.
     const bridge = mergeNotes(fromLegacy, fromSync).merged;
-    const merged = mergeNotes(localNotes, bridge, { onlyNew: true }).merged;
+    const merged = mergeNotes(localNotes, bridge, { onlyNew: true, maxText: MAX_OWN_NOTE_TEXT }).merged;
 
     await browser.storage.local.set({
       [NOTES_KEY]: merged,
@@ -579,7 +589,7 @@ async function migratedView(
       return { notes: localNotes, customTags: [...new Set([...localTags, ...syncTags])] };
     }
     const bridge = mergeNotes(fromLegacy, fromSync).merged;
-    const merged = mergeNotes(localNotes, bridge, { onlyNew: true }).merged;
+    const merged = mergeNotes(localNotes, bridge, { onlyNew: true, maxText: MAX_OWN_NOTE_TEXT }).merged;
     return { notes: merged, customTags: [...new Set([...localTags, ...syncTags])] };
   } catch {
     return { notes: localNotes, customTags: localTags };

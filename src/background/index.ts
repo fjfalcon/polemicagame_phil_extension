@@ -938,8 +938,7 @@ onSettingsChanged((patch) => {
 
 /** Реакция на собранный патч OBS-настроек (host+password вместе). */
 function applyObsIntent(patch: Partial<Settings>): void {
-  {
-    void enqueueObs(async () => {
+  void enqueueObs(async () => {
       // Снимок гарантированно заполнен: см. obsIntentReady.
       await obsIntentReady;
       const enabledChanged =
@@ -968,6 +967,21 @@ function applyObsIntent(patch: Partial<Settings>): void {
       // Ни одного РЕАЛЬНОГО перехода — событие «прицепное» (Firefox шлёт все
       // ключи области), делать нечего.
       if (!enabledChanged && !masterChanged && !hostChanged && !passwordChanged) return;
+      // Строка на КАЖДЫЙ реальный переход: без неё «почему OBS переподключился»
+      // (или не переподключился) разбирается только гаданием, а сам блок до
+      // 27.08.2026 не покрывался ни одним тестом.
+      log.info(
+        "background",
+        "переход настроек OBS:",
+        [
+          enabledChanged ? "тумблер" : "",
+          masterChanged ? "мастер" : "",
+          hostChanged ? "адрес" : "",
+          passwordChanged ? "пароль" : "",
+        ]
+          .filter(Boolean)
+          .join("+"),
+      );
       // Мастер-выключатель рвёт OBS так же, как выключение obs_enabled.
       if (
         (enabledChanged && patch.obs_enabled === false) ||
@@ -998,8 +1012,7 @@ function applyObsIntent(patch: Partial<Settings>): void {
         await setManualDisconnect(false);
       }
       await reconcileObsConnection(false, true);
-    }).catch((e) => log.error("background", "OBS settings update failed", e));
-  }
+  }).catch((e) => log.error("background", "OBS settings update failed", e));
 }
 
 // Выполняется при каждом новом incarnation service worker, а не только при старте браузера.

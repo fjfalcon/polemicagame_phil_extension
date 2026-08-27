@@ -48,7 +48,7 @@ describe("петля фолбэка импорта", () => {
   test("карта не менялась — одна запись, без лишних вопросов", async () => {
     const { d, saved } = deps([{}]);
     const r = await runImportFallback(incoming, 0, d);
-    expect(r).toEqual({ status: "saved", added: 1, replaced: 0 });
+    expect(r).toEqual({ status: "saved", added: 1, replaced: 0, truncated: 0 });
     expect(d.confirmMore).not.toHaveBeenCalled();
     expect(saved[0]["u:1"]).toMatchObject({ text: "новая заметка про первого" });
   });
@@ -183,5 +183,23 @@ describe("классификация ответа координатора (fail
     expect(confirmMore, "диалога не было").not.toHaveBeenCalled();
     expect(r.status).toBe("done");
     expect(classifyMergeResponse((r as { applied?: never }).applied)).toBe("refused");
+  });
+});
+
+describe("фолбэк не режет СВОЮ заметку (adversarial 27.08, HIGH-1)", () => {
+  test("12 000 символов переживают запись через фолбэк, truncated честен", async () => {
+    const long = "я".repeat(12_000);
+    const { d, saved } = deps([{}]);
+    const r = await runImportFallback({ "u:1": note(long) } as NotesMap, 0, d);
+    expect(r).toMatchObject({ status: "saved", truncated: 0 });
+    expect((saved[0]["u:1"] as { text: string }).text, "хвост не обрезан").toHaveLength(12_000);
+  });
+
+  test("сверхдлинное режется — и об этом сообщают наверх", async () => {
+    const huge = "я".repeat(30_000);
+    const { d, saved } = deps([{}]);
+    const r = await runImportFallback({ "u:1": note(huge) } as NotesMap, 0, d);
+    expect(r).toMatchObject({ status: "saved", truncated: 1 });
+    expect((saved[0]["u:1"] as { text: string }).text.length).toBeLessThan(30_000);
   });
 });

@@ -16,6 +16,7 @@ const settings = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const wiring = vi.hoisted(() => ({
   onAlarm: [] as ((a: { name: string; scheduledTime: number }) => void)[],
   onMessage: [] as ((msg: unknown, sender: unknown) => unknown)[],
+  onSettings: [] as ((patch: Record<string, unknown>) => void)[],
   alarms: new Map<string, { name: string; periodInMinutes?: number }>(),
 }));
 
@@ -90,7 +91,12 @@ vi.mock("@core/messaging", () => ({
 vi.mock("@core/settings", () => ({
   getSettings: vi.fn(async () => settings.current),
   getSetting: vi.fn(async (key: string) => settings.current[key]),
-  onSettingsChanged: vi.fn(() => () => undefined),
+  // Хендлер СОХРАНЯЕМ: блок реакции на смену настроек OBS не покрывался ни
+  // одним тестом (adversarial 27.08, №5 — «зелёные тесты» о нём молчали).
+  onSettingsChanged: vi.fn((fn: (patch: Record<string, unknown>) => void) => {
+    wiring.onSettings.push(fn);
+    return () => undefined;
+  }),
 }));
 vi.mock("../../src/background/onboarding", () => ({ handleInstalled: vi.fn() }));
 vi.mock("../../src/background/notes-coordinator", () => ({
@@ -188,6 +194,7 @@ beforeEach(() => {
   };
   wiring.onAlarm.length = 0;
   wiring.onMessage.length = 0;
+  wiring.onSettings.length = 0;
   wiring.alarms.clear();
   FakeSocket.last = null;
   FakeSocket.created = 0;
@@ -295,5 +302,55 @@ describe("alarm-проба не дублирует живой heartbeat (PERF-8)
     await fireWatchdogAlarm();
     expect(getVersionProbes(socket)).toBe(3);
     expect(FakeSocket.created).toBe(1);
+  });
+});
+
+describe("смена OBS-настроек: один упорядоченный переход (ревью 27.08.2026)", () => {
+  test("host (sync) и пароль (local) приходят порознь — реагируем ОДИН раз", async () => {
+    // Раньше реакция на первое событие подключалась к новому endpoint со
+    // старым паролем: события разных областей приходят по очереди.
+    await bootBackground();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified(); // иначе connect висит и держит очередь OBS
+    await flushMicrotasks();
+    FakeSocket.created = 0;
+
+    const emit = (patch: Record<string, unknown>) => {
+      for (const fn of wiring.onSettings) fn(patch);
+    };
+    emit({ obs_host: "ws://new-host:4455" });
+    emit({ obs_password: "свежий" });
+    // До окна коалесценции реакции нет вовсе.
+    expect(FakeSocket.created, "не дёргаемся на первом же событии").toBe(0);
+
+    settings.current.obs_host = "ws://new-host:4455";
+    settings.current.obs_password = "свежий";
+    await vi.advanceTimersByTimeAsync(300);
+    await flushMicrotasks();
+
+    // Ровно одно переподключение — по СОБРАННОМУ намерению.
+    // Ровно ОДИН переход по собранному намерению — вместо двух подряд.
+    const transitions = vi
+      .mocked(log.info)
+      .mock.calls.filter((c) => String(c[1]).includes("переход настроек OBS"));
+    expect(transitions, "один переход, а не два").toHaveLength(1);
+    expect(String(transitions[0][2]), "и адрес, и пароль в одном переходе").toBe("адрес+пароль");
+  });
+
+  test("прицепное событие без реального перехода не рождает подключений", async () => {
+    await bootBackground();
+    FakeSocket.last?.hello();
+    await flushMicrotasks();
+    FakeSocket.last?.identified();
+    await flushMicrotasks();
+    FakeSocket.created = 0;
+    for (const fn of wiring.onSettings) fn({ obs_host: settings.current.obs_host });
+    await vi.advanceTimersByTimeAsync(300);
+    await flushMicrotasks();
+    expect(
+      vi.mocked(log.info).mock.calls.filter((c) => String(c[1]).includes("переход настроек OBS")),
+      "прицепное событие переходом не считается",
+    ).toHaveLength(0);
   });
 });

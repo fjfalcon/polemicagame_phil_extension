@@ -128,6 +128,27 @@ let recorded = 0;
  * не всё». Раньше признак неполноты знал только про backpressure.
  */
 let droppedByBackpressure = 0;
+/**
+ * Персистентный признак неполноты (adversarial 27.08, №2/№8): счётчик живёт
+ * в контенте, а файл собирает попап — при остановленной записи, вытеснении
+ * и уборке маркер в кусок уже не попадёт. Отдельный маленький ключ пролезает
+ * даже в забитую квоту; best-effort, ошибку глотаем.
+ */
+/** ВНЕ префикса кусков: иначе попадал бы во все фильтры «мои куски». */
+export const WS_LOSS_KEY = "polemica:wslog-loss";
+function noteLoss(n: number): void {
+  if (n <= 0) return;
+  droppedByBackpressure += n;
+  void (async () => {
+    try {
+      const bag = (await browser.storage.local.get({ [WS_LOSS_KEY]: 0 })) as Record<string, unknown>;
+      const prev = typeof bag[WS_LOSS_KEY] === "number" ? (bag[WS_LOSS_KEY] as number) : 0;
+      await browser.storage.local.set({ [WS_LOSS_KEY]: prev + n });
+    } catch {
+      /* даже признак не влез — честнее промолчать, чем упасть */
+    }
+  })();
+}
 /** Сколько из droppedByBackpressure уже уехало маркером в куски. */
 let reportedDrops = 0;
 /** Символы, стоящие в ЦЕПОЧКЕ записи (захвачены замыканиями writeChunk):
@@ -146,13 +167,16 @@ let stopped = false;
 
 /** Добавить кадр. Возвращает false, если кадр отброшен как чужой. */
 export function record(dir: "in" | "out", raw: unknown): boolean {
+  // Порядок важен: сначала «наш ли это кадр» (adversarial 27.08, №3 —
+  // иначе после остановки в потери шли медиа-кадры, которых в логе не
+  // бывает по дизайну, и счётчик врал на тысячи).
+  if (!isGameFrame(raw)) return false;
   if (stopped) {
-    // Лог остановлен отказом хранилища: каждый новый кадр — потеря, и в
-    // файле это должно быть видно (п.3).
-    droppedByBackpressure++;
+    // Лог остановлен отказом хранилища: каждый ПРОПУЩЕННЫЙ игровой кадр —
+    // потеря, и файл обязан это признать.
+    noteLoss(1);
     return false;
   }
-  if (!isGameFrame(raw)) return false;
   const m = sanitizeFrame(raw);
   pending.push({ t: Date.now(), d: dir, m });
   pendingChars += m.length;
@@ -222,7 +246,7 @@ export function flushNow(): Promise<void> {
     if (droppedByBackpressure === 0) {
       log.warn(SCOPE, "хранилище не успевает за потоком кадров — новые партии отбрасываются");
     }
-    droppedByBackpressure += frames.length;
+    noteLoss(frames.length);
     return flushChain;
   }
   const gen = generation;
@@ -275,7 +299,7 @@ async function writeChunk(
       stopped = true;
       // Эти кадры на диск не попали — считаем их потерянными, иначе файл
       // выглядел бы полным ровно там, где обрывается (п.3).
-      droppedByBackpressure += payload.frames.length;
+      noteLoss(payload.frames.length);
       log.warn(SCOPE, "полный лог остановлен: хранилище браузера не принимает записи");
       return;
     }
@@ -303,7 +327,7 @@ async function writeChunk(
     if (!oldest) break;
     storedChars -= oldest.chars;
     // Вытеснение — тоже потеря: файл обязан это признать (п.3).
-    droppedByBackpressure += oldest.frames;
+    noteLoss(oldest.frames);
     try {
       await browser.storage.local.remove(oldest.key);
     } catch {
@@ -341,6 +365,7 @@ export async function finishSession(): Promise<void> {
           const oldest = chunks.shift();
           if (oldest) {
             storedChars -= oldest.chars;
+            noteLoss(oldest.frames); // маркер не должен съедать кадры молча (№6)
             try {
               await browser.storage.local.remove(oldest.key);
             } catch {
@@ -444,7 +469,15 @@ export async function sweepStorage(budget = MAX_TOTAL_CHARS): Promise<number> {
       else kept += c.chars;
     }
     if (doomed.length > 0) {
+      // Уборка тоже уносит кадры из будущего файла (№8): признак неполноты
+      // обязан это включать, иначе «единый» он только на словах.
+      let lostFrames = 0;
+      for (const key of doomed) {
+        const chunk = all[key] as StoredChunk | undefined;
+        if (Array.isArray(chunk?.frames)) lostFrames += chunk.frames.length;
+      }
       await browser.storage.local.remove(doomed);
+      if (lostFrames > 0) noteLoss(lostFrames);
       log.info(SCOPE, `убрано кусков полного лога: ${doomed.length}`);
     }
     return kept;
@@ -476,6 +509,12 @@ export async function collectAll(): Promise<{
       if (Array.isArray(chunk?.frames)) frames.push(...chunk.frames);
       if (typeof chunk?.dropped === "number" && chunk.dropped > 0) dropped += chunk.dropped;
     }
+    // Персистентный признак: то, что не доехало ни до одного куска.
+    const lossBag = (await browser.storage.local.get({ [WS_LOSS_KEY]: 0 })) as Record<
+      string,
+      unknown
+    >;
+    if (typeof lossBag[WS_LOSS_KEY] === "number") dropped += lossBag[WS_LOSS_KEY] as number;
     return { frames: frames.sort((a, b) => a.t - b.t), dropped };
   } catch (e) {
     log.warn(SCOPE, "чтение полного лога не удалось", e);
@@ -493,6 +532,7 @@ export async function clearAll(): Promise<boolean> {
   try {
     const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
     const keys = Object.keys(all).filter(k => k.startsWith(WS_LOG_PREFIX));
+    keys.push(WS_LOSS_KEY); // признак неполноты живёт вне префикса — чистим явно
     if (keys.length > 0) await browser.storage.local.remove(keys);
     return true;
   } catch (e) {

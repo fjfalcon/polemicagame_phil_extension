@@ -52,6 +52,7 @@ import {
   MAX_TOTAL_CHARS,
   PENDING_MAX_CHARS,
   WS_LOG_PREFIX,
+  WS_LOSS_KEY,
   WS_LOG_TTL_MS,
   clearAll,
   collectAll,
@@ -410,7 +411,10 @@ describe("уборка за собой (жалоба 10.08.2026)", () => {
     storage.data.set(`${WS_LOG_PREFIX}старая:1`, chunk(old, 10));
     storage.data.set("notes", { "u:1": { text: "важное" } });
     await sweepStorage();
-    expect([...storage.data.keys()], "чужое не трогаем").toEqual(["notes"]);
+    expect(
+      [...storage.data.keys()].filter((k) => k !== WS_LOSS_KEY),
+      "чужое не трогаем",
+    ).toEqual(["notes"]);
   });
 
   test("потолок объёма — ОБЩИЙ, а не на сессию", async () => {

@@ -13,7 +13,7 @@
  * продолжается) — ОТМЕНА, не запись «как получилось»: граница согласия
  * важнее удобства, а повторить импорт бесплатно (ревью 26.08.2026, №3).
  */
-import { mergeNotes, type NotesMap } from "@core/notes-store";
+import { MAX_OWN_NOTE_TEXT, mergeNotes, type NotesMap } from "@core/notes-store";
 import type { NotesResultMsg } from "@shared/types";
 
 export interface ImportFallbackDeps {
@@ -24,7 +24,7 @@ export interface ImportFallbackDeps {
 }
 
 export type ImportFallbackResult =
-  | { status: "saved"; added: number; replaced: number }
+  | { status: "saved"; added: number; replaced: number; truncated: number }
   | { status: "cancelled" }
   /** Карта меняется быстрее согласий — импорт отменён, повторить позже. */
   | { status: "unstable" }
@@ -43,7 +43,10 @@ export async function runImportFallback(
   for (;;) {
     const { notes, loadFailed } = await deps.loadNotes();
     if (loadFailed) return { status: "read_failed" };
-    const fresh = mergeNotes(notes, incoming);
+    // Тот же потолок, что у координатора (adversarial 27.08, HIGH-1): иначе
+    // фолбэк резал СВОЮ заметку до 5000 и рапортовал успех — ровно та потеря
+    // данных, которую волна и чинила.
+    const fresh = mergeNotes(notes, incoming, { maxText: MAX_OWN_NOTE_TEXT });
     if (fresh.replaced > approved) {
       if (confirms >= MAX_CONFIRMS) return { status: "unstable" };
       confirms++;
@@ -52,7 +55,12 @@ export async function runImportFallback(
       continue; // ПЕРЕЧИТАТЬ после диалога — за время вопроса карта могла уехать
     }
     if (!(await deps.saveNotes(fresh.merged))) return { status: "save_failed" };
-    return { status: "saved", added: fresh.added, replaced: fresh.replaced };
+    return {
+      status: "saved",
+      added: fresh.added,
+      replaced: fresh.replaced,
+      truncated: fresh.truncated,
+    };
   }
 }
 

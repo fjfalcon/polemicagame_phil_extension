@@ -940,10 +940,16 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!added && !replaced) {
           const onlyExtras = await applySettings();
           await applyExtras();
+          // Даже когда «всё уже есть», обрезка/пропуск записей обязаны быть
+          // видны: молчаливая потеря — тот же класс (adversarial 27.08, №10).
+          const quietLoss =
+            (preview.truncated > 0 ? ` — обрезано по длине: ${preview.truncated}` : "") +
+            (preview.skipped > 0 ? ` — пропущено негодных записей: ${preview.skipped}` : "");
           showPopupToast(
-            onlyExtras
+            (onlyExtras
               ? `Все заметки из файла уже есть; настроек: ${onlyExtras}`
-              : "Все заметки из файла уже есть",
+              : "Все заметки из файла уже есть") + quietLoss,
+            quietLoss ? "error" : undefined,
           );
           return;
         }
@@ -1002,7 +1008,7 @@ document.addEventListener("DOMContentLoaded", () => {
           showPopupToast("Не удалось сохранить заметки — импорт не применён", "error");
           return;
         }
-        let fallbackCounts: { added: number; replaced: number } | null = null;
+        let fallbackCounts: { added: number; replaced: number; truncated: number } | null = null;
         if (verdict === "dead") {
           // Фолбэк на прямую запись — фон не ответил (спящий воркер).
           applied = undefined;
@@ -1035,7 +1041,11 @@ document.addEventListener("DOMContentLoaded", () => {
             showPopupToast("Не удалось сохранить заметки", "error");
             return;
           }
-          fallbackCounts = { added: result.added, replaced: result.replaced };
+          fallbackCounts = {
+            added: result.added,
+            replaced: result.replaced,
+            truncated: result.truncated,
+          };
         }
         // Настройки применяем ПОСЛЕ успешной записи заметок (находка 6).
         const restoredSettings = await applySettings();
@@ -1047,10 +1057,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const notesMsg = replacedFinal
           ? `Добавлено: ${addedFinal}, обновлено: ${replacedFinal}`
           : `Импортировано заметок: ${addedFinal}`;
+        // Честность берём с ТОГО пути, который реально писал (фолбэк или
+        // координатор), а не с предварительного расчёта (adversarial HIGH-1).
+        const truncatedFinal = fallbackCounts?.truncated ?? preview.truncated;
+        const skippedFinal = preview.skipped;
         const cutNotes =
-          preview.truncated > 0
-            ? ` — ВНИМАНИЕ: ${preview.truncated} заметок обрезано по длине`
-            : "";
+          (truncatedFinal > 0 ? ` — ВНИМАНИЕ: ${truncatedFinal} заметок обрезано по длине` : "") +
+          // Выброшенная запись хуже обрезанной — о ней тоже говорим (№11).
+          (skippedFinal > 0 ? ` — пропущено негодных записей: ${skippedFinal}` : "");
         const cutMain =
           (extras.marksTruncated ? " (часть меток ролей не поместилась в потолок 50 игр)" : "") +
           (extras.failed ? " — палитра/мьюты/метки НЕ сохранены" : "");
@@ -1058,7 +1072,7 @@ document.addEventListener("DOMContentLoaded", () => {
           (restoredSettings ? `${notesMsg}; настроек: ${restoredSettings}` : notesMsg) +
             cutNotes +
             cutMain,
-          extras.failed || preview.truncated > 0 ? "error" : undefined,
+          extras.failed || truncatedFinal > 0 || skippedFinal > 0 ? "error" : undefined,
         );
       } catch (e) {
         log.error(SCOPE, "import failed", e);

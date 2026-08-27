@@ -239,12 +239,17 @@ export function onSettingsChanged(handler: SettingsChangeHandler): () => void {
             // находка 18).
             DEFAULT_SETTINGS[k as SettingKey]
           : c.newValue;
-      const prev = c.oldValue === undefined ? DEFAULT_SETTINGS[k as SettingKey] : c.oldValue;
-      if (Object.is(prev, next)) continue;
+      const prevRaw = c.oldValue === undefined ? DEFAULT_SETTINGS[k as SettingKey] : c.oldValue;
+      // Сравниваем ТО ЖЕ, что отдадим подписчикам: иначе косметическая
+      // разница («?x=1» в obs_host) рождала «изменение» с тем же значением
+      // и будила FeatureManager/попап впустую (adversarial 27.08, №13).
+      const prev = sanitizeSettingValue(k, prevRaw);
+      const cleanNext = sanitizeSettingValue(k, next);
+      if (Object.is(prev, cleanNext)) continue;
       // Та же граница, что у get/setSettings (ревью 27.08.2026, п.2):
       // подписчики не должны получать сырое значение с кредами, а сравнение
       // «грязное != чистое» иначе читается как смена адреса.
-      patch[k] = sanitizeSettingValue(k, next);
+      patch[k] = cleanNext;
     }
     if (Object.keys(patch).length) handler(patch as Partial<Settings>);
   };

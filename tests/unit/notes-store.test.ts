@@ -505,3 +505,37 @@ describe("round-trip своего бэкапа не режет заметку (�
     expect(truncated).toBe(1);
   });
 });
+
+describe("честность счётчиков слияния (adversarial 27.08, №10/№11)", () => {
+  const long = () => "я".repeat(12_000);
+
+  test("onlyNew: не применённая запись НЕ считается обрезанной", () => {
+    // Мост sync→local: ключ уже есть, запись не применяется — счётчик её
+    // считать не должен (иначе миграция «сообщала» о потере, которой нет).
+    const { truncated, added } = mergeNotes(
+      { "u:1": { text: "локальная", timestamp: 9 } },
+      { "u:1": { text: long(), timestamp: 1 } },
+      { onlyNew: true },
+    );
+    expect(added).toBe(0);
+    expect(truncated, "ничего не применилось — нечего и обрезать").toBe(0);
+  });
+
+  test("проигравшая по времени запись не считается обрезанной", () => {
+    const { truncated } = mergeNotes(
+      { "u:1": { text: "свежая локальная", timestamp: 100 } },
+      { "u:1": { text: long(), timestamp: 1 } },
+    );
+    expect(truncated).toBe(0);
+  });
+
+  test("негодные записи считаются отдельно (потеря хуже обрезки)", () => {
+    const { skipped, added } = mergeNotes({}, {
+      "u:1": { text: 12345 },
+      "u:2": { text: null },
+      "u:3": { text: "нормальная", timestamp: 5 },
+    } as unknown as NotesMap);
+    expect(added).toBe(1);
+    expect(skipped, "две записи выброшены — молчать нельзя").toBe(2);
+  });
+});
