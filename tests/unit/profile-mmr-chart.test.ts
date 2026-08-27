@@ -28,7 +28,7 @@ vi.mock("@core/crossover", async (importOriginal) => {
   const orig = await importOriginal<typeof import("@core/crossover")>();
   return {
     ...orig,
-    fetchFirstPage: vi.fn(async () => ({
+    getOwnHistory: vi.fn(async () => ({
       rows: [
         { id: 3, role: "civilian", win: true, mmrAfter: 120, mmrDiff: 20 },
         { id: 1, role: "civilian", win: true, mmrAfter: 100, mmrDiff: 10 },
@@ -41,8 +41,10 @@ vi.mock("@core/crossover", async (importOriginal) => {
 });
 
 import { getOwnUserId } from "@core/own-user";
+import { getOwnHistory } from "@core/crossover";
 import {
   CHART_CLASS,
+  mmrFacts,
   chartPoints,
   mmrSeries,
   profileMmrChartFeature,
@@ -131,5 +133,59 @@ describe("карточка на своём профиле", () => {
     await flush();
     syncProfileMmrRoute(null);
     expect(block()).toBeNull();
+  });
+});
+
+describe("жалоба 27.08.2026: «Max MMR неправильный»", () => {
+  /** История: пик 9171 глубоко в прошлом, последние 120 игр — вокруг 8972. */
+  const career = () => {
+    const rows = [] as { id: number; role: string; win: boolean; mmrAfter: number }[];
+    for (let i = 1; i <= 300; i++) {
+      rows.push({ id: i, role: "civilian", win: true, mmrAfter: i === 100 ? 9171 : 8500 });
+    }
+    for (let i = 301; i <= 420; i++) {
+      rows.push({ id: i, role: "civilian", win: true, mmrAfter: 8972 });
+    }
+    return rows;
+  };
+
+  test("максимум считается по ВСЕЙ истории, а не по окну графика", () => {
+    const facts = mmrFacts(career());
+    // Мутант «max по окну» вернул бы 8972 — ровно то, на что жаловался игрок.
+    expect(facts.careerMax).toBe(9171);
+    expect(facts.careerGames).toBe(420);
+    expect(facts.window, "рисуем всё равно окно — линия по 420 играм нечитаема").toHaveLength(120);
+    expect(Math.max(...facts.window), "в окне пика нет — тем важнее честная подпись").toBe(8972);
+  });
+
+  const mountProfile = (): void => {
+    document.body.innerHTML =
+      '<div class="profile__right"><div class="profile__right-info"></div><div class="profile__right-tabs"></div></div>';
+    window.history.replaceState(null, "", "/profile/13509");
+  };
+
+  test("подпись честна: график — окно, числа — за всё время", async () => {
+    (getOwnHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      rows: career(),
+      truncated: false,
+    });
+    mountProfile();
+    profileMmrChartFeature.enable({ settings: {} } as unknown as FeatureContext);
+    await flush();
+    const text = block()?.textContent ?? "";
+    expect(text).toContain("макс 9171");
+    expect(text).toContain("за всё время");
+    expect(text).toContain("график: последние 120 игр");
+  });
+
+  test("история упёрлась в лимит — оговорка «за доступный отрезок»", async () => {
+    (getOwnHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      rows: career(),
+      truncated: true,
+    });
+    mountProfile();
+    profileMmrChartFeature.enable({ settings: {} } as unknown as FeatureContext);
+    await flush();
+    expect(block()?.textContent).toContain("за доступный отрезок");
   });
 });

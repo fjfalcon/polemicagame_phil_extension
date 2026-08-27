@@ -13,7 +13,7 @@
  */
 import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
-import { fetchFirstPage, type GameRow } from "@core/crossover";
+import { getOwnHistory, type GameRow } from "@core/crossover";
 import { getOwnUserId } from "@core/own-user";
 import { profileIdFromPath } from "./profile-crossover";
 import type { Feature } from "@core/feature";
@@ -25,13 +25,47 @@ export const CHART_CLASS = "pn-mmr-chart";
 export const CHART_GAMES = 120;
 const TTL_MS = 10 * 60_000;
 
-/** Ряд значений MMR в хронологическом порядке (старые → новые). */
-export function mmrSeries(rows: GameRow[]): number[] {
+/** ВСЕ значения MMR в хронологическом порядке (старые → новые). */
+export function mmrSeriesAll(rows: GameRow[]): number[] {
   return rows
     .filter((r) => typeof r.mmrAfter === "number")
     .sort((a, b) => a.id - b.id)
-    .slice(-CHART_GAMES)
     .map((r) => r.mmrAfter as number);
+}
+
+/** Ряд для РИСУНКА: последние CHART_GAMES игр (дальше линия — каша). */
+export function mmrSeries(rows: GameRow[]): number[] {
+  return mmrSeriesAll(rows).slice(-CHART_GAMES);
+}
+
+export interface MmrFacts {
+  /** Значения для полилинии (окно графика). */
+  window: number[];
+  /** Максимум за ВСЮ доступную историю, а не за окно графика. */
+  careerMax: number;
+  careerMin: number;
+  /** Сколько рейтинговых игр учтено в карьерных числах. */
+  careerGames: number;
+  /** История упёрлась в лимит выдачи — числа честно «за доступный отрезок». */
+  capped: boolean;
+}
+
+/**
+ * Факты для карточки. Жалоба игрока 27.08.2026: «Max MMR неправильный» —
+ * подпись «макс» стояла под максимумом ОКНА графика (120 игр), а карьерный
+ * максимум был на 199 очков выше и в другом году. Окно осталось (линия по
+ * 3583 играм нечитаема), но ЧИСЛА теперь по всей истории, и подписи говорят,
+ * что именно показано.
+ */
+export function mmrFacts(rows: GameRow[], capped = false): MmrFacts {
+  const all = mmrSeriesAll(rows);
+  return {
+    window: all.slice(-CHART_GAMES),
+    careerMax: all.length ? Math.max(...all) : 0,
+    careerMin: all.length ? Math.min(...all) : 0,
+    careerGames: all.length,
+    capped,
+  };
 }
 
 /**
@@ -60,20 +94,21 @@ let unsubDom: (() => void) | null = null;
  *  зацикливало вставку/удаление через onDomChange (см. profile-crossover,
  *  adversarial 26.08.2026, блокер). */
 let hiddenFor: string | null = null;
-let cache: { at: number; values: number[] } | null = null;
-let inFlight: Promise<number[] | null> | null = null;
+let cache: { at: number; facts: MmrFacts } | null = null;
+let inFlight: Promise<MmrFacts | null> | null = null;
 
-async function loadSeries(myId: number): Promise<number[] | null> {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.values;
+async function loadFacts(myId: number): Promise<MmrFacts | null> {
+  if (cache && Date.now() - cache.at < TTL_MS) return cache.facts;
   if (inFlight) return inFlight;
-  // Первой страницы (2000 строк) хватает на 120 точек с большим запасом —
-  // completeHistory с его страницами тут был бы чистым перерасходом.
-  const p = fetchFirstPage(myId)
+  // ПОЛНАЯ история (жалоба 27.08.2026): карьерный максимум мог быть глубже
+  // первой страницы, и подпись «макс» врала. Это общий кэш @core/crossover —
+  // один запрос на всю глубину, переиспользуемый пересечениями.
+  const p = getOwnHistory(myId)
     .then((h) => {
       if (!h) return null;
-      const values = mmrSeries(h.rows);
-      cache = { at: Date.now(), values };
-      return values;
+      const facts = mmrFacts(h.rows, h.truncated);
+      cache = { at: Date.now(), facts };
+      return facts;
     })
     .catch((e) => {
       log.warn(SCOPE, "история для графика не загрузилась", e);
@@ -103,7 +138,8 @@ function buildBlock(profileId: string): HTMLElement {
   return el;
 }
 
-function renderChart(body: HTMLElement, values: number[]): void {
+function renderChart(body: HTMLElement, facts: MmrFacts): void {
+  const values = facts.window;
   if (values.length < 2) {
     body.style.opacity = ".7";
     body.textContent = "Рейтинговых игр пока мало — график появится позже";
@@ -111,12 +147,13 @@ function renderChart(body: HTMLElement, values: number[]): void {
   }
   const w = 600;
   const hgt = 140;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
   const last = values[values.length - 1];
   const delta = last - values[0];
   const color = delta >= 0 ? "#4ade80" : "#f87171";
   const pts = chartPoints(values, w, hgt);
+  // «за доступный отрезок» — та же честная оговорка, что у пересечений:
+  // у аккаунта длиннее лимита выдачи карьерный максимум может быть глубже.
+  const scope = facts.capped ? "за доступный отрезок" : "за всё время";
   body.style.opacity = "";
   body.innerHTML =
     `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">` +
@@ -127,7 +164,8 @@ function renderChart(body: HTMLElement, values: number[]): void {
     `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` +
     `</svg>` +
     `<div style="display:flex;justify-content:space-between;color:rgba(255,255,255,.45);font-size:12px;">` +
-    `<span>мин ${min}</span><span>макс ${max}</span>` +
+    `<span>график: последние ${values.length} игр</span>` +
+    `<span>макс ${facts.careerMax} · мин ${facts.careerMin} (${scope}, ${facts.careerGames} игр)</span>` +
     `</div>`;
 }
 
@@ -163,14 +201,14 @@ async function fillBlock(profileId: string, block: HTMLElement): Promise<void> {
     block.remove();
     return;
   }
-  const values = await loadSeries(myId);
+  const facts = await loadFacts(myId);
   if (routeId !== profileId || !block.isConnected) return;
-  if (!values) {
+  if (!facts) {
     body.style.opacity = ".7";
     body.textContent = "История не загрузилась — попробуйте обновить страницу";
     return;
   }
-  renderChart(body, values);
+  renderChart(body, facts);
 }
 
 /** Маршрут от URL-роутера: id профиля либо null. */
