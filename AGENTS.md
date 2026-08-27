@@ -327,7 +327,7 @@ src/
 | local | obs_connection_state, obs_auto_scene_state | obs-client/obs-panel |
 | local | obs_manual_disconnect, obs_retry_blocked | background (8.1.25): пауза «Отключиться» и блок реконнекта при 4008-4011; ОБА сбрасываются на onStartup |
 | local | pn_twitch_panel_restored_v1 | флаг миграции 8.1.24 |
-| localStorage страницы | fp:*, polemica:loglevel/buflevel | панели/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник. `polemica:update*` больше НЕ используются (переехали в local, 8.1.44) |
+| localStorage страницы | fp:<панель> (коробка), fp:<панель>:prefs (вид: фон/заголовок/шрифт/сквозь-клики, 9.51.0), polemica:loglevel/buflevel | панели/log. ВНИМАНИЕ: пишется сайтом ⇒ недоверенный источник, санитайзер вида — @core/panel-chrome (потолок сырого JSON, Object.hasOwn, whitelist значений). Настройки вида НЕ синхронизируются: это предпочтения устройства; побеждает последний писатель среди вкладок. `polemica:update*` больше НЕ используются (переехали в local, 8.1.44) |
 | sessionStorage страницы | pn_flipped_players, pn_requeue_pending, pn_postgame_pending, fp:twitch-panel:history | camera-flip (перевороты на игру), queue-requeue (одноразовый мост «комната распущена → поиск», TTL 45с) и postgame-search (мост «клик „В поиск" после игры → выйти из игры и нажать „Играть"», тот же формат/TTL); twitch-panel (история чата поверх F5, 9.29.0 — чат-строки без системных, привязана к каналу, санитизация parseChatHistory). Недоверенный источник: значения валидируются при чтении, подделка сайтом не даёт привилегий |
 
 ### Что попадает в файл лога (решения владельца, 02.08.2026)

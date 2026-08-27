@@ -17,6 +17,14 @@ export interface FloatingPanelOptions {
   className?: string;
 }
 
+/** Ширина краевых ручек ресайза — и отступ тела, чтобы они не крали скроллбар. */
+const EDGE_HANDLE_PX = 6;
+
+/** Сколько панели обязано остаться в окне по горизонтали, чтобы её схватить. */
+const EDGE_KEEP_PX = 48;
+/** Шапка целиком на экране: за неё панель и таскают. */
+const HEADER_KEEP_PX = 32;
+
 interface Box {
   left: number;
   top: number;
@@ -32,6 +40,17 @@ export abstract class FloatingPanel {
   protected readonly opts: Required<FloatingPanelOptions>;
   private cleanup: Array<() => void> = [];
   private mounted = false;
+  /** Идёт перетаскивание или ресайз: кламп в это время не вмешивается. */
+  private gestureActive = false;
+  /** Ручки ресайза — наследник гасит их в режиме «сквозь клики». */
+  protected resizeHandles: HTMLElement[] = [];
+  /**
+   * Коробка, которую задал ПОЛЬЗОВАТЕЛЬ. Кламп по временно уменьшенному окну
+   * меняет только показ: сохранять подрезанный размер нельзя — вернувшись на
+   * большой монитор, человек ждёт своё прежнее окно (adversarial 27.08.2026:
+   * первый же сдвиг панели закреплял подрезанный размер на диске).
+   */
+  private desiredBox: Box | null = null;
 
   constructor(opts: FloatingPanelOptions) {
     this.opts = {
@@ -83,9 +102,20 @@ export abstract class FloatingPanel {
 
   private clampToViewport(): void {
     if (!this.root.isConnected) return;
+    // Скрытая панель не измеряется: у display:none нулевой rect, и кламп
+    // «поправлял» коробку в минимальный размер в точке (0,0) — стример
+    // прятал чат, менял размер окна и получал панель в углу (блокер
+    // adversarial 27.08.2026). Скрытую поправим на показе.
+    if (this.root.style.display === "none") return;
+    // Жест главнее: во время drag/resize человек сам решает, где панель, а
+    // наши записи всё равно затрёт следующий pointermove.
+    if (this.gestureActive) return;
     const vw = window.innerWidth || 1280;
     const vh = window.innerHeight || 720;
     const r = this.root.getBoundingClientRect();
+    // Нулевая коробка = панель не отрисована (скрыта родителем, вкладка
+    // только просыпается): измерять нечего, поправлять нечего.
+    if (r.width <= 0 || r.height <= 0) return;
     const width = Math.min(Math.max(this.opts.minWidth, r.width), vw);
     const height = Math.min(Math.max(this.opts.minHeight, r.height), vh);
     const left = Math.min(Math.max(0, r.left), Math.max(0, vw - width));
@@ -120,6 +150,9 @@ export abstract class FloatingPanel {
   show(): void {
     this.mount();
     if (this.root.style.display !== "flex") this.root.style.display = "flex";
+    // Пока панель была скрыта, окно могло уменьшиться — правим здесь, когда
+    // коробку снова есть чем измерить.
+    this.clampToViewport();
   }
 
   hide(): void {
@@ -152,6 +185,11 @@ export abstract class FloatingPanel {
       borderRadius: "10px",
       boxShadow: "0 8px 30px rgba(0,0,0,.45)",
       overflow: "hidden",
+      // Явный border-box: у корня есть рамка 1px, и при content-box
+      // getBoundingClientRect отдавал бы style.width + 2. Кламп пишет
+      // измеренное обратно в стиль — панель росла бы на 2px за каждое
+      // событие resize, пока не упрётся в экран (adversarial 27.08.2026).
+      boxSizing: "border-box",
       font: "13px/1.4 system-ui, sans-serif",
     } as CSSStyleDeclaration);
 
@@ -165,6 +203,11 @@ export abstract class FloatingPanel {
       background: "rgba(255,255,255,.06)",
       cursor: "move",
       userSelect: "none",
+      touchAction: "none",
+      // Выше ручек ресайза: иначе правые 6px шапки меняли ширину вместо того,
+      // чтобы таскать панель.
+      position: "relative",
+      zIndex: "5",
       flex: "0 0 auto",
     } as CSSStyleDeclaration);
 
@@ -181,18 +224,28 @@ export abstract class FloatingPanel {
       flex: "1 1 auto",
       overflow: "auto",
       padding: "8px 10px",
+      // Отступ под ручку правого края: иначе она ложится на собственную
+      // полосу прокрутки тела, и попытка проскроллить список сцен OBS
+      // меняла ширину панели (adversarial 27.08.2026).
+      marginRight: this.opts.resizable ? `${EDGE_HANDLE_PX}px` : "0",
+      marginBottom: this.opts.resizable ? `${EDGE_HANDLE_PX}px` : "0",
     } as CSSStyleDeclaration);
 
     root.append(header, body);
 
     if (this.opts.resizable) {
+      // Ручки хранятся: режим «сквозь клики» гасит их вместе с остальным
+      // хромом — видимая насечка на прозрачном оверлее уезжала в эфир.
+      this.resizeHandles = [];
       // Три ручки вместо одного невидимого угла 14×14: правый край тянет
       // ширину, нижний — высоту, угол — обе (жалоба владельца 27.08.2026
       // «менять размеры нормально»). Попасть в угол мышью на панели 250px
       // было отдельным упражнением, а край менял обе стороны разом.
-      root.appendChild(this.buildResizeHandle(root, "e"));
-      root.appendChild(this.buildResizeHandle(root, "s"));
-      root.appendChild(this.buildResizeHandle(root, "se"));
+      for (const dir of ["e", "s", "se"] as const) {
+        const handle = this.buildResizeHandle(root, dir);
+        this.resizeHandles.push(handle);
+        root.appendChild(handle);
+      }
     }
 
     this.root = root;
@@ -238,8 +291,19 @@ export abstract class FloatingPanel {
     const applyPosition = () => {
       frameId = null;
       if (pointerId === null || !root.isConnected) return;
-      const left = `${baseLeft + (latestX - startX)}px`;
-      const top = `${baseTop + (latestY - startY)}px`;
+      // Границы: pointer capture шлёт события и когда курсор ушёл за окно, и
+      // панель утаскивалась ЦЕЛИКОМ за экран — внутри сессии вернуть её было
+      // нечем (кламп срабатывал только на resize окна). Оставляем на виду
+      // всю шапку по вертикали и заметный край по горизонтали
+      // (adversarial 27.08.2026).
+      const vw = window.innerWidth || 1280;
+      const vh = window.innerHeight || 720;
+      const r = root.getBoundingClientRect();
+      const keepX = Math.min(EDGE_KEEP_PX, r.width || EDGE_KEEP_PX);
+      const rawLeft = baseLeft + (latestX - startX);
+      const rawTop = baseTop + (latestY - startY);
+      const left = `${Math.round(Math.min(Math.max(keepX - (r.width || 0), rawLeft), vw - keepX))}px`;
+      const top = `${Math.round(Math.min(Math.max(0, rawTop), Math.max(0, vh - HEADER_KEEP_PX)))}px`;
       if (root.style.left !== left) root.style.left = left;
       if (root.style.top !== top) root.style.top = top;
     };
@@ -261,6 +325,7 @@ export abstract class FloatingPanel {
       }
       applyPosition();
       pointerId = null;
+      this.gestureActive = false;
       detach();
       try {
         if (handle.hasPointerCapture(finishedPointerId)) {
@@ -269,7 +334,7 @@ export abstract class FloatingPanel {
       } catch {
         /* UA уже освободил pointer */
       }
-      if (persist) this.persistBox(root);
+      if (persist) this.persistBox(root, "move");
     };
     const onMove = (e: PointerEvent) => {
       if (e.pointerId !== pointerId) return;
@@ -285,6 +350,7 @@ export abstract class FloatingPanel {
       finish(null, false);
       const r = root.getBoundingClientRect();
       pointerId = e.pointerId;
+      this.gestureActive = true;
       startX = e.clientX;
       startY = e.clientY;
       latestX = e.clientX;
@@ -322,7 +388,7 @@ export abstract class FloatingPanel {
         right: "0",
         top: "0",
         bottom: "16px",
-        width: "6px",
+        width: `${EDGE_HANDLE_PX}px`,
         cursor: "ew-resize",
       } as CSSStyleDeclaration);
     } else if (dir === "s") {
@@ -331,7 +397,7 @@ export abstract class FloatingPanel {
         left: "0",
         right: "16px",
         bottom: "0",
-        height: "6px",
+        height: `${EDGE_HANDLE_PX}px`,
         cursor: "ns-resize",
       } as CSSStyleDeclaration);
     } else {
@@ -397,13 +463,14 @@ export abstract class FloatingPanel {
       }
       applySize();
       pointerId = null;
+      this.gestureActive = false;
       detach();
       try {
         if (h.hasPointerCapture(finishedPointerId)) h.releasePointerCapture(finishedPointerId);
       } catch {
         /* UA уже освободил pointer */
       }
-      if (persist) this.persistBox(root);
+      if (persist) this.persistBox(root, "size");
     };
     const onMove = (e: PointerEvent) => {
       if (e.pointerId !== pointerId) return;
@@ -419,12 +486,25 @@ export abstract class FloatingPanel {
       finish(null, false);
       const r = root.getBoundingClientRect();
       pointerId = e.pointerId;
+      this.gestureActive = true;
       startX = e.clientX;
       startY = e.clientY;
       latestX = e.clientX;
       latestY = e.clientY;
       baseW = r.width;
       baseH = r.height;
+      // Якорь — на левый/верхний край, как это делает перетаскивание. Свежая
+      // панель стоит на right:16px без left, и рост ширины расширял бы её
+      // ВЛЕВО: правый край на месте, уголок убегает из-под курсора
+      // (adversarial 27.08.2026 — половинчатый фикс, ресайз забыли).
+      if (root.style.right !== "auto") {
+        root.style.left = `${Math.round(r.left)}px`;
+        root.style.right = "auto";
+      }
+      if (root.style.bottom !== "auto") {
+        root.style.top = `${Math.round(r.top)}px`;
+        root.style.bottom = "auto";
+      }
       try {
         h.setPointerCapture(e.pointerId);
       } catch {
@@ -449,7 +529,16 @@ export abstract class FloatingPanel {
     return `fp:${this.opts.storageKey}`;
   }
 
-  private persistBox(root: HTMLElement): void {
+  /**
+   * Сохранить коробку панели.
+   *
+   * `mode` отделяет «человек подвинул» от «человек изменил размер»: после
+   * перетаскивания на диск едет НОВОЕ положение и ПРЕЖНИЙ размер, даже если
+   * панель сейчас показана подрезанной под маленькое окно. Иначе один сдвиг
+   * мышью закреплял навязанный временным окном размер навсегда — обход
+   * обещания «кламп на диск не едет» (adversarial 27.08.2026).
+   */
+  private persistBox(root: HTMLElement, mode: "move" | "size"): void {
     if (!root.isConnected) return;
     const r = root.getBoundingClientRect();
     if (
@@ -462,7 +551,11 @@ export abstract class FloatingPanel {
     ) {
       return;
     }
-    const box: Box = { left: r.left, top: r.top, width: r.width, height: r.height };
+    const box: Box =
+      mode === "move" && this.desiredBox
+        ? { ...this.desiredBox, left: r.left, top: r.top }
+        : { left: r.left, top: r.top, width: r.width, height: r.height };
+    this.desiredBox = box;
     try {
       localStorage.setItem(this.lsKey, JSON.stringify(box));
     } catch {
@@ -490,6 +583,14 @@ export abstract class FloatingPanel {
       // сохранённая им коробка вида {left: 1e9, width: 1e9} навсегда уносила
       // панель за экран (аудит безопасности 01.08.2026, №16). Заодно чинит
       // честный кейс «панель осталась от большого монитора».
+      // Прочитанная коробка — выбор пользователя; на экран она едет
+      // подрезанной, но на диске обязана остаться прежней.
+      this.desiredBox = {
+        left: box.left as number,
+        top: box.top as number,
+        width: box.width as number,
+        height: box.height as number,
+      };
       const vw = window.innerWidth || 1280;
       const vh = window.innerHeight || 720;
       const width = Math.min(Math.max(this.opts.minWidth, box.width as number), vw);

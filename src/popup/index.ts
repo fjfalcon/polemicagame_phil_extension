@@ -1449,14 +1449,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const twitchEnabled = $<HTMLInputElement>("twitch_chat_enabled");
     const twitchChannelName = $<HTMLInputElement>("twitch_channel_name");
     const twitchSettings = $("twitch_settings");
+    // Строго === true — тем же правилом фичу включает FeatureManager. Этот
+    // блок рисовался мимо set() и оставался последним местом, где truthy-мусор
+    // из хранилища («true» строкой) рисовал галочку при выключенной фиче —
+    // ровно класс жалобы «кнопок нет» (adversarial 27.08.2026).
+    const twitchOn = items.twitch_chat_enabled === true;
     if (twitchEnabled) {
-      twitchEnabled.checked = items.twitch_chat_enabled;
-      if (twitchSettings) twitchSettings.style.display = items.twitch_chat_enabled ? "block" : "none";
+      twitchEnabled.checked = twitchOn;
+      if (twitchSettings) twitchSettings.style.display = twitchOn ? "block" : "none";
     }
     if (twitchChannelName) twitchChannelName.value = items.twitch_channel_name;
-    set("twitch_floating_panel_enabled", items.twitch_floating_panel_enabled);
-    set("twitch_chat_everywhere", items.twitch_chat_everywhere);
-    if (items.twitch_chat_enabled) {
+    // Дефолт-true читается фичей как «!== false» — рисуем тем же предикатом,
+    // иначе мусор в хранилище снимал бы галочку у работающей настройки.
+    set("twitch_floating_panel_enabled", items.twitch_floating_panel_enabled !== false);
+    set("twitch_chat_everywhere", items.twitch_chat_everywhere !== false);
+    if (twitchOn) {
       // Тихий пробник: попап, открытый с чужой вкладки (YouTube и т.п.),
       // не должен рисовать «⚠️ Откройте страницу игры» в twitch-статус.
       void browser.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {

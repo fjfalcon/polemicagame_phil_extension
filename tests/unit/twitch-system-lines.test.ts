@@ -64,6 +64,7 @@ vi.mock("@core/FloatingPanel", () => ({
 
 import type { FeatureContext } from "@core/feature";
 import { twitchPanelFeature } from "@content/panels/twitch-panel";
+import { sendRuntime } from "@core/messaging";
 
 type Handler = ((e: unknown) => void) | null;
 
@@ -167,6 +168,39 @@ describe("системные строки чата: одно событие — 
     expect(lines).toHaveLength(2);
     expect(lines[0], "факт «чат работал» не затёрт").toContain("Подключились");
     expect(lines[1]).toContain("Отключились");
+  });
+
+  test("обрыв ДО входа в канал не плодит вторую строку и не врёт «отключились»", () => {
+    // Adversarial 27.08.2026: onerror писал с ключом, а следующий за ним
+    // onclose — без, и на КАЖДУЮ из десяти попыток выходило две строки.
+    // Лестница переподключений забивала всё окно чата служебным шумом.
+    const ws = enableFeature();
+    ws.emitOpen();
+    ws.onerror?.({});
+    ws.onclose?.({ code: 1006 });
+    const lines = sysLines();
+    expect(lines, "одна попытка — одна строка").toHaveLength(1);
+    expect(lines[0], "«отключились» от того, к чему не подключались").not.toContain(
+      "Отключились",
+    );
+  });
+
+  test("попап не слышит «подключено», пока вход в канал не подтверждён", () => {
+    // Adversarial 27.08.2026: статус слался из onopen, и при опечатке в имени
+    // канала попап вечно писал зелёное «Подключено: канал», пока панель
+    // говорила «канал не отвечает».
+    const ws = enableFeature();
+    ws.emitOpen();
+    const sent = vi.mocked(sendRuntime).mock.calls.map((c) => c[0] as unknown as Record<string, unknown>);
+    const statuses = sent.filter((m) => m?.type === "twitch_status");
+    expect(statuses.length, "статус отправлен").toBeGreaterThan(0);
+    expect(statuses.at(-1)?.connected, "сокет открыт ≠ чат готов").toBe(false);
+    ws.emitJoined();
+    const after = vi
+      .mocked(sendRuntime)
+      .mock.calls.map((c) => c[0] as unknown as Record<string, unknown>)
+      .filter((m) => m?.type === "twitch_status");
+    expect(after.at(-1)?.connected, "вход подтверждён — вот теперь да").toBe(true);
   });
 
   test("новая попытка после обрыва пишет свою строку и сама себя обновляет", () => {

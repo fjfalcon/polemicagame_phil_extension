@@ -577,7 +577,7 @@ class TwitchChatPanel extends FloatingPanel {
       this.renderMessages();
       return;
     }
-    lastEl.outerHTML = this.messageHtml(msg);
+    lastEl.outerHTML = this.messageHtml(msg).trim();
     if (this.atBottom) el.scrollTop = el.scrollHeight;
   }
 
@@ -594,7 +594,10 @@ class TwitchChatPanel extends FloatingPanel {
     // Заглушка «Чат пуст» — единственный не-message ребёнок; убираем перед
     // первой настоящей строкой.
     el.querySelector(".twitch-no-messages")?.remove();
-    el.insertAdjacentHTML("beforeend", this.messageHtml(msg));
+    // trim(): иначе перед каждым div оседает текстовый узел с отступом, а
+    // подрезка окна считает ЭЛЕМЕНТЫ — за длинную трансляцию их копились
+    // тысячи (adversarial 27.08.2026).
+    el.insertAdjacentHTML("beforeend", this.messageHtml(msg).trim());
     // Инвариант окна: в DOM ровно min(messages.length, windowSize) строк.
     const windowSize =
       Math.max(this.prefs.visibleCount, 1) + (this.atBottom ? 0 : this.unseen);
@@ -637,7 +640,7 @@ class TwitchChatPanel extends FloatingPanel {
     // (находка ревью №2). После возврата вниз unseen=0 — окно обычное.
     const windowSize = Math.max(p.visibleCount, 1) + (this.atBottom ? 0 : this.unseen);
     const recent = this.messages.slice(-windowSize);
-    el.innerHTML = recent.map((msg) => this.messageHtml(msg)).join("");
+    el.innerHTML = recent.map((msg) => this.messageHtml(msg).trim()).join("");
 
     if (this.atBottom) el.scrollTop = el.scrollHeight;
     else el.scrollTop = keepScrollTop;
@@ -713,6 +716,7 @@ class TwitchChatPanel extends FloatingPanel {
       hoverStrip: this.hoverStrip,
       unlockChip: this.unlockChip,
       gearMenu: this.gearMenu,
+      resizeHandles: this.resizeHandles,
     });
     if (this.messagesEl) {
       // Своё, чатовое: подложка строк исчезает вместе с почти прозрачным фоном.
@@ -901,6 +905,7 @@ function startJoinWatchdog(): void {
     );
     // Исход той же попытки — переписываем её строку, а не пишем вторую.
     panel?.addSystemMessage("Канал не отвечает — проверьте имя канала", SYS_CONNECT);
+    sendTwitchStatus(false, "Канал не отвечает — проверьте имя канала");
   }, JOIN_CONFIRM_TIMEOUT_MS);
 }
 
@@ -1070,6 +1075,7 @@ function scheduleReconnect(): void {
       "попытки; чат остаётся отключённым",
     );
     panel?.addSystemMessage("Не удалось подключиться — проверьте имя канала", SYS_CONNECT);
+    sendTwitchStatus(false, "Не удалось подключиться — проверьте имя канала");
     return;
   }
   reconnectAttempts++;
@@ -1161,7 +1167,11 @@ function connectToTwitch(): void {
       // раздела «Ответ пользователю»).
       panel?.addSystemMessage("Подключаемся к чату…", SYS_CONNECT);
       startJoinWatchdog();
-      sendTwitchStatus(true);
+      // НЕ «подключено»: открытый сокет — это транспорт, а не готовность чата.
+      // Попап писал зелёное «Подключено: канал» ровно тогда, когда панель
+      // говорила «канал не отвечает», и на опечатке в имени канала это
+      // состояние жило вечно (adversarial 27.08.2026).
+      sendTwitchStatus(false, "Подключаемся к чату…");
     };
 
     ws.onmessage = (event) => {
@@ -1179,13 +1189,26 @@ function connectToTwitch(): void {
         intentionalClose ? "(по нашей команде)" : `(попытка ${reconnectAttempts})`,
         ircReady ? "| чат был готов" : "| до готовности чата",
       );
+      // Был ли чат ПОДТВЕРЖДЁННО живым до обрыва: от этого зависит и текст,
+      // и то, отдельное это событие или конец текущей попытки.
+      const wasReady = ircReady;
       ircReady = false;
       clearJoinWatchdog();
       isConnected = false;
       socket = null;
       sendTwitchStatus(false);
       if (!intentionalClose) {
-        panel?.addSystemMessage("Отключились от чата");
+        if (wasReady) {
+          // Живой чат оборвался — самостоятельное событие, затирать им
+          // «подключились» нельзя.
+          panel?.addSystemMessage("Отключились от чата");
+        } else {
+          // Подключения не было: «отключились» тут неправда, а пара
+          // onerror+onclose давала ДВЕ строки на каждую из десяти попыток —
+          // лестница переподключений забивала окно чата (adversarial
+          // 27.08.2026).
+          panel?.addSystemMessage("Соединение прервано — пробуем снова", SYS_CONNECT);
+        }
         scheduleReconnect();
       }
     };
@@ -1254,6 +1277,7 @@ function handleTwitchData(data: string): void {
       reconnectAttempts = 0;
       clearJoinWatchdog();
       log.info(SCOPE, "twitch: чат готов — вход в канал подтверждён");
+      sendTwitchStatus(true);
       // Тот же ключ: строка «подключаемся» превращается в «подключились», а
       // не повисает над ней второй.
       panel?.addSystemMessage("Подключились к чату", SYS_CONNECT);
@@ -1362,7 +1386,8 @@ function handleControlMessage(msg: TwitchControlMsg): void {
       disconnect();
       break;
     case "twitch_get_status":
-      sendTwitchStatus(isConnected);
+      // Правда для попапа — подтверждённый вход в канал, а не живой сокет.
+      sendTwitchStatus(ircReady);
       break;
   }
 }

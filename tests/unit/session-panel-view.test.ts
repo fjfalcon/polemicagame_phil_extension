@@ -190,6 +190,51 @@ describe("«Мой вечер»: настройки вида", () => {
   });
 });
 
+describe("«Мой вечер»: чего нельзя лишиться", () => {
+  test("скрытый заголовок не отбирает «обновить», «начать заново» и «закрыть»", async () => {
+    // Adversarial 27.08.2026: полоска несла только ⚙ и ▾, то есть скрытие
+    // заголовка отбирало три действия из четырёх, включая главное действие
+    // фичи — «начать сессию заново».
+    await start();
+    headerBtn("⚙").click();
+    const check = menuRowByLabel("Заголовок").querySelector("input") as HTMLInputElement;
+    check.checked = false;
+    check.dispatchEvent(new Event("change"));
+    const strip = [...panelEl().children].find(
+      (c) => (c as HTMLElement).style.height === "18px",
+    ) as HTMLElement;
+    const labels = [...strip.querySelectorAll("button")].map((b) => b.textContent);
+    expect(labels).toEqual(expect.arrayContaining(["⟳", "↺", "×", "⚙", "▾"]));
+  });
+
+  test("«сквозь клики» гасит и насечку ресайза — на прозрачном оверлее её видно зрителям", async () => {
+    await start();
+    headerBtn("⚙").click();
+    const check = menuRowByLabel("Сквозь клики").querySelector("input") as HTMLInputElement;
+    check.checked = true;
+    check.dispatchEvent(new Event("change"));
+    const grip = panelEl().querySelector(".fp-resize-se") as HTMLElement;
+    expect(grip.style.display).toBe("none");
+  });
+
+  test("«фон 0%» убирает и подложку сводки, а не только рамку", async () => {
+    await start(2);
+    headerBtn("⚙").click();
+    const range = menuRowByLabel("Фон").querySelector("input[type=range]") as HTMLInputElement;
+    range.value = "0";
+    range.dispatchEvent(new Event("input"));
+    expect(panelEl().dataset.pnDim, "прозрачный режим объявлен").toBe("true");
+    range.value = "95";
+    range.dispatchEvent(new Event("input"));
+    expect(panelEl().dataset.pnDim).toBe("false");
+  });
+
+  test("сводка честно говорит, насколько она свежая", async () => {
+    await start(2);
+    expect(panelEl().textContent).toContain("обновлено только что");
+  });
+});
+
 describe("«Мой вечер»: размеры окна", () => {
   const handle = (dir: "e" | "s" | "se") =>
     panelEl().querySelector(`.fp-resize-${dir}`) as HTMLElement;
@@ -270,6 +315,73 @@ describe("«Мой вечер»: размеры окна", () => {
     ).toEqual({ left: 900, top: 600, width: 250, height: 320 });
   });
 
+  test("сдвиг подрезанной панели НЕ закрепляет навязанный размер на диске", async () => {
+    // Adversarial 27.08.2026: кламп на диск не писал, но первый же сдвиг
+    // мышью сохранял ТЕКУЩИЙ (подрезанный) прямоугольник — обещание
+    // обходилось за один жест. Двигаем панель на маленьком окне: на диск
+    // обязано уехать новое положение и ПРЕЖНИЙ размер.
+    localStorage.setItem(
+      "fp:session-stats",
+      JSON.stringify({ left: 100, top: 100, width: 400, height: 900 }),
+    );
+    await start();
+    const root = panelEl();
+    withLayout(root);
+    const header = root.querySelector(".fp-header") as HTMLElement;
+    const mk = (type: string, x: number, y: number) => {
+      const e = new Event(type, { bubbles: true }) as PointerEvent & { pointerId: number };
+      Object.assign(e, { pointerId: 2, clientX: x, clientY: y });
+      return e;
+    };
+    header.dispatchEvent(mk("pointerdown", 50, 50));
+    window.dispatchEvent(mk("pointermove", 70, 90));
+    window.dispatchEvent(mk("pointerup", 70, 90));
+    const saved = JSON.parse(localStorage.getItem("fp:session-stats") as string);
+    expect(saved.height, "высота пользователя цела").toBe(900);
+    expect(saved.width).toBe(400);
+  });
+
+  test("свежая установка: ресайз сначала прибивает якорь, иначе панель растёт ВЛЕВО", async () => {
+    // Adversarial 27.08.2026: дефолтная позиция — right:16px без left. При
+    // position:fixed рост width расширяет панель влево: правый край стоит,
+    // уголок убегает из-под курсора. Перетаскивание якорь чинило, ресайз —
+    // нет (половинчатый фикс).
+    await start();
+    const root = panelEl();
+    expect(root.style.right, "дефолт — привязка к правому краю").toBe("16px");
+    withLayout(root);
+    root.style.width = "250px";
+    root.style.height = "320px";
+    drag(handle("e"), 60, 0);
+    expect(root.style.right, "якорь переехал на левый край").toBe("auto");
+    expect(root.style.left, "и left задан явно").not.toBe("");
+  });
+
+  test("панель нельзя утащить целиком за экран", async () => {
+    // Adversarial 27.08.2026: pointer capture шлёт события и за пределами
+    // окна, кламп же срабатывал только на resize — панель исчезала до F5.
+    await start();
+    const root = panelEl();
+    root.style.left = "300px";
+    root.style.top = "200px";
+    root.style.width = "250px";
+    root.style.height = "320px";
+    withLayout(root);
+    Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 720, configurable: true });
+    const header = root.querySelector(".fp-header") as HTMLElement;
+    const mk = (type: string, x: number, y: number) => {
+      const e = new Event(type, { bubbles: true }) as PointerEvent & { pointerId: number };
+      Object.assign(e, { pointerId: 3, clientX: x, clientY: y });
+      return e;
+    };
+    header.dispatchEvent(mk("pointerdown", 400, 250));
+    window.dispatchEvent(mk("pointermove", 9000, 9000));
+    window.dispatchEvent(mk("pointerup", 9000, 9000));
+    expect(parseInt(root.style.left, 10), "край панели остался в окне").toBeLessThanOrEqual(1280 - 48);
+    expect(parseInt(root.style.top, 10), "шапка остались в окне").toBeLessThanOrEqual(720 - 32);
+  });
+
   test("меньше минимума панель не схлопывается", async () => {
     await start();
     const root = panelEl();
@@ -278,5 +390,29 @@ describe("«Мой вечер»: размеры окна", () => {
     withLayout(root);
     drag(handle("e"), -9999, 0);
     expect(parseInt(root.style.width, 10)).toBeGreaterThanOrEqual(210);
+  });
+});
+
+describe("панель, скрытая тумблером, переживает изменение окна", () => {
+  test("resize при display:none НЕ схлопывает коробку в угол", async () => {
+    // Блокер adversarial 27.08.2026: hide() оставляет панель смонтированной,
+    // а у display:none нулевой getBoundingClientRect — кламп читал нули и
+    // писал минимальный размер в точке (0,0). Стример прячет чат, тянет край
+    // окна, возвращает панель — она в левом верхнем углу 210×160.
+    await start();
+    const root = panelEl();
+    root.style.left = "300px";
+    root.style.top = "200px";
+    root.style.width = "420px";
+    root.style.height = "500px";
+    root.style.display = "none"; // как делает hide()
+    Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 720, configurable: true });
+    window.dispatchEvent(new Event("resize"));
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    expect(root.style.width, "размер скрытой панели не трогаем").toBe("420px");
+    expect(root.style.height).toBe("500px");
+    expect(root.style.left).toBe("300px");
+    expect(root.style.top).toBe("200px");
   });
 });

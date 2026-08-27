@@ -98,6 +98,20 @@ function fmtDelta(n: number): string {
   return n > 0 ? `+${n}` : String(n);
 }
 
+/**
+ * Насколько сводка свежая. Сводка трёхчасовой давности выглядела ровно как
+ * только что полученная: обновление стоит в фоновой вкладке, а сетевая
+ * ошибка молча оставляет прошлые данные (adversarial 27.08.2026).
+ */
+function freshness(at: number): string {
+  if (!at) return "";
+  const mins = Math.floor((Date.now() - at) / 60_000);
+  if (mins < 1) return "обновлено только что";
+  if (mins < 60) return `обновлено ${mins} мин назад`;
+  const hours = Math.floor(mins / 60);
+  return `обновлено ${hours} ч назад`;
+}
+
 function deltaColor(n: number): string {
   if (n > 0) return "#4ade80";
   if (n < 0) return "#f87171";
@@ -112,6 +126,13 @@ class SessionStatsPanel extends FloatingPanel {
   private unlockChip: HTMLElement | null = null;
   /** Последняя сводка — для перерисовки при смене шрифта/числа строк. */
   private lastRows: GameRow[] | null = null;
+  /** Когда сводка получена: панель обязана честно говорить о своей давности. */
+  private lastUpdatedAt = 0;
+
+  /** Когда получена показанная сводка (0 — сводки ещё не было). */
+  get updatedAt(): number {
+    return this.lastUpdatedAt;
+  }
 
   get isShown(): boolean {
     return this.isMounted && this.root.style.display !== "none";
@@ -154,7 +175,14 @@ class SessionStatsPanel extends FloatingPanel {
     style.textContent =
       ".session-stats-panel .ss-row{display:flex;align-items:center;gap:6px;padding:3px 4px;" +
       "border-radius:6px;text-decoration:none;color:#fff;}" +
-      ".session-stats-panel .ss-row:hover{background:rgba(255,255,255,.08);}";
+      ".session-stats-panel .ss-row:hover{background:rgba(255,255,255,.08);}" +
+      ".session-stats-panel .ss-head{background:rgba(0,0,0,.25);border-radius:8px;" +
+      "padding:6px 8px;margin-bottom:6px;}" +
+      // Прозрачный режим: ни подложки сводки, ни подсветки строк.
+      '.session-stats-panel[data-pn-dim="true"] .ss-head{background:transparent;' +
+      "text-shadow:0 1px 3px rgba(0,0,0,.9);}" +
+      '.session-stats-panel[data-pn-dim="true"] .ss-row{text-shadow:0 1px 3px rgba(0,0,0,.9);}' +
+      '.session-stats-panel[data-pn-dim="true"] .ss-row:hover{background:transparent;}';
     body.appendChild(style);
     body.appendChild(el);
     this.bodyEl = el;
@@ -164,6 +192,14 @@ class SessionStatsPanel extends FloatingPanel {
       root: this.root,
       onGear: () => this.toggleGearMenu(),
       onShowHeader: () => this.setPrefs({ headerHidden: false }),
+      // Со скрытым заголовком уезжали три действия из четырёх, включая
+      // «начать сессию заново» — главное действие фичи (adversarial
+      // 27.08.2026).
+      extra: [
+        { label: "⟳", title: "Обновить", onClick: () => void refresh("кнопка") },
+        { label: "↺", title: "Начать сессию заново", onClick: () => void startNewSession() },
+        { label: "×", title: "Закрыть", onClick: () => sessionStatsFeature.requestClose() },
+      ],
     });
     // Полоска — ручка перетаскивания, когда заголовка нет.
     this.enableDrag(this.hoverStrip, this.root);
@@ -192,16 +228,22 @@ class SessionStatsPanel extends FloatingPanel {
       hoverStrip: this.hoverStrip,
       unlockChip: this.unlockChip,
       gearMenu: this.gearMenu,
+      resizeHandles: this.resizeHandles,
     });
     if (this.bodyEl) {
-      const px = (BASE_FONT_PX * FONT_SCALE[this.prefs.fontSize]).toFixed(1);
-      this.bodyEl.style.font = `${px}px/1.5 system-ui, sans-serif`;
+      const font = `${(BASE_FONT_PX * FONT_SCALE[this.prefs.fontSize]).toFixed(1)}px/1.5 system-ui, sans-serif`;
+      if (this.bodyEl.style.font !== font) this.bodyEl.style.font = font;
     }
+    // «Фон 0%» обязан убирать фон ВЕСЬ, а не только рамку: на прозрачном
+    // оверлее оставался тёмный прямоугольник сводки и подсветка строк
+    // (adversarial 27.08.2026 — у чата этот ход был, у нас нет).
+    const dim = this.prefs.bgOpacity / 100 < 0.3;
+    if (this.root.dataset.pnDim !== String(dim)) this.root.dataset.pnDim = String(dim);
   }
 
   /** Перерисовать то, что уже показано (смена шрифта/числа строк). */
   private rerender(): void {
-    if (this.lastRows) this.renderSession(this.lastRows);
+    if (this.lastRows) this.renderSession(this.lastRows, this.lastUpdatedAt);
   }
 
   private toggleGearMenu(): void {
@@ -277,10 +319,11 @@ class SessionStatsPanel extends FloatingPanel {
   }
 
   /** Полная перерисовка сводки. Всё динамическое — через escapeHtml. */
-  renderSession(rows: GameRow[]): void {
+  renderSession(rows: GameRow[], updatedAt = Date.now()): void {
     const el = this.bodyEl;
     if (!el) return;
     this.lastRows = rows;
+    this.lastUpdatedAt = updatedAt;
     const limit = this.prefs.rowsLimit;
     const iconPx = Math.round(18 * FONT_SCALE[this.prefs.fontSize]);
     const s = summarizeSession(rows);
@@ -292,12 +335,14 @@ class SessionStatsPanel extends FloatingPanel {
            </div>`
         : "";
     const head = `
-      <div style="background:rgba(0,0,0,.25);border-radius:8px;padding:6px 8px;margin-bottom:6px;">
+      <div class="ss-head">
         ${mmrLine}
         <div style="display:flex;justify-content:space-between;">
           <span style="color:rgba(255,255,255,.6);">Игр: ${s.games} · Побед: ${s.wins}</span>
           <b style="color:${deltaColor(s.delta)};">${fmtDelta(s.delta)}</b>
         </div>
+        <div style="color:rgba(255,255,255,.45);font-size:.85em;text-align:right;"
+             title="Обновляется раз в 3 минуты при видимой вкладке; ⟳ — вручную">${escapeHtml(freshness(updatedAt))}</div>
       </div>`;
     if (rows.length === 0) {
       el.innerHTML = `${head}<div style="text-align:center;color:rgba(255,255,255,.6);padding:10px;font-style:italic;">Сессия пока пуста — удачной первой!</div>`;
@@ -429,8 +474,24 @@ export const sessionStatsFeature: SessionStatsFeature = {
       manualResetMs = typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
       void refresh("сброс из другой вкладки");
     };
+    // Возврат на вкладку будит обновление: фоновая вкладка не опрашивает
+    // сервер, и стример, отвлёкшийся на Twitch, возвращался к сводке
+    // трёхчасовой давности (adversarial 27.08.2026). Ждать ближайший тик
+    // (до 3 минут) — ровно та ложь, ради которой панель и открыта.
+    const onVisible = (): void => {
+      if (document.hidden) return;
+      // Частые alt-tab не должны стучаться в чужой сервер: свежую сводку
+      // (моложе минуты) перезапрашивать незачем.
+      if (panel && Date.now() - panel.updatedAt < 60_000) return;
+      void refresh("вкладка снова видима");
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const unsubVisibility = () => document.removeEventListener("visibilitychange", onVisible);
     browser.storage.onChanged.addListener(onChanged);
-    unsubResetWatch = () => browser.storage.onChanged.removeListener(onChanged);
+    unsubResetWatch = () => {
+      browser.storage.onChanged.removeListener(onChanged);
+      unsubVisibility();
+    };
   },
 
   disable() {

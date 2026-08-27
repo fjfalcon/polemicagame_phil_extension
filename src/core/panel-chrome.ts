@@ -48,21 +48,35 @@ export function ownField(raw: unknown, key: string): unknown {
 export function sanitizeChromePrefs(raw: unknown, d: ChromePrefs = CHROME_DEFAULTS): ChromePrefs {
   const bgOpacity = ownField(raw, "bgOpacity");
   const fontSize = ownField(raw, "fontSize");
+  const headerHidden = ownField(raw, "headerHidden");
+  const clickThrough = ownField(raw, "clickThrough");
+  // Дефолт панели уважается КАЖДЫМ полем: подпись обещает `d`, и панель с
+  // другим дефолтом не должна молча получать чужой (adversarial 27.08.2026).
   return {
-    headerHidden: ownField(raw, "headerHidden") === true,
+    headerHidden: typeof headerHidden === "boolean" ? headerHidden : d.headerHidden,
     bgOpacity:
       typeof bgOpacity === "number" && Number.isFinite(bgOpacity)
         ? Math.min(100, Math.max(0, Math.round(bgOpacity)))
         : d.bgOpacity,
-    fontSize: fontSize === "s" || fontSize === "l" ? fontSize : "m",
-    clickThrough: ownField(raw, "clickThrough") === true,
+    fontSize:
+      fontSize === "s" || fontSize === "m" || fontSize === "l" ? fontSize : d.fontSize,
+    clickThrough: typeof clickThrough === "boolean" ? clickThrough : d.clickThrough,
   };
 }
 
 /** Разобранный JSON из localStorage страницы; ошибка чтения = «нет настроек». */
+/**
+ * Потолок сырого JSON: хранилище принадлежит сайту, и многомегабайтная
+ * строка в нашем ключе — мусор или атака на парсер, читать её незачем
+ * (тем же потолком защищён парсер истории чата).
+ */
+const PREFS_RAW_MAX = 20_000;
+
 export function readPanelPrefsRaw(key: string): unknown {
   try {
-    return JSON.parse(localStorage.getItem(key) || "null");
+    const raw = localStorage.getItem(key);
+    if (!raw || raw.length > PREFS_RAW_MAX) return null;
+    return JSON.parse(raw);
   } catch {
     return null;
   }
@@ -78,9 +92,16 @@ export function savePanelPrefs(key: string, prefs: unknown): void {
 
 // ─────────────────────────── применение вида ───────────────────────────
 
+/** Записать стиль, только если он реально меняется (наблюдатель следит за style). */
+function setStyle(el: HTMLElement, prop: "background" | "borderColor" | "boxShadow" | "display" | "pointerEvents" | "opacity" | "font", value: string): void {
+  if (el.style[prop] !== value) el.style[prop] = value;
+}
+
 export interface ApplyChromeTargets {
   root: HTMLElement;
   header: HTMLElement;
+  /** Ручки ресайза: в «сквозь клики» их насечка не должна светиться в эфире. */
+  resizeHandles?: HTMLElement[];
   /** Полоска-ручка, видимая вместо скрытого заголовка. */
   hoverStrip?: HTMLElement | null;
   /** Чип-замок: единственное кликабельное место в режиме «сквозь клики». */
@@ -97,16 +118,24 @@ export interface ApplyChromeTargets {
  */
 export function applyChrome(prefs: ChromePrefs, t: ApplyChromeTargets): void {
   const a = prefs.bgOpacity / 100;
-  t.root.style.background = `rgba(30,31,38,${a.toFixed(2)})`;
-  t.root.style.borderColor = `rgba(255,255,255,${(0.12 * a).toFixed(3)})`;
-  t.root.style.boxShadow = a < 0.2 ? "none" : "0 8px 30px rgba(0,0,0,.45)";
-  t.header.style.display = prefs.headerHidden ? "none" : "flex";
+  // Записи гейтированы сравнением: ползунок «Фон» шлёт до сотни событий
+  // input за жест, и безусловная запись будила бы общий наблюдатель на
+  // каждое из них (adversarial 27.08.2026).
+  setStyle(t.root, "background", `rgba(30,31,38,${a.toFixed(2)})`);
+  setStyle(t.root, "borderColor", `rgba(255,255,255,${(0.12 * a).toFixed(3)})`);
+  setStyle(t.root, "boxShadow", a < 0.2 ? "none" : "0 8px 30px rgba(0,0,0,.45)");
+  setStyle(t.header, "display", prefs.headerHidden ? "none" : "flex");
   if (t.hoverStrip) {
-    t.hoverStrip.style.display = prefs.headerHidden && !prefs.clickThrough ? "flex" : "none";
+    setStyle(t.hoverStrip, "display", prefs.headerHidden && !prefs.clickThrough ? "flex" : "none");
   }
-  t.root.style.pointerEvents = prefs.clickThrough ? "none" : "";
-  if (t.unlockChip) t.unlockChip.style.display = prefs.clickThrough ? "grid" : "none";
-  if (prefs.clickThrough && t.gearMenu) t.gearMenu.style.display = "none";
+  setStyle(t.root, "pointerEvents", prefs.clickThrough ? "none" : "");
+  if (t.unlockChip) setStyle(t.unlockChip, "display", prefs.clickThrough ? "grid" : "none");
+  for (const h of t.resizeHandles ?? []) {
+    // Мышь ручки всё равно не ловят (наследуют pointer-events:none), но
+    // насечка уголка светилась на прозрачном оверлее — видно зрителям.
+    setStyle(h, "display", prefs.clickThrough ? "none" : "block");
+  }
+  if (prefs.clickThrough && t.gearMenu) setStyle(t.gearMenu, "display", "none");
 }
 
 // ─────────────────────────── элементы меню ───────────────────────────
@@ -239,6 +268,12 @@ export function buildHoverStrip(opts: {
   root: HTMLElement;
   onGear: () => void;
   onShowHeader: () => void;
+  /**
+   * Кнопки панели, которые нельзя терять вместе с заголовком. У «Моего
+   * вечера» это «обновить», «начать заново» и «закрыть»: скрытие заголовка
+   * отбирало три действия из четырёх (adversarial 27.08.2026).
+   */
+  extra?: Array<{ label: string; title: string; onClick: () => void }>;
 }): HTMLElement {
   const strip = document.createElement("div");
   Object.assign(strip.style, {
@@ -254,12 +289,14 @@ export function buildHoverStrip(opts: {
     gap: "4px",
     padding: "0 4px",
     cursor: "move",
+    userSelect: "none",
+    touchAction: "none",
     opacity: "0",
     transition: "opacity .15s",
     background: "linear-gradient(rgba(0,0,0,.6), transparent)",
   } as CSSStyleDeclaration);
-  strip.addEventListener("mouseenter", () => (strip.style.opacity = "1"));
-  strip.addEventListener("mouseleave", () => (strip.style.opacity = "0"));
+  strip.addEventListener("mouseenter", () => setStyle(strip, "opacity", "1"));
+  strip.addEventListener("mouseleave", () => setStyle(strip, "opacity", "0"));
 
   const mkBtn = (label: string, title: string, onClick: () => void) => {
     const b = document.createElement("button");
@@ -277,6 +314,7 @@ export function buildHoverStrip(opts: {
     b.addEventListener("click", onClick);
     return b;
   };
+  for (const b of opts.extra ?? []) strip.appendChild(mkBtn(b.label, b.title, b.onClick));
   strip.append(
     mkBtn("⚙", "Настройки панели", opts.onGear),
     mkBtn("▾", "Показать заголовок", opts.onShowHeader),
@@ -314,8 +352,8 @@ export function buildUnlockChip(
     // явный auto, поэтому он единственный остаётся кликабельным.
     pointerEvents: "auto",
   } as CSSStyleDeclaration);
-  chip.addEventListener("mouseenter", () => (chip.style.opacity = "1"));
-  chip.addEventListener("mouseleave", () => (chip.style.opacity = "0.35"));
+  chip.addEventListener("mouseenter", () => setStyle(chip, "opacity", "1"));
+  chip.addEventListener("mouseleave", () => setStyle(chip, "opacity", "0.35"));
   chip.addEventListener("click", onUnlock);
   root.appendChild(chip);
   return chip;
