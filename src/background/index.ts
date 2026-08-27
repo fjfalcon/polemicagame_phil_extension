@@ -23,7 +23,7 @@ import {
   type OwnerTabState,
   type SceneOwnerRecord,
 } from "./scene-owner";
-import type { ExtMessage, ObsCommandMsg } from "@shared/types";
+import type { Settings, ExtMessage, ObsCommandMsg } from "@shared/types";
 
 const obs = new ObsClient();
 const OBS_WATCHDOG_ALARM = "polemica:obs-watchdog";
@@ -888,6 +888,10 @@ void getSetting("debug_logging_enabled").then((on) => log.setPersist(on));
  * смене значения относительно того, что background уже видел.
  */
 const lastObsIntent: { enabled?: boolean; host?: string; password?: string; master?: boolean } = {};
+/** Копилка патчей OBS-настроек и её таймер (host и пароль — разные области). */
+const pendingObsPatch: Record<string, unknown> = {};
+let obsIntentTimer: ReturnType<typeof setTimeout> | null = null;
+const OBS_INTENT_COALESCE_MS = 200;
 /**
  * Готовность снимка. storage.onChanged — одно из событий, которыми браузер
  * БУДИТ уснувший фоновый скрипт: слушатель отработает синхронно, когда
@@ -917,6 +921,24 @@ onSettingsChanged((patch) => {
     "extension_enabled" in patch;
 
   if (touchesObs) {
+    // Копим патчи ~200 мс (ревью 27.08.2026, п.2): setSettings пишет host в
+    // sync, а пароль — в local, и события приходят ПООЧЕРЁДНО. Реакция на
+    // первое подключалась к новому endpoint со старым паролем (или наоборот).
+    // Одна упорядоченная смена: собрали оба, читаем факт с диска, реагируем.
+    Object.assign(pendingObsPatch, patch);
+    if (obsIntentTimer) clearTimeout(obsIntentTimer);
+    obsIntentTimer = setTimeout(() => {
+      obsIntentTimer = null;
+      const merged = { ...pendingObsPatch } as Partial<Settings>;
+      for (const k of Object.keys(pendingObsPatch)) delete pendingObsPatch[k];
+      applyObsIntent(merged);
+    }, OBS_INTENT_COALESCE_MS);
+  }
+});
+
+/** Реакция на собранный патч OBS-настроек (host+password вместе). */
+function applyObsIntent(patch: Partial<Settings>): void {
+  {
     void enqueueObs(async () => {
       // Снимок гарантированно заполнен: см. obsIntentReady.
       await obsIntentReady;
@@ -978,7 +1000,7 @@ onSettingsChanged((patch) => {
       await reconcileObsConnection(false, true);
     }).catch((e) => log.error("background", "OBS settings update failed", e));
   }
-});
+}
 
 // Выполняется при каждом новом incarnation service worker, а не только при старте браузера.
 restoreObsConnection();

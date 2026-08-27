@@ -285,6 +285,49 @@ describe("честность лога (ревью 27.08.2026)", () => {
   });
 });
 
+describe("единый признак неполноты (ревью 27.08.2026, п.3)", () => {
+  const f = (chars: number) => "42[\"x\"," + "a".repeat(Math.max(0, chars - 10)) + "]";
+
+  test("вытеснение по потолку тоже считается потерей", async () => {
+    // Раньше в «dropped» входил только backpressure — файл с вытесненными
+    // кусками выглядел полным.
+    for (let i = 0; i < MAX_CHUNKS + 5; i++) {
+      record("in", f(100));
+      await flushNow();
+    }
+    const { dropped } = await collectAll();
+    expect(dropped, "вытесненные кадры признаны потерянными").toBeGreaterThan(0);
+  });
+
+  test("отказ записи: и сам кусок, и последующие кадры — потери", async () => {
+    storage.set.mockRejectedValue(new Error("QuotaExceededError"));
+    record("in", f(200));
+    record("in", f(200));
+    await flushNow();
+    // Лог остановлен: новые кадры физически некуда писать.
+    record("in", f(200));
+    expect(droppedCount(), "потеряны и партия, и последующие кадры").toBeGreaterThanOrEqual(3);
+    storage.set.mockReset();
+    storage.set.mockImplementation(async (items: Record<string, unknown>) => {
+      for (const [k, v] of Object.entries(items)) storage.data.set(k, v);
+    });
+  });
+
+  test("ошибка ЧТЕНИЯ — не «пустой лог», а честный признак", async () => {
+    const orig = (browser.storage.local as unknown as { get: ReturnType<typeof vi.fn> }).get;
+    (browser.storage.local as unknown as { get: ReturnType<typeof vi.fn> }).get = vi.fn(async () => {
+      throw new Error("storage unavailable");
+    });
+    try {
+      const res = await collectAll();
+      expect(res.frames).toEqual([]);
+      expect(res.readFailed, "UI не должен говорить «лог не включали»").toBe(true);
+    } finally {
+      (browser.storage.local as unknown as { get: unknown }).get = orig;
+    }
+  });
+});
+
 describe("фича: приём кадров", () => {
   test("сообщения не от зонда игнорируются", async () => {
     const { onProbeMessage } = await import("@content/features/ws-log");
@@ -345,7 +388,9 @@ describe("хранилище", () => {
 
   test("отказ хранилища не роняет выгрузку", async () => {
     storage.get.mockRejectedValueOnce(new Error("QuotaExceeded"));
-    await expect(collectAll()).resolves.toEqual({ frames: [], dropped: 0 });
+    // Не роняет — и честно помечает, что пустота от ОТКАЗА, а не «лог пуст»
+    // (ревью 27.08.2026, п.3).
+    await expect(collectAll()).resolves.toEqual({ frames: [], dropped: 0, readFailed: true });
   });
 });
 

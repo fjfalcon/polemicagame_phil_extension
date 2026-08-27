@@ -36,6 +36,7 @@ import { escapeHtml } from "@core/escape";
 import {
   loadNotes,
   saveNotes,
+  MAX_OWN_NOTE_TEXT,
   mergeNotes,
   isSafeTag,
   TAGS_KEY,
@@ -248,7 +249,16 @@ document.addEventListener("DOMContentLoaded", () => {
     // Заодно уборка: попап — единственное место, куда человек приходит сам,
     // и удобный момент вернуть браузеру место.
     await wsLog.sweepStorage();
-    const { frames, dropped } = await wsLog.collectAll();
+    const { frames, dropped, readFailed } = await wsLog.collectAll();
+    if (readFailed) {
+      // Пустота из-за отказа ЧТЕНИЯ — не «лог не включали» (ревью 27.08, п.3).
+      showPopupToast(
+        "Не удалось прочитать сохранённый лог — хранилище браузера отказало",
+        "error",
+        8000,
+      );
+      return;
+    }
     if (frames.length === 0 && dropped > 0) {
       // Кадры не записались, но потеря зафиксирована — обвинять пользователя
       // «лог пуст, включи настройку» здесь нельзя (adversarial 27.08, №2).
@@ -923,7 +933,10 @@ document.addEventListener("DOMContentLoaded", () => {
           showPopupToast("Не удалось прочитать текущие заметки — импорт отменён", "error");
           return;
         }
-        const { added, replaced } = mergeNotes(notes, incoming);
+        // Потолок СВОЕЙ заметки: round-trip собственного бэкапа не должен
+        // резать хвост (ревью 27.08.2026, п.1). Обрезку считаем и скажем.
+        const preview = mergeNotes(notes, incoming, { maxText: MAX_OWN_NOTE_TEXT });
+        const { added, replaced } = preview;
         if (!added && !replaced) {
           const onlyExtras = await applySettings();
           await applyExtras();
@@ -1034,12 +1047,18 @@ document.addEventListener("DOMContentLoaded", () => {
         const notesMsg = replacedFinal
           ? `Добавлено: ${addedFinal}, обновлено: ${replacedFinal}`
           : `Импортировано заметок: ${addedFinal}`;
+        const cutNotes =
+          preview.truncated > 0
+            ? ` — ВНИМАНИЕ: ${preview.truncated} заметок обрезано по длине`
+            : "";
         const cutMain =
           (extras.marksTruncated ? " (часть меток ролей не поместилась в потолок 50 игр)" : "") +
           (extras.failed ? " — палитра/мьюты/метки НЕ сохранены" : "");
         showPopupToast(
-          (restoredSettings ? `${notesMsg}; настроек: ${restoredSettings}` : notesMsg) + cutMain,
-          extras.failed ? "error" : undefined,
+          (restoredSettings ? `${notesMsg}; настроек: ${restoredSettings}` : notesMsg) +
+            cutNotes +
+            cutMain,
+          extras.failed || preview.truncated > 0 ? "error" : undefined,
         );
       } catch (e) {
         log.error(SCOPE, "import failed", e);
@@ -1945,7 +1964,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (obsConnect) {
       obsConnect.addEventListener("click", async () => {
-        const host = obsHost?.value || "ws://localhost:4455";
+        // Санитайзер и здесь (ревью 27.08.2026, п.2): ручной connect брал
+        // СЫРОЕ поле, то есть мог унести креды в команду мимо границы.
+        const host = sanitizeObsHost(obsHost?.value || "ws://localhost:4455");
         const password = obsPassword?.value || "";
         try {
           obsConnect.disabled = true;

@@ -115,14 +115,18 @@ let pendingChars = 0;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let seq = 0;
 /** Уже записанные куски этой вкладки — в порядке появления. */
-let chunks: Array<{ key: string; chars: number }> = [];
+let chunks: Array<{ key: string; chars: number; frames: number }> = [];
 let storedChars = 0;
 /** Сколько символов лежит в кусках ПРОШЛЫХ сессий после уборки: они входят
  *  в общий потолок (PERF26-4, механизм 1 — раньше «свой» счётчик стартовал
  *  с нуля и суммарный объём доходил до двух потолков). */
 let foreignChars = 0;
 let recorded = 0;
-/** Отброшено кадров переполненной очередью — честная строка в файле. */
+/**
+ * ЕДИНЫЙ счётчик потерь (ревью 27.08.2026, п.3): backpressure, вытеснение
+ * по потолкам и отказ записи — для пользователя это одно и то же «в файле
+ * не всё». Раньше признак неполноты знал только про backpressure.
+ */
 let droppedByBackpressure = 0;
 /** Сколько из droppedByBackpressure уже уехало маркером в куски. */
 let reportedDrops = 0;
@@ -142,7 +146,12 @@ let stopped = false;
 
 /** Добавить кадр. Возвращает false, если кадр отброшен как чужой. */
 export function record(dir: "in" | "out", raw: unknown): boolean {
-  if (stopped) return false;
+  if (stopped) {
+    // Лог остановлен отказом хранилища: каждый новый кадр — потеря, и в
+    // файле это должно быть видно (п.3).
+    droppedByBackpressure++;
+    return false;
+  }
   if (!isGameFrame(raw)) return false;
   const m = sanitizeFrame(raw);
   pending.push({ t: Date.now(), d: dir, m });
@@ -264,6 +273,9 @@ async function writeChunk(
       await browser.storage.local.set({ [key]: payload });
     } catch {
       stopped = true;
+      // Эти кадры на диск не попали — считаем их потерянными, иначе файл
+      // выглядел бы полным ровно там, где обрывается (п.3).
+      droppedByBackpressure += payload.frames.length;
       log.warn(SCOPE, "полный лог остановлен: хранилище браузера не принимает записи");
       return;
     }
@@ -278,7 +290,7 @@ async function writeChunk(
     }
     return;
   }
-  chunks.push({ key, chars });
+  chunks.push({ key, chars, frames: payload.frames.length });
   storedChars += chars;
   // Потолок держим удалением самых старых кусков — по одному ключу за раз.
   // Чужой остаток (foreignChars) входит в общий потолок, а MAX_CHUNKS
@@ -290,6 +302,8 @@ async function writeChunk(
     const oldest = chunks.shift();
     if (!oldest) break;
     storedChars -= oldest.chars;
+    // Вытеснение — тоже потеря: файл обязан это признать (п.3).
+    droppedByBackpressure += oldest.frames;
     try {
       await browser.storage.local.remove(oldest.key);
     } catch {
@@ -444,7 +458,12 @@ export async function sweepStorage(budget = MAX_TOTAL_CHARS): Promise<number> {
  * Собрать кадры всех вкладок, отсортировать по времени и выкинуть протухшее.
  * Ровно та же схема, что у обычного журнала: у каждой вкладки свой ключ.
  */
-export async function collectAll(): Promise<{ frames: WsFrame[]; dropped: number }> {
+export async function collectAll(): Promise<{
+  frames: WsFrame[];
+  dropped: number;
+  /** Чтение хранилища упало: пустота НЕ означает «лог не включали» (п.3). */
+  readFailed?: boolean;
+}> {
   try {
     const all = (await browser.storage.local.get(null)) as Record<string, unknown>;
     const now = Date.now();
@@ -458,8 +477,9 @@ export async function collectAll(): Promise<{ frames: WsFrame[]; dropped: number
       if (typeof chunk?.dropped === "number" && chunk.dropped > 0) dropped += chunk.dropped;
     }
     return { frames: frames.sort((a, b) => a.t - b.t), dropped };
-  } catch {
-    return { frames: [], dropped: 0 };
+  } catch (e) {
+    log.warn(SCOPE, "чтение полного лога не удалось", e);
+    return { frames: [], dropped: 0, readFailed: true };
   }
 }
 
@@ -488,7 +508,7 @@ export function formatFrames(frames: WsFrame[], dropped = 0): string {
     `выгружено: ${new Date().toISOString()}`,
     `кадров: ${frames.length}`,
     ...(dropped > 0
-      ? [`ВНИМАНИЕ: ${dropped} кадров отброшено переполненной очередью — лог неполный`]
+      ? [`ВНИМАНИЕ: лог НЕПОЛНЫЙ — потеряно кадров: ${dropped} (перегрузка очереди, вытеснение по потолку или отказ хранилища)`]
       : []),
     "медиа (janus/SDP/ICE) и ключи сессии в файл не попадают",
     "",

@@ -241,7 +241,10 @@ export function onSettingsChanged(handler: SettingsChangeHandler): () => void {
           : c.newValue;
       const prev = c.oldValue === undefined ? DEFAULT_SETTINGS[k as SettingKey] : c.oldValue;
       if (Object.is(prev, next)) continue;
-      patch[k] = next;
+      // Та же граница, что у get/setSettings (ревью 27.08.2026, п.2):
+      // подписчики не должны получать сырое значение с кредами, а сравнение
+      // «грязное != чистое» иначе читается как смена адреса.
+      patch[k] = sanitizeSettingValue(k, next);
     }
     if (Object.keys(patch).length) handler(patch as Partial<Settings>);
   };

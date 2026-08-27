@@ -474,3 +474,34 @@ describe("история ников", () => {
     expect(normalizeNoteRecord({ text: "t", timestamp: NOW, nicks: "строка" })?.nicks).toBeUndefined();
   });
 });
+
+describe("round-trip своего бэкапа не режет заметку (ревью 27.08.2026)", () => {
+  test("длинная СВОЯ заметка переживает импорт при явном потолке", () => {
+    const long = "я".repeat(12_000); // между 5000 (чужой ввод) и 20000 (своя)
+    const { merged, truncated } = mergeNotes(
+      {},
+      { "u:1": { text: long, timestamp: 5 } },
+      { maxText: MAX_OWN_NOTE_TEXT },
+    );
+    expect((merged["u:1"] as { text: string }).text).toHaveLength(12_000);
+    expect(truncated, "резать было нечего").toBe(0);
+  });
+
+  test("дефолт (недоверенный ввод) режет и ЧЕСТНО об этом сообщает", () => {
+    const long = "я".repeat(12_000);
+    const { merged, truncated } = mergeNotes({}, { "u:1": { text: long, timestamp: 5 } });
+    expect((merged["u:1"] as { text: string }).text).toHaveLength(MAX_NOTE_TEXT);
+    // Молчаливое усечение и «ok» — это и была потеря данных пользователя.
+    expect(truncated).toBe(1);
+  });
+
+  test("сверхдлинное режется даже при своём потолке — но счётчик не врёт", () => {
+    const huge = "я".repeat(MAX_OWN_NOTE_TEXT + 500);
+    const { truncated } = mergeNotes(
+      {},
+      { "u:1": { text: huge, timestamp: 5 } },
+      { maxText: MAX_OWN_NOTE_TEXT },
+    );
+    expect(truncated).toBe(1);
+  });
+});

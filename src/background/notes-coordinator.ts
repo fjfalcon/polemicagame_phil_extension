@@ -94,7 +94,11 @@ export function mergeNotesViaCoordinator(
   return enqueue(async () => {
     const { notes, loadFailed } = await loadNotes({ persistMigration: true }); // координатор — единственный писатель миграции
     if (loadFailed) return { ok: false, reason: "read_failed" };
-    const { merged, added, replaced } = mergeNotes(notes, incoming as NotesMap);
+    const { merged, added, replaced } = mergeNotes(notes, incoming as NotesMap, {
+      // Импорт бэкапа: потолок СВОЕЙ заметки, иначе round-trip собственного
+      // файла молча резал хвост (ревью 27.08.2026, п.1).
+      maxText: MAX_OWN_NOTE_TEXT,
+    });
     // Граница согласия и на координаторном пути (ревью 26.08.2026): цифры
     // диалога считались по снимку попапа, а карта здесь свежая — замен
     // больше одобренного не пишем, возвращаем свежие числа для нового вопроса.

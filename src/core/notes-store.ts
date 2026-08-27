@@ -342,8 +342,20 @@ export function mergeNotes(
    * него снятые метки и стёртые тексты — молча, при первом запуске на каждом
    * новом устройстве (ревью 02.08.2026).
    */
-  { onlyNew = false }: { onlyNew?: boolean } = {},
-): { merged: NotesMap; added: number; replaced: number } {
+  {
+    onlyNew = false,
+    maxText = MAX_NOTE_TEXT,
+  }: {
+    onlyNew?: boolean;
+    /**
+     * Потолок текста присланной заметки. По умолчанию — недоверенный ввод
+     * (5000). Импорт СВОЕГО бэкапа поднимает его до MAX_OWN_NOTE_TEXT:
+     * иначе round-trip собственной длинной заметки молча резал хвост и
+     * рапортовал успех (ревью 27.08.2026, п.1 — потеря данных).
+     */
+    maxText?: number;
+  } = {},
+): { merged: NotesMap; added: number; replaced: number; truncated: number } {
   const merged: NotesMap = {};
   for (const [rawKey, note] of Object.entries(base)) {
     // Ключи базы канонизируем ТОЖЕ: "u:007" из старого хранилища и "u:7" из
@@ -375,6 +387,7 @@ export function mergeNotes(
   // ников раньше, чем встретится ник-ключ того же игрока. Иначе порядок ключей
   // в файле решал, получится один игрок или два (тест-набор, №2).
   const items: Array<[string, NoteRecord]> = [];
+  let truncated = 0;
   for (const [rawKey, note] of Object.entries(incoming)) {
     // Канонизация id-ключа: "u:0123" и "u:123" — один игрок, иначе присланный
     // файл плодил вторую невидимую запись (аудит безопасности, №12).
@@ -382,8 +395,12 @@ export function mergeNotes(
     if (!isSafeNoteKey(key)) continue;
     // Запись пересобирается из разрешённых полей: сырой объект из чужого
     // файла в карту больше не попадает (№4).
-    const safe = normalizeNoteRecord(note);
+    const safe = normalizeNoteRecord(note, maxText);
     if (!safe) continue;
+    // Факт обрезки считаем: молчаливое усечение чужого/своего текста
+    // пользователь обязан увидеть (ревью 27.08.2026).
+    const original = typeof note === "string" ? note : (note as { text?: unknown })?.text;
+    if (typeof original === "string" && original.length > safe.text.length) truncated++;
     items.push([key, safe]);
   }
   for (const [key, safe] of items) indexNick(key, safe);
@@ -426,7 +443,7 @@ export function mergeNotes(
     // игрока, идущий дальше по файлу, создавал бы дубль (№12).
     indexNick(targetKey, merged[targetKey]);
   }
-  return { merged, added, replaced };
+  return { merged, added, replaced, truncated };
 }
 
 /** Канонический вид ключа: у id-ключей убираем ведущие нули. */
