@@ -578,7 +578,7 @@ class TwitchChatPanel extends FloatingPanel {
       return;
     }
     lastEl.outerHTML = this.messageHtml(msg).trim();
-    if (this.atBottom) el.scrollTop = el.scrollHeight;
+    this.scrollToBottomSoon(el);
   }
 
   /**

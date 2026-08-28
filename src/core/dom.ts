@@ -57,10 +57,23 @@ const MAX_PENDING = 4000;
  * в непрерывном потоке мутаций это в ~15 раз меньше работы.
  */
 /**
- * Контейнеры расширения: плавающие панели и наши оверлеи. По ним сторож
- * шторма отличает собственную работу от чужого цикла.
+ * Реестр НАШИХ контейнеров: панели, модалки, тултипы регистрируют здесь свой
+ * корень при появлении и снимают при уходе.
+ *
+ * Ссылки, а не селекторы: сравнение узлов дешевле любого `closest(".x")` и не
+ * дублирует реестр классов (adversarial 28.08.2026 — рукописный литерал
+ * молча разошёлся бы с OWN).
  */
-const OWN_PANEL_SELECTOR = ".fp-panel, .polemica-note-modal, .pn-tooltip";
+const ownRoots = new Set<Element>();
+
+/** Пометить свой контейнер: его мутации не будят подписчиков. */
+export function registerOwnContainer(el: Element): void {
+  ownRoots.add(el);
+}
+
+export function unregisterOwnContainer(el: Element): void {
+  ownRoots.delete(el);
+}
 
 const MIN_FLUSH_INTERVAL_MS = 250;
 
@@ -173,31 +186,23 @@ class SharedDomObserver {
    * а не только в тестовом харнесе.
    */
   /**
-   * Батч состоит ТОЛЬКО из наших собственных записей.
+   * Запись сделана ВНУТРИ нашего же контейнера.
    *
-   * Сторож шторма ищет цикл «подписчик пишет — наблюдатель будит подписчика».
-   * Живой чат Twitch даёт непрерывный поток childList-мутаций в СВОЁЙ панели
-   * (сообщение раз в секунду — минута непрерывности), и сторож латчился на
-   * штатной работе, обесценивая себя ровно тогда, когда понадобится (внешний
-   * аудит 28.08.2026). Наши узлы узнаём по контейнеру с id/классом расширения.
+   * Такие мутации не несут информации о столе: их сделали мы сами — чат
+   * дорисовал строку, панель поехала за курсором. Раньше они будили всех
+   * подписчиков (до двадцати полных проходов на пятисекундное перетаскивание)
+   * и латчили сторож шторма на штатной работе чата.
+   *
+   * Подъём по ссылкам, без разбора селекторов: обычно один-три шага.
    */
-  private allOurs(batch: MutationRecord[]): boolean {
-    if (batch.length === 0) return false;
-    return batch.every((m) => {
-      const target = m.target as Element | null;
-      const el = target?.nodeType === 1 ? (target as Element) : target?.parentElement ?? null;
-      return !!el?.closest?.(OWN_PANEL_SELECTOR);
-    });
-  }
-
-  /** Жест пользователя: проходы отложены до его конца. */
-  private suspended = false;
-
-  setSuspended(value: boolean): void {
-    if (this.suspended === value) return;
-    this.suspended = value;
-    // Отпустили — разбираем накопленное сразу, не дожидаясь новой мутации.
-    if (!value && this.pending.length > 0) this.schedule();
+  private isOurs(m: MutationRecord): boolean {
+    const target = m.target as Node | null;
+    let el: Element | null =
+      target?.nodeType === 1 ? (target as Element) : (target?.parentElement ?? null);
+    for (let depth = 0; el && depth < 20; depth++, el = el.parentElement) {
+      if (ownRoots.has(el)) return true;
+    }
+    return false;
   }
 
   private trackStorm(startedAt: number, prevFlushAt: number): void {
@@ -226,16 +231,21 @@ class SharedDomObserver {
 
   private flush() {
     this.scheduled = false;
-    // Жест пользователя продолжается: батчи ждут. Ничего не теряем — записи
-    // копятся в pending и разберутся одним проходом после отпускания.
-    if (this.suspended) return;
     const prevFlushAt = this.lastFlushAt;
     this.lastFlushAt = performance.now();
-    const batch = this.pending;
-    // Собственные записи в свои же панели циклом не считаются.
-    if (!this.allOurs(batch)) this.trackStorm(this.lastFlushAt, prevFlushAt);
-    else this.busySince = 0;
+    // Свои записи отсеиваем ДО всего остального: они не повод ни будить
+    // подписчиков, ни считать серию для сторожа шторма. Смешанный батч при
+    // этом остаётся виден целиком по чужой части — прежняя проверка «батч
+    // ЦЕЛИКОМ наш» давала амнистию всему батчу из-за одной нашей записи
+    // (adversarial 28.08.2026).
+    const batch = this.pending.filter((m) => !this.isOurs(m));
     this.pending = [];
+    if (batch.length === 0) {
+      // Проход не нужен: чужого ничего не произошло. Серию сторожа при этом
+      // не трогаем — она про ЧУЖОЙ поток.
+      return;
+    }
+    this.trackStorm(this.lastFlushAt, prevFlushAt);
     if (this.dropped) {
       log.warn("dom", `dropped ${this.dropped} mutation records (buffer cap)`);
       this.dropped = 0;
@@ -281,24 +291,6 @@ class SharedDomObserver {
 export const domObserver = new SharedDomObserver();
 
 /** Подписаться на изменения DOM через общий наблюдатель. */
-/**
- * Пауза проходов подписчиков на время ЖЕСТА пользователя.
- *
- * Перетаскивание и ресайз панели пишут style покадрово, и общий наблюдатель
- * будил ВСЕХ подписчиков четыре раза в секунду всё время жеста — до двадцати
- * полных проходов на пятисекундное движение мышью (перф-аудит, подтверждено
- * внешним ревью 28.08.2026). Пока человек держит панель, состав стола не
- * меняется, и пересканировать его незачем: батчи копятся и разбираются одним
- * проходом после отпускания.
- *
- * Гарантия: пауза снимается в `finish()` жеста, в том числе по
- * pointercancel и при размонтировании панели — иначе подписчики замолчали бы
- * навсегда.
- */
-export function suspendDomPasses(suspended: boolean): void {
-  domObserver.setSuspended(suspended);
-}
-
 export function onDomChange(fn: DomSubscriber): () => void {
   return domObserver.subscribe(fn);
 }

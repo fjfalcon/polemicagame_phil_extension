@@ -493,6 +493,7 @@ class PlayerNotesManager {
       // Палитра меток тоже общая — раньше её изменения из другой вкладки терялись.
       if (changes[TAGS_KEY]) {
         const next = changes[TAGS_KEY].newValue;
+        // Палитра из соседней вкладки: модель заказывает перерисовку сама.
         this.model.adoptExternalTags(next);
       }
       // Мьюты общие между вкладками: без этой ветки вкладка со старым Set

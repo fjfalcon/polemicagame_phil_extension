@@ -662,6 +662,36 @@ describe("settings, release and manifest consistency", () => {
     ).toEqual([]);
   });
 
+  test("SITE и SITE_CLASS не расходятся между собой", () => {
+    // Имя класса живёт в реестре ДВАЖДЫ: селектором в SITE (".player") и
+    // голым именем в SITE_CLASS ("player"). При редизайне легко поправить
+    // одно и забыть другое, а страж на это молчит — он проверяет только, что
+    // литералов нет вне реестра (внешний аудит 28.08.2026).
+    const source = read("src/core/selectors.ts");
+    const block = source.slice(
+      source.indexOf("export const SITE_CLASS = {"),
+      source.indexOf("} as const;", source.indexOf("export const SITE_CLASS = {")),
+    );
+    const names = [...block.matchAll(/^\s*(\w+): "([a-z][\w-]*)",/gm)].map((m) => ({
+      key: m[1],
+      cls: m[2],
+    }));
+    expect(names.length, "реестр имён классов не пуст").toBeGreaterThan(5);
+    const siteBlock = source.slice(
+      source.indexOf("export const SITE = {"),
+      source.indexOf("} as const;", source.indexOf("export const SITE = {")),
+    );
+    // Для каждого имени, у которого ЕСТЬ парный селектор в SITE, значения
+    // обязаны совпадать: ".player" ↔ "player".
+    const mismatched: string[] = [];
+    for (const { key, cls } of names) {
+      const pair = new RegExp(`^\\s*\\w+: "\\.${cls}",`, "m");
+      const looksPaired = new RegExp(`"\\.${cls}"`).test(siteBlock);
+      if (looksPaired && !pair.test(siteBlock)) mismatched.push(`${key} → .${cls}`);
+    }
+    expect(mismatched, "SITE_CLASS и SITE описывают один класс по-разному").toEqual([]);
+  });
+
   test("AGENTS не врёт про минификацию бандла", () => {
     // Внешнее арх-ревью 28.08.2026 поймало расхождение: AGENTS обещал «без
     // минификации», а tsup минифицирует с 01.08.2026. Для человека это

@@ -519,17 +519,23 @@ describe("палитра: интент вместо снимка", () => {
     expect(sent[0]).toMatchObject({ type: "notes_tag_ops", add: [], remove: ["#ff0000"] });
   });
 
-  test("блок записи при непрочитанном хранилище распространяется на палитру", async () => {
+  test("после сбоя чтения палитра ВСЁ РАВНО пишется: её путь читает диск сам", async () => {
+    // Блокировать палитру по флагу — чистая потеря функции: и координатор, и
+    // фолбэк читают свежее состояние сами и снимок памяти не пишут никогда, а
+    // пользователь после сбоя чтения не мог выбрать цвет до F5 (adversarial
+    // 28.08.2026). Блок остаётся у КАРТЫ ЗАМЕТОК: её операции строятся из
+    // памяти.
     h.loadResult = { notes: {}, customTags: [], loadFailed: true };
     const m = make();
     await m.load();
     let asked = false;
     h.coordinator = () => {
       asked = true;
-      return { ok: true, tags: [] };
+      return { ok: true, tags: ["#00ff00"] };
     };
-    expect(await m.addCustomTag("#00ff00")).toBe(false);
-    expect(asked, "до координатора дело не дошло").toBe(false);
+    expect(await m.addCustomTag("#00ff00")).toBe(true);
+    expect(asked, "интент ушёл координатору").toBe(true);
+    expect(await m.saveNotes(["Аня"]), "а карта заметок по-прежнему заблокирована").toBe(false);
   });
 });
 
@@ -607,7 +613,7 @@ describe("фолбэк заметок при мёртвом фоне", () => {
 });
 
 describe("готовность карты и палитры — раздельно", () => {
-  test("приход заметок из соседней вкладки НЕ разблокирует палитру", async () => {
+  test("флаги готовности карты и палитры не путаются между собой", async () => {
     // Раньше один флаг отвечал за оба агрегата: валидная карта снимала блок
     // и с палитры, про которую не было известно ничего (внешний аудит
     // 28.08.2026).
@@ -619,7 +625,6 @@ describe("готовность карты и палитры — раздельн
     m.adoptExternalNotes({ Аня: { text: "из соседней вкладки", timestamp: 1 } });
     expect(m.isReadOnly, "карта прочитана — писать можно").toBe(false);
     expect(m.isPaletteReadOnly, "про палитру всё ещё ничего не известно").toBe(true);
-    expect(await m.addCustomTag("#00ff00"), "и запись палитры отказывает").toBe(false);
   });
 
   test("приход палитры разблокирует именно её", async () => {
@@ -629,5 +634,55 @@ describe("готовность карты и палитры — раздельн
     m.adoptExternalTags(["#ff0000"]);
     expect(m.isPaletteReadOnly).toBe(false);
     expect(m.isReadOnly, "а карта заметок по-прежнему заблокирована").toBe(true);
+  });
+});
+
+describe("фолбэк: те же правила ключа, что у координатора", () => {
+  test("удаление проходит по мягкому правилу, запись — по строгому", async () => {
+    // У координатора обе проверки написаны явно и с объяснением, у фолбэка не
+    // было ни одной (adversarial 28.08.2026).
+    h.loadResult = {
+      notes: { constructor: { text: "легаси-запись", timestamp: 1 } },
+      customTags: [],
+      loadFailed: false,
+    };
+    const m = make();
+    await m.load();
+    h.coordinator = () => undefined; // фон мёртв
+    expect(await m.deleteEntry("constructor"), "удалить легаси-ключ можно").toBe(true);
+    const written = h.savedMaps.at(-1) as Record<string, unknown>;
+    // hasOwn, а не `in`: «constructor» есть на прототипе любого объекта.
+    expect(Object.hasOwn(written, "constructor"), "запись удалена").toBe(false);
+  });
+
+  test("строгий фильтр ключа: опасный ключ в фолбэк не проходит", async () => {
+    h.loadResult = { notes: {}, customTags: [], loadFailed: false };
+    const m = make();
+    await m.load();
+    h.coordinator = () => undefined;
+    // Операция с небезопасным ключом собирается вручную — путь модели такой
+    // ключ не создаст, но фолбэк обязан быть защищён сам, как координатор.
+    // «constructor» показателен: без фильтра он лёг бы СОБСТВЕННЫМ полем.
+    await m.commitOps([
+      { key: "constructor", record: { text: "яд", timestamp: 1 } },
+      { key: "__proto__", record: { text: "яд", timestamp: 1 } },
+    ]);
+    const written = h.savedMaps.at(-1) as Record<string, unknown>;
+    expect(Object.hasOwn(written, "constructor"), "опасный ключ не записан").toBe(false);
+    expect(Object.hasOwn(written, "__proto__")).toBe(false);
+  });
+
+  test("битая карта на диске не роняет запись мимо отката", async () => {
+    // Под ключом заметок может лежать что угодно (повреждённое хранилище,
+    // чужая версия). Раньше присваивание в примитив бросало TypeError мимо
+    // отката: заметка оставалась на экране и не попадала на диск.
+    h.loadResult = { notes: {}, customTags: [], loadFailed: false };
+    const m = make();
+    await m.load();
+    h.coordinator = () => undefined;
+    h.loadResult = { notes: "мусор" as unknown as Record<string, unknown>, customTags: [], loadFailed: false };
+    await expect(m.setNoteText("Аня", "текст", "Аня")).resolves.toBe(true);
+    const written = h.savedMaps.at(-1) as Record<string, { text: string }>;
+    expect(written["Аня"]?.text, "правка легла в чистую карту").toBe("текст");
   });
 });

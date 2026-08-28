@@ -249,26 +249,27 @@ describe("палитра: очередь и отказы", () => {
   });
 });
 
-describe("очередь не висит вечно", () => {
-  test("зависшая задача отпускает очередь по таймауту, а не держит браузер", async () => {
-    // MV3 усыпляет воркер посреди storage-вызова. Без предела ожидания одна
-    // повисшая операция останавливала запись заметок во ВСЕХ вкладках — без
-    // тоста и без фолбэка (внешний аудит 28.08.2026).
-    vi.useFakeTimers();
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
+describe("очередь: сериализация важнее отзывчивости", () => {
+  test("медленная задача ДЕРЖИТ очередь — следующая не начинается", async () => {
+    // Таймаут здесь пробовали 28.08.2026 и сняли: промис отклонить можно, а
+    // задачу отменить нельзя — она доходит до своей записи, и вторая задача
+    // писала поверх живой первой. Свойство «одна запись за раз» дороже
+    // отзывчивости (adversarial: проверено затиранием чужой правки).
     let release: () => void = () => undefined;
     state.hang = new Promise<void>((r) => {
       release = r;
     });
-    const hung = applyTagOps(["#00ff00"], []);
-    const after = applyNoteOps([{ key: "Аня", record: { text: "после", timestamp: 1 } }]);
-    // Ждём предел: задача обязана отвалиться сама.
-    await vi.advanceTimersByTimeAsync(11_000);
-    await expect(hung).rejects.toThrow(/timeout/);
+    const order: string[] = [];
+    const slow = applyTagOps(["#00ff00"], []).then(() => order.push("медленная"));
+    const next = applyNoteOps([{ key: "Аня", record: { text: "после", timestamp: 1 } }]).then(
+      () => order.push("следующая"),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(order, "пока первая висит, вторая НЕ выполнилась").toEqual([]);
     state.hang = null;
     release();
-    await vi.advanceTimersByTimeAsync(100);
-    await expect(after, "следующая задача очереди прошла").resolves.toMatchObject({ ok: true });
-    vi.useRealTimers();
+    await Promise.all([slow, next]);
+    expect(order).toEqual(["медленная", "следующая"]);
+    expect(state.overlapped, "и они не пересеклись во времени").toBe(false);
   });
 });

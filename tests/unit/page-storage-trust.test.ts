@@ -37,6 +37,10 @@ vi.mock("@core/dom", () => ({
   paintNickEl: vi.fn(),
   safeClick: vi.fn(),
   isVisible: vi.fn(() => true),
+  // Панель регистрирует свой корень: её собственные записи не должны будить
+  // подписчиков (28.08.2026).
+  registerOwnContainer: vi.fn(),
+  unregisterOwnContainer: vi.fn(),
 }));
 vi.mock("@core/messaging", () => ({ onMessage: vi.fn(() => () => undefined), sendRuntime: vi.fn() }));
 vi.mock("../../src/content/camera-flip", () => ({

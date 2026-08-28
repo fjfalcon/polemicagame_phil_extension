@@ -571,6 +571,14 @@ export async function loadNotes(opts?: {
   customTags: string[];
   /** true = чтение упало и notes ПУСТАЯ НЕ ПОТОМУ, что заметок нет. Писать поверх НЕЛЬЗЯ. */
   loadFailed?: boolean;
+  /**
+   * Хранилище УЖЕ мигрировано (sync-мост слит в local).
+   *
+   * Нужно вызывающему, чтобы не записать объединённый ВИД как факт: вид
+   * собирается в памяти для не-координаторов, и его запись из вкладки — это
+   * миграция мимо единственного писателя (SEC26-5, внешний аудит 28.08.2026).
+   */
+  migrated?: boolean;
 }> {
   try {
     const local = (await browser.storage.local.get({
@@ -583,13 +591,15 @@ export async function loadNotes(opts?: {
     const customTags = Array.isArray(local[TAGS_KEY]) ? (local[TAGS_KEY] as string[]) : [];
 
     if (!local[MIGRATED_KEY]) {
-      if (opts?.persistMigration) return await migrateFromSync(notes, customTags);
+      if (opts?.persistMigration) return { ...(await migrateFromSync(notes, customTags)), migrated: true };
       // Вид в памяти + просьба фону мигрировать (SEC26-5). Отказ доставки
       // не страшен: следующий loadNotes попросит снова.
       requestMigration();
-      return await migratedView(notes, customTags);
+      // migrated: false — вызывающий обязан знать, что перед ним ВИД, а не
+      // факт с диска, и не имеет права записать его как факт.
+      return { ...(await migratedView(notes, customTags)), migrated: false };
     }
-    return { notes, customTags };
+    return { notes, customTags, migrated: true };
   } catch (e) {
     log.error("notes", "load failed", e);
     // loadFailed — обязательный гейт для писателей: запись «пустой» карты

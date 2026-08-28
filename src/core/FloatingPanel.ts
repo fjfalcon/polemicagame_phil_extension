@@ -4,7 +4,7 @@
  * убирая ~400 строк дублированного кода.
  */
 import { log } from "./log";
-import { suspendDomPasses } from "./dom";
+import { registerOwnContainer, unregisterOwnContainer } from "./dom";
 
 export interface FloatingPanelOptions {
   /** Уникальный ключ для localStorage (позиция/размер). */
@@ -72,6 +72,9 @@ export abstract class FloatingPanel {
     if (this.mounted) return;
     this.build();
     document.body.appendChild(this.root);
+    // Наш контейнер: записи внутри него не будят подписчиков (перетаскивание
+    // панели и строки чата — не событие стола).
+    registerOwnContainer(this.root);
     this.restoreBox();
     this.renderBody(this.body);
     this.watchViewport();
@@ -139,11 +142,8 @@ export abstract class FloatingPanel {
 
   unmount(): void {
     if (!this.mounted) return;
-    // Панель могла уйти посреди жеста — пауза не имеет права его пережить.
-    if (this.gestureActive) {
-      this.gestureActive = false;
-      suspendDomPasses(false);
-    }
+    unregisterOwnContainer(this.root);
+    this.gestureActive = false;
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
     this.root.remove();
@@ -332,7 +332,6 @@ export abstract class FloatingPanel {
       applyPosition();
       pointerId = null;
       this.gestureActive = false;
-      suspendDomPasses(false);
       detach();
       try {
         if (handle.hasPointerCapture(finishedPointerId)) {
@@ -358,9 +357,6 @@ export abstract class FloatingPanel {
       const r = root.getBoundingClientRect();
       pointerId = e.pointerId;
       this.gestureActive = true;
-      // Пока панель едет за курсором, состав стола не меняется — проходы
-      // подписчиков на наши же покадровые записи style откладываются.
-      suspendDomPasses(true);
       startX = e.clientX;
       startY = e.clientY;
       latestX = e.clientX;
@@ -474,7 +470,6 @@ export abstract class FloatingPanel {
       applySize();
       pointerId = null;
       this.gestureActive = false;
-      suspendDomPasses(false);
       detach();
       try {
         if (h.hasPointerCapture(finishedPointerId)) h.releasePointerCapture(finishedPointerId);
@@ -498,7 +493,6 @@ export abstract class FloatingPanel {
       const r = root.getBoundingClientRect();
       pointerId = e.pointerId;
       this.gestureActive = true;
-      suspendDomPasses(true);
       startX = e.clientX;
       startY = e.clientY;
       latestX = e.clientX;

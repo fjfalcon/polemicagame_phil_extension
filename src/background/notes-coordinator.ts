@@ -37,41 +37,29 @@ import type { NoteOp, NotesResultMsg, NotesTagsResultMsg } from "@shared/types";
 let queue: Promise<unknown> = Promise.resolve();
 
 /**
- * Предел ожидания одной задачи очереди.
+ * ПОЧЕМУ ЗДЕСЬ НЕТ ТАЙМАУТА.
  *
- * Очередь одна на весь браузер, и зависшая задача (MV3 усыпил воркер посреди
- * storage-вызова) вешала бы ВСЕХ — и фон, и очередь вкладки, которая ждёт
- * ответа: без тоста, без фолбэка, до перезагрузки страницы (внешний аудит
- * 28.08.2026). Лучше честный отказ: вызывающий покажет ошибку и не потеряет
- * данные молча.
+ * 28.08.2026 предел ожидания был добавлен — и снят в тот же день, потому что
+ * лечил не ту болезнь и ломал главное свойство координатора. Промис можно
+ * отклонить, а задачу отменить НЕЛЬЗЯ: она продолжает работать и доходит до
+ * своей записи. Очередь при этом отпускала следующую — и две задачи писали
+ * карту одновременно, каждая из своего снимка. Проверено adversarial-прогоном:
+ * вторая задача отчитывалась успехом, а её результат затирался поздней
+ * записью первой. Это ровно та потеря, ради предотвращения которой
+ * координатор и существует (аудит lifecycle 01.08.2026, находка 2).
+ *
+ * Хуже: отменённый пользователем импорт всё равно применялся (попап уходил в
+ * фолбэк, а задача доезжала и писала), а повторная просьба о миграции
+ * запускала ВТОРУЮ миграцию поверх первой — переоткрытый SEC26-5.
+ *
+ * Настоящая причина «фон не отвечает» — усыплённый или убитый воркер, и там
+ * канал сообщения закрывается сам: вкладка получает undefined и уходит в свой
+ * фолбэк без всякого таймаута. Живую, но медленную задачу (первая миграция,
+ * импорт бэкапа на тысячах записей) отпускать нельзя — цена ошибки здесь
+ * молчаливая потеря чужих правок, а не ожидание.
  */
-const TASK_TIMEOUT_MS = 10_000;
-
-/** Задача с пределом ожидания: очередь не имеет права зависнуть навсегда. */
-function withTimeout<T>(task: () => Promise<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      log.warn("notes-coordinator", `задача не уложилась в ${TASK_TIMEOUT_MS} мс — отказ`);
-      reject(new Error("notes coordinator timeout"));
-    }, TASK_TIMEOUT_MS);
-    task().then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err as Error);
-      },
-    );
-  });
-}
-
 function enqueue<T>(task: () => Promise<T>): Promise<T> {
-  // Хвост очереди не ждёт зависшую задачу дольше предела: иначе одна
-  // повисшая операция останавливает запись заметок во всех вкладках.
-  const guarded = () => withTimeout(task);
-  const run = queue.then(guarded, guarded);
+  const run = queue.then(task, task);
   queue = run.then(
     () => undefined,
     () => undefined,
@@ -173,7 +161,12 @@ export function applyTagOps(add: unknown, remove: unknown): Promise<NotesTagsRes
     // целиком, а значение цвета попадает в style.cssText. Элемент, доехавший
     // со старой версии или из чужой ветки записи, — единственный шанс его
     // отфильтровать (adversarial 28.08.2026).
-    const kept = customTags.filter((t) => isSafeTag(t) && !removeSet.has(t));
+    const survivors = customTags.filter((t) => !removeSet.has(t));
+    const kept = survivors.filter(isSafeTag);
+    // Санитайзер выбрасывает с диска легаси-значения, не проходящие правила.
+    // Молчать об этом нельзя: человек удалил один цвет, а исчезли три
+    // (внешний аудит 28.08.2026).
+    const purged = survivors.length - kept.length;
     const merged = [...new Set([...kept, ...toAdd])];
     // Потолок: у импорта он есть (100), у ручного добавления не было —
     // бэкап собственной палитры молча терял бы всё сверх сотни.
@@ -182,8 +175,11 @@ export function applyTagOps(add: unknown, remove: unknown): Promise<NotesTagsRes
     if (dropped > 0) {
       log.warn("notes-coordinator", `палитра упёрлась в потолок ${MAX_CUSTOM_TAGS}: не влезло ${dropped}`);
     }
+    if (purged > 0) {
+      log.warn("notes-coordinator", `из палитры убрано небезопасных значений: ${purged}`);
+    }
     const ok = await saveCustomTags(next);
-    return ok ? { ok, tags: next, dropped } : { ok };
+    return ok ? { ok, tags: next, dropped: dropped + purged } : { ok };
   });
 }
 

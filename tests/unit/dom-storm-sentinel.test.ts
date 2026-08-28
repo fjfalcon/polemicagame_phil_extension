@@ -64,14 +64,18 @@ afterEach(() => {
 describe("сторож шторма вне игровой комнаты", () => {
   test("наш собственный чат НЕ считается циклом", async () => {
     await freshObserver();
+    const { registerOwnContainer } = await import("@core/dom");
     const panel = document.createElement("div");
-    panel.className = "fp-panel twitch-chat-panel";
     document.body.appendChild(panel);
+    registerOwnContainer(panel);
     const messages = document.createElement("div");
     panel.appendChild(messages);
+    // Сама вставка панели в body — ЧУЖАЯ мутация: даём ей уйти и считаем с нуля.
+    await vi.advanceTimersByTimeAsync(300);
+    passes = 0;
     await stream(() => messages, 70);
-    expect(passes, "проходы наблюдателя реально были — тест не вакуумный").toBeGreaterThan(100);
-    expect(stormWarned(), "штатная работа чата не должна поднимать тревогу").toBe(false);
+    expect(passes, "своя работа подписчиков не будит вовсе").toBe(0);
+    expect(stormWarned(), "и тревогу не поднимает").toBe(false);
   });
 
   test("а поток в чужой разметке — считается", async () => {
@@ -84,30 +88,87 @@ describe("сторож шторма вне игровой комнаты", () =>
   });
 });
 
-describe("пауза проходов на время жеста", () => {
-  test("во время перетаскивания подписчики молчат, после — один проход", async () => {
-    // Покадровые записи style при drag будили ВСЕХ подписчиков четыре раза
-    // в секунду всё время жеста (внешний аудит 28.08.2026).
+describe("свои записи не будят подписчиков", () => {
+  test("мутации внутри нашей панели проходов не вызывают, чужие — вызывают", async () => {
+    // Перетаскивание панели пишет style покадрово, чат дорисовывает строки —
+    // раньше это будило ВСЕХ подписчиков четыре раза в секунду. Пауза на
+    // время жеста оказалась опаснее проблемы (незакрытый жест = слепота до
+    // F5, adversarial 28.08.2026), поэтому фильтруем сами записи.
     vi.resetModules();
-    const { onDomChange, suspendDomPasses } = await import("@core/dom");
-    let passes = 0;
+    const { onDomChange, registerOwnContainer } = await import("@core/dom");
+    passes = 0;
     const off = onDomChange(() => {
       passes++;
     });
-    const host = document.createElement("div");
-    document.body.appendChild(host);
+    const panel = document.createElement("div");
+    document.body.appendChild(panel);
+    registerOwnContainer(panel);
+    await vi.advanceTimersByTimeAsync(300);
+    passes = 0;
 
-    suspendDomPasses(true);
     for (let i = 0; i < 20; i++) {
-      host.appendChild(document.createElement("span"));
+      panel.appendChild(document.createElement("span"));
+      panel.style.left = `${i}px`;
       await vi.advanceTimersByTimeAsync(260);
     }
-    expect(passes, "пока человек держит панель — ни одного прохода").toBe(0);
+    expect(passes, "своя работа подписчиков не будит").toBe(0);
 
-    suspendDomPasses(false);
-    await vi.advanceTimersByTimeAsync(600);
-    expect(passes, "после отпускания накопленное разобрано").toBeGreaterThan(0);
-    expect(passes, "и разобрано ОДНИМ проходом, а не двадцатью").toBeLessThanOrEqual(2);
+    const foreign = document.createElement("div");
+    document.body.appendChild(foreign);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(passes, "а чужая — будит сразу").toBeGreaterThan(0);
+    off();
+  });
+
+  test("СМЕШАННЫЙ батч виден: одна своя запись не отбеливает чужие", async () => {
+    // Прежняя проверка «батч целиком наш» давала амнистию всему батчу из-за
+    // одной нашей записи — с открытым чатом это почти каждый батч.
+    vi.resetModules();
+    const { onDomChange, registerOwnContainer } = await import("@core/dom");
+    let seen = 0;
+    const off = onDomChange((muts) => {
+      seen += muts.length;
+    });
+    const panel = document.createElement("div");
+    document.body.appendChild(panel);
+    registerOwnContainer(panel);
+    const foreign = document.createElement("div");
+    document.body.appendChild(foreign);
+    await vi.advanceTimersByTimeAsync(300);
+    seen = 0;
+
+    panel.appendChild(document.createElement("span")); // наша
+    foreign.appendChild(document.createElement("span")); // чужая
+    await vi.advanceTimersByTimeAsync(300);
+    expect(seen, "подписчик получил ТОЛЬКО чужую запись").toBe(1);
+    off();
+  });
+
+  test("вложенный узел нашей панели — тоже наш", async () => {
+    vi.resetModules();
+    const { onDomChange, registerOwnContainer, unregisterOwnContainer } = await import("@core/dom");
+    passes = 0;
+    const off = onDomChange(() => {
+      passes++;
+    });
+    const panel = document.createElement("div");
+    const body = document.createElement("div");
+    const deep = document.createElement("div");
+    body.appendChild(deep);
+    panel.appendChild(body);
+    document.body.appendChild(panel);
+    registerOwnContainer(panel);
+    await vi.advanceTimersByTimeAsync(300);
+    passes = 0;
+    deep.appendChild(document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(passes).toBe(0);
+
+    // Панель ушла — её узлы больше не «наши».
+    unregisterOwnContainer(panel);
+    deep.appendChild(document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(passes, "после снятия регистрации записи снова видны").toBeGreaterThan(0);
     off();
   });
 });
