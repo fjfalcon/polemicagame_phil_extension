@@ -95,6 +95,11 @@ beforeEach(() => {
   h.saved = {};
 });
 afterEach(() => {
+  // Закрываем окно КАК ПОЛЬЗОВАТЕЛЬ: иначе capture-слушатель keydown уезжает
+  // в следующий тест, и мутант «close() не снимает слушатель» — тот самый
+  // баг, ради которого close() и писался, — становится неуловимым
+  // (adversarial 28.08.2026).
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   document.body.innerHTML = "";
   vi.clearAllMocks();
 });
@@ -154,5 +159,49 @@ describe("сохранение", () => {
     for (let i = 0; i < 6; i++) await Promise.resolve();
     expect(h.saved, "молчаливого сохранения по Esc быть не должно").toEqual({});
     expect(modal(), "окно закрылось").toBeNull();
+  });
+});
+
+describe("закрытие снимает за собой", () => {
+  test("после Esc клавиатура больше не перехватывается", () => {
+    const { port } = makePort();
+    showNoteModal(port, "Аня");
+    let seen = 0;
+    const probe = (): void => {
+      seen++;
+    };
+    document.addEventListener("keydown", probe);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(modal(), "окно закрылось").toBeNull();
+    // Второй Escape уже не должен ни за что цепляться: слушатель модалки снят,
+    // до нашего зонда событие доходит.
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    document.removeEventListener("keydown", probe);
+    // Первый Escape окно съедает (stopPropagation) — это его работа. Второй
+    // обязан дойти до страницы: если бы close() не снял capture-слушатель,
+    // мёртвое окно глотало бы Escape и дальше, и счётчик остался бы нулём.
+    expect(seen, "второй Escape дошёл до страницы").toBe(1);
+  });
+
+  test("окно снимает СВОЮ регистрацию, а не чужую", () => {
+    // Закрытие старого окна не имеет права разрегистрировать уже открытое
+    // новое: иначе disable() не позовёт его close() (adversarial 28.08.2026).
+    const registered: Array<() => void> = [];
+    const { port } = makePort(
+      {},
+      {
+        registerModal: (close) => registered.push(close),
+        unregisterModal: (close) => {
+          const i = registered.indexOf(close);
+          if (i >= 0) registered.splice(i, 1);
+        },
+      },
+    );
+    showNoteModal(port, "Аня");
+    const first = registered[0];
+    showNoteModal(port, "Боря"); // второе окно поверх первого
+    expect(registered).toHaveLength(2);
+    first?.(); // закрываем ПЕРВОЕ
+    expect(registered, "регистрация второго окна цела").toHaveLength(1);
   });
 });

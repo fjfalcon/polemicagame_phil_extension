@@ -89,14 +89,22 @@ describe("AGENTS §4 storage and data ownership", () => {
     for (const file of sourceFiles()) {
       if (file === "src/core/notes-store.ts") continue;
       const source = read(file);
-      for (const match of source.matchAll(/(?<![.\w])(saveNotes|saveNotesToStore)\s*\(/g)) {
+      // Прямой писатель ВСЕЙ карты — это два конкретных пути: импорт
+      // saveNotes из @core/notes-store (обычно под именем saveNotesToStore) и
+      // вызов через внедрённую зависимость (deps.saveNotes) в фолбэке
+      // импорта. Прежняя регулярка не видела ни второго (лишний lookbehind
+      // резал `deps.`), ни разницы между вызовом и ОБЪЯВЛЕНИЕМ — квота
+      // держалась за строку интерфейса (adversarial 28.08.2026).
+      //
+      // Метод модели `saveNotes(keys)` под правило не подпадает: он пишет
+      // ПОИМЁННО через координатора, а не карту целиком.
+      for (const match of source.matchAll(
+        /(?<![.\w])(?:saveNotesToStore|deps\.saveNotes|saveNotes)\s*\(/g,
+      )) {
         const line = source.split("\n")[lineOf(source, match.index) - 1];
-        if (/\b(private|public|protected)\b/.test(line)) continue;
-        // ОБЪЯВЛЕНИЕ, а не вызов: публичный метод модели заметок и член
-        // интерфейса в import-fallback выглядят как вызов для регулярки, но
-        // записи не делают. Признак — аннотация возвращаемого типа
-        // (арх-ревью 28.08.2026: до этого инвариант считал строку
-        // интерфейса за «прямого писателя» и держал под неё квоту).
+        if (/\bimport\b|\bas saveNotesToStore\b/.test(line)) continue;
+        // ОБЪЯВЛЕНИЕ метода/члена интерфейса — не запись (признак: аннотация
+        // возвращаемого типа на той же строке).
         if (/^\s*(async\s+)?saveNotes\s*\([^)]*\)\s*:\s*Promise/.test(line)) continue;
         directCalls.push(file);
       }
@@ -115,9 +123,10 @@ describe("AGENTS §4 storage and data ownership", () => {
       // Reviewed compatibility fallback for a stale live content realm after update.
       // Данные заметок живут в модели (арх-ревью 28.08.2026) — фолбэк уехал с ними.
       "src/content/features/player-notes/notes-model.ts": 1,
-      // Фолбэк импорта пишет карту ЧЕРЕЗ ВНЕДРЁННУЮ зависимость
-      // (deps.saveNotes) — прямым писателем он не является и под этот
-      // счётчик не попадает; его путь закрыт своими тестами.
+      // Фолбэк импорта: единственная запись всей карты через внедрённую
+      // зависимость. Reviewed-путь на случай, когда координатор в фоне не
+      // отвечает; закрыт своими тестами.
+      "src/popup/import-fallback.ts": 1,
     };
     expect(counted, "§4.3: new whole-map writer bypasses the single background queue").toEqual(allowed);
   });
@@ -170,9 +179,6 @@ describe("AGENTS §4 storage and data ownership", () => {
 describe("AGENTS §4 source safety", () => {
   test("§4.1/§4.2: feature scans never use querySelectorAll('*')", () => {
     const violations: string[] = [];
-    // ** и подпапки: после сегрегации player-notes (28.08.2026) диалоги и
-    // сторы живут в features/player-notes/*, и плоский glob перестал бы их
-    // видеть — инвариант ослаб бы молча ровно тогда, когда кода стало больше.
     for (const file of sourceFiles("src/content/features/**/*.ts")) {
       const sf = parseTs(file);
       const visit = (node: ts.Node) => {
@@ -320,7 +326,7 @@ describe("settings, release and manifest consistency", () => {
     //
     // Потолок можно ОПУСКАТЬ свободно. Поднимать — только осознанно, вместе
     // с объяснением, почему подсистема неотделима.
-    const CAP = 2400;
+    const CAP = 2340;
     const lines = read("src/content/features/player-notes.ts").split("\n").length;
     expect(
       lines,
@@ -339,12 +345,17 @@ describe("settings, release and manifest consistency", () => {
     // сайта, а наше собственное.
     const OURS =
       /^[\s\S]*(pn-|polemica-|fp-|ss-|twitch-|obs-|scene-item|data-pn|#app|#tag-|#note-)/;
+    // Два источника: аргумент запроса И строковая КОНСТАНТА с классами сайта
+    // (`const X = ".modal, .v--modal-overlay"`). Прежняя регулярка видела
+    // только первый, и пять таких констант жили мимо правила при обещании
+    // «правится ТОЛЬКО selectors.ts» (adversarial 28.08.2026).
     const CALL = /(?:querySelector|querySelectorAll|closest|matches)\(\s*"([^"]+)"/g;
+    const CONST_SEL = /^\s*(?:const|let|readonly)?\s*[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*"(\.[^"]+)"/gm;
     const offenders: string[] = [];
     for (const file of sourceFiles("src/**/*.ts")) {
       if (file === "src/core/selectors.ts") continue;
       const source = read(file);
-      for (const m of source.matchAll(CALL)) {
+      for (const m of [...source.matchAll(CALL), ...source.matchAll(CONST_SEL)]) {
         const selector = m[1];
         // Классы сайта — это литералы с точкой, которых нет в нашем префиксе.
         if (!selector.includes(".")) continue;
@@ -566,6 +577,20 @@ describe("§4.7 lifecycle heuristic", () => {
       timers: 3,
       reason: "timeline row listeners are removed with nodes; timers are tracked in module sets",
     },
+    // Диалоги: обработчики висят на УЗЛАХ САМОГО ОКНА и умирают вместе с
+    // overlay.remove() в close(); единственный документный слушатель
+    // (keydown capture) снимается там же явно. Числа точные: новый
+    // несимметричный слушатель здесь уронит инвариант.
+    "src/content/features/player-notes/nick-color-manager.ts": {
+      listeners: 17,
+      timers: 0,
+      reason: "modal handlers die with the overlay; the document keydown capture is removed in close()",
+    },
+    "src/content/features/player-notes/note-modal.ts": {
+      listeners: 7,
+      timers: 0,
+      reason: "modal handlers die with the overlay; the document keydown capture is removed in close()",
+    },
     "src/content/features/player-notes.ts": {
       // 36 → 12 после сегрегации 28.08.2026: обработчики диалогов уехали в
       // ./player-notes/note-modal и ./player-notes/nick-color-manager, и
@@ -627,7 +652,12 @@ describe("§4.7 lifecycle heuristic", () => {
   test("feature acquisitions have matching teardown or an exact reviewed allowance", () => {
     const problems: string[] = [];
     const seenAllowances = new Set<string>();
-    for (const file of sourceFiles("src/content/features/*.ts")) {
+    // ** и подпапки: после сегрегации player-notes (28.08.2026) диалоги и
+    // сторы живут в features/player-notes/*. Плоский glob их НЕ ВИДЕЛ, и
+    // квота «36 → 12» была фиктивной: 24 несимметричных слушателя вышли
+    // из-под инварианта не потому, что получили teardown, а потому, что
+    // переехали в подпапку (adversarial 28.08.2026, находка 1).
+    for (const file of sourceFiles("src/content/features/**/*.ts")) {
       const source = read(file);
       const listenerDelta = Math.max(
         0,

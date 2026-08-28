@@ -6,14 +6,13 @@
  * Список показывает и цветных, и просто «с заметкой»: раньше до нужного
  * игрока надо было ещё дожить в игре, чтобы поправить запись.
  *
- * Всё пользовательское — ники, тексты, сохранённые цвета — попадает в
- * разметку САЙТА, поэтому идёт через escapeHtml/cssAttr.
+ * Пользовательские данные — ники, тексты, сохранённые цвета — попадают в
+ * разметку САЙТА, поэтому список строится узлами (textContent/createElement),
+ * а не подстановкой в innerHTML.
  */
-import { escapeHtml } from "@core/escape";
 import { log } from "@core/log";
 import { idKey, isIdKey, MAX_OWN_NOTE_TEXT } from "@core/notes-store";
 import { redactNick } from "@shared/redact";
-import { cssAttr } from "./styles";
 import { TAG_PRESETS } from "./tag-palette";
 import type { ModalPort } from "./modal-port";
 
@@ -451,7 +450,7 @@ export function openNickColorManager(port: ModalPort): void {
   const close = () => {
     document.removeEventListener("keydown", onKey, true);
     overlay.remove();
-    port.registerModal(() => undefined);
+    port.unregisterModal(close);
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {

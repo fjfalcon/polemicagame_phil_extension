@@ -12,7 +12,6 @@
  * закрыть предыдущее окно, перерисовать плитки и спросить у фичи то, что
  * знает только она (статистика игрока, резолв ручного ввода).
  */
-import type { PlayerStatsEntry } from "./player-stats";
 import type { NotesModel } from "./notes-model";
 
 /** Разобранный ручной ввод «ник или id» из менеджера цветов. */
@@ -33,16 +32,25 @@ export interface ModalPort {
    * текущую.
    */
   registerModal(close: () => void): void;
+  /**
+   * Снять СВОЮ регистрацию. Сравнение по идентичности обязательно: без него
+   * закрытие старого окна затирало бы регистрацию уже открытого нового, и
+   * disable() не позвал бы его close() — capture-слушатель keydown остался бы
+   * жить (adversarial 28.08.2026).
+   */
+  unregisterModal(close: () => void): void;
   /** Закрыть открытое окно (перед открытием своего). */
   closeOpenModal(): void;
-  /** Статистика игрока — её показывает раскрытый редактор заметки. */
-  statsOf(username: string): PlayerStatsEntry | undefined;
   /** Разобрать ручной ввод «ник или id» в ключ записи. */
   resolvePlayerInput(input: string): Promise<ResolvedPlayerInput | null>;
   /** Спросить подтверждение на удаление своего цвета из палитры. */
   confirmRemoveCustomTag(css: string): boolean;
-  /** Плитки устарели: перерисовать цвета, метки, точки и тултипы. */
-  refreshTiles(): void;
-  /** Тултипы конкретного игрока. */
+  /** Цвета ников на плитках устарели. */
+  refreshColors(): void;
+  /** Точки «есть заметка» на кнопках устарели. */
+  refreshIndicators(): void;
+  /** Метки игроков устарели. */
+  refreshTags(): void;
+  /** Тултипы конкретного игрока (обе плитки + портал). */
   refreshPlayer(username: string): void;
 }

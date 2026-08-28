@@ -73,6 +73,10 @@ import { playerNotesFeature,
   throttleRebuild,
 } from "@content/features/player-notes";
 import { resetMatchBriefCache } from "@core/match-brief";
+import {
+  resetActiveGamesCacheForTest,
+  resetRatingCacheForTest,
+} from "@core/polemica-api";
 import { releaseOwnHistory } from "@core/crossover";
 import type { Settings } from "@shared/types";
 
@@ -92,6 +96,9 @@ function rec(init: { target: Node; added?: Node[]; type?: string }): MutationRec
 const fire = (muts: MutationRecord[]) => seam.subs.forEach((s) => s(muts));
 
 beforeEach(async () => {
+  // Модульные кэши сети живут дольше теста — сбрасываем на каждый.
+  resetRatingCacheForTest();
+  resetActiveGamesCacheForTest();
   document.body.innerHTML = `<div class="players"><div class="player" id="p1"><div class="inner"></div></div></div>`;
   vi.useFakeTimers();
   vi.setSystemTime(new Date(1_800_000_000_000));
@@ -314,6 +321,12 @@ describe("прогрев пересечений", () => {
     // Общий кэж своей истории (@core/crossover) — модульный синглтон:
     // без сброса история «переезжает» между тестами.
     releaseOwnHistory();
+    // Кэши @core/polemica-api модульные и живут 5 минут, а тесты ещё и
+    // отматывают часы назад: без сброса первый же прогретый рейтинг
+    // замораживался на весь файл, и порядок тестов начинал значить
+    // (adversarial 28.08.2026).
+    resetRatingCacheForTest();
+    resetActiveGamesCacheForTest();
     seam.subs = [];
     seam.ownIdGate = null;
     serveSite();

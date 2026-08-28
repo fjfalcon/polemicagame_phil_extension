@@ -176,7 +176,7 @@ const FOREGROUND_GRACE_MS = 300;
  * игрока с неподтверждённой почтой «Играть» шлёт капчу подтверждения —
  * появившуюся капчу машина обязана распознать как «дальше решает игрок».
  */
-const SITE_MODAL_SELECTOR = ".modal, .v--modal-overlay, .vm--overlay, .basemodal";
+const SITE_MODAL_SELECTOR = SITE.siteModalsWide;
 
 /** Человекочитаемые причины отказа метки — в лог поддержки. */
 const MARK_FAILURE_TEXT: Record<MarkFailure, string> = {

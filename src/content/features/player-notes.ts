@@ -118,7 +118,6 @@ const HOVER_INTENT_MS = 350;
 
 
 /** sessionStorage: ники (lowercase) с перевёрнутой камерой в текущей игре. */
-const FLIPPED_PLAYERS_KEY = "pn_flipped_players";
 
 /**
  * Кому из игроков за столом ещё нужен резолв id.
@@ -173,9 +172,8 @@ export { cssAttr };
 export type PlayerMutationTouch = "none" | "inner" | "identity";
 
 export function classifyPlayerMutations(muts: MutationRecord[]): PlayerMutationTouch {
-  const SCOPE_SEL =
-    ".player, .participants-item, .participants, .profileinfo__main-info, .profileinfo";
-  const CONTENT_SEL = ".player, .participants-item, .profileinfo__main-info";
+  const SCOPE_SEL = SITE.playerScope;
+  const CONTENT_SEL = SITE.playerContentScope;
   let inner = false;
   for (const m of muts) {
     if (m.type !== "childList") continue;
@@ -275,6 +273,7 @@ class PlayerNotesManager {
     onExternalMuteChange: () => this.processExistingElements(),
   });
   private readonly history = new HistoryStore({
+    isActive: () => this.active,
     lastGamesCount: () => this.settings.last_games_count,
     firstKilledEnabled: () => this.settings.last_games_first_killed !== false,
     crossoverEnabled: () => this.settings.btn_crossover_enabled !== false,
@@ -325,11 +324,6 @@ class PlayerNotesManager {
     lookupId: (lower) => this.stats.idOf(lower) ?? this.profileIdByNick.get(lower),
   });
 
-  /** Карта заметок — только для чтения; пишет модель. */
-  private get notes(): NotesMap {
-    return this.model.notes;
-  }
-
   /** Палитра пользовательских цветов — только для чтения. */
   private get customTags(): string[] {
     return this.model.customTags;
@@ -370,7 +364,6 @@ class PlayerNotesManager {
   private portaledTooltips = new Set<HTMLElement>();
   /** Снятые в этой вкладке мьюты — не воскрешаем их при слиянии с диском. */
   /** Удалённые в этой вкладке свои цвета — то же для палитры. */
-  private removedTagsThisSession = new Set<string>();
   /** Живые плашки-уведомления (снимаются в disable). */
   private toasts = new Set<HTMLElement>();
   /** Ники с временно скрытым видео (в пределах сессии). */
@@ -607,7 +600,6 @@ class PlayerNotesManager {
     for (const t of this.toasts) t.remove();
     this.toasts.clear();
     this.tileMedia.clearUnmutedHere();
-    this.removedTagsThisSession.clear();
     this.profileIdByNick.clear();
     this.idResolveAttempted.clear();
     this.idResolveFailedAt = 0;
@@ -649,18 +641,7 @@ class PlayerNotesManager {
 
   // ─────────── Заметки (storage.local, см. @core/notes-store) ───────────
 
-  /** true = чтение заметок упало; любые записи заблокированы (иначе пустая
-   *  карта в памяти при следующем save стёрла бы все заметки на диске). */
-  private notesReadOnly = false;
 
-  /**
-   * Все записи карты заметок этой вкладки — строго по очереди. Миграция
-   * (автоматический писатель с hover'а) и сохранение из модалки иначе могли
-   * переплестись: миграция читала диск, модалка писала заметку другого
-   * игрока, миграция записывала свою карту БЕЗ неё. Кросс-вкладочная гонка
-   * остаётся (§6 п.19), внутривкладочная — устранена.
-   */
-  private notesWriteQueue: Promise<unknown> = Promise.resolve();
 
 
 
@@ -679,16 +660,17 @@ class PlayerNotesManager {
     registerModal: (close) => {
       this.closeOpenModal = close;
     },
+    unregisterModal: (close) => {
+      // Только СВОЮ регистрацию: иначе закрытие старого окна разрегистрирует
+      // уже открытое новое, и disable() не позовёт его close().
+      if (this.closeOpenModal === close) this.closeOpenModal = null;
+    },
     closeOpenModal: () => this.closeOpenModal?.(),
-    statsOf: (username) => this.stats.get(username),
     resolvePlayerInput: (input) => this.resolvePlayerInput(input),
     confirmRemoveCustomTag: (css) => this.confirmRemoveCustomTag(css),
-    refreshTiles: () => {
-      this.refreshNickColors();
-      this.refreshNoteIndicators();
-      this.refreshPlayerTags();
-      this.updateAllTooltips();
-    },
+    refreshColors: () => this.refreshNickColors(),
+    refreshIndicators: () => this.refreshNoteIndicators(),
+    refreshTags: () => this.refreshPlayerTags(),
     refreshPlayer: (username) => this.updatePlayerTooltips(username),
   };
 
@@ -707,44 +689,12 @@ class PlayerNotesManager {
   // тонкие делегаты: мест вызова десятки, и переписывать их все значило бы
   // рисковать поведением ради косметики.
 
-  private enqueueNotesWrite<T>(task: () => Promise<T>): Promise<T> {
-    return this.model.enqueue(task);
-  }
-
   private loadNotes(): Promise<void> {
     return this.model.load();
   }
 
-  private saveNotes(touchedKeys: string[]): Promise<boolean> {
-    return this.model.saveNotes(touchedKeys);
-  }
-
-  private saveCustomTags(): Promise<boolean> {
-    return this.model.saveCustomTags();
-  }
-
-  private removeCustomTag(css: string): void {
-    this.model.removeCustomTag(css);
-  }
-
-  private setNickColor(key: string, color: string, createNick?: string): Promise<boolean> {
-    return this.model.setNickColor(key, color, createNick);
-  }
-
-  private setNoteTextFor(key: string, text: string, createNick?: string): Promise<boolean> {
-    return this.model.setNoteText(key, text, createNick);
-  }
-
-  private deleteNoteEntry(key: string): Promise<boolean> {
-    return this.model.deleteEntry(key);
-  }
-
   private migrateNoteToId(username: string, userId: number | string): Promise<void> {
     return this.model.migrateToId(username, userId);
-  }
-
-  private playerEntries(): ReturnType<NotesModel["playerEntries"]> {
-    return this.model.playerEntries();
   }
 
   // ─────── Резолв ключа заметки (./player-notes/note-keys) ───────
@@ -775,11 +725,6 @@ class PlayerNotesManager {
 
   private getNoteTag(username: string): string {
     return this.model.keys.tag(username);
-  }
-
-  /** Сохранённый цвет ника (без учёта настройки — для диалогов). */
-  private getRawNickColor(username: string): string {
-    return this.model.keys.rawNickColor(username);
   }
 
   /** Цвет ника для отрисовки: пустая строка, если фича выключена. */
@@ -1002,7 +947,7 @@ class PlayerNotesManager {
     if (this.colorIndexCache && now - this.colorIndexCache.at < 1000) {
       return this.colorIndexCache.index;
     }
-    const index = buildNickColorIndex(this.notes);
+    const index = buildNickColorIndex(this.model.notes);
     this.colorIndexCache = { at: now, index };
     return index;
   }
@@ -1864,7 +1809,7 @@ class PlayerNotesManager {
 
     if (!isSafeNoteKey(raw)) return null;
     const lower = raw.toLowerCase();
-    for (const [k, v] of Object.entries(this.notes)) {
+    for (const [k, v] of Object.entries(this.model.notes)) {
       if (isIdKey(k) && typeof v !== "string" && v.nick?.toLowerCase() === lower) {
         return { key: k, nick: v.nick, id: k.slice(ID_KEY_PREFIX.length) };
       }
@@ -1888,9 +1833,7 @@ class PlayerNotesManager {
    * игроков при этом не меняются, иначе удаление выглядит опаснее, чем есть.
    */
   private confirmRemoveCustomTag(css: string): boolean {
-    const used = Object.values(this.notes).filter(
-      (rec) => typeof rec !== "string" && (rec.nickColor === css || rec.tag === css),
-    ).length;
+    const used = this.model.countTagUsages(css);
     const tail = used
       ? `\n\nИгроков с этим цветом: ${used}. Их цвет останется как есть — из палитры пропадёт только заготовка.`
       : "";

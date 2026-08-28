@@ -5,10 +5,11 @@
  * получили своего владельца (./notes-model) — до этого диалогу пришлось бы
  * отдавать два десятка методов менеджера.
  *
- * Всё пользовательское проходит через escapeHtml/cssAttr: и текст заметки, и
- * ник, и сохранённый цвет попадают в разметку САЙТА.
+ * Пользовательские данные (текст заметки, ник, цвет) попадают в разметку
+ * САЙТА, поэтому окно строится узлами: textContent и createElement, без
+ * innerHTML с подстановкой. Проверено тестом: ник вида «<img onerror=…>» не
+ * рождает узла.
  */
-import { escapeHtml } from "@core/escape";
 import { log } from "@core/log";
 import {
   idKey,
@@ -23,7 +24,6 @@ import { TAG_PRESETS } from "./tag-palette";
 
 const VERSION = NOTES_VERSION;
 import { redactNick } from "@shared/redact";
-import { cssAttr } from "./styles";
 import type { ModalPort } from "./modal-port";
 
 export function showNoteModal(port: ModalPort, username: string): void {
@@ -184,8 +184,10 @@ export function showNoteModal(port: ModalPort, username: string): void {
       picker.addEventListener("change", () => {
         const c = picker.value;
         if (c && !port.model.customTags.includes(c) && !TAG_PRESETS.some((p) => p.css === c)) {
-          port.model.customTags.push(c);
-          port.model.removedThisSession.delete(c);
+          // Через модель, а не мутацией массива из геттера: владелец палитры
+          // один, и его дубль-защита должна работать на боевом пути, а не
+          // только в тесте (adversarial 28.08.2026).
+          port.model.addCustomTag(c);
           void port.model.saveCustomTags().then((ok) => {
             // Молчаливый провал записи оставлял цвет только в памяти: после
             // перезагрузки он исчезал (аудит безопасности, находка 8).
@@ -220,7 +222,7 @@ export function showNoteModal(port: ModalPort, username: string): void {
   const close = () => {
     document.removeEventListener("keydown", onKey, true);
     overlay.remove();
-    port.registerModal(() => undefined);
+    port.unregisterModal(close);
   };
   // disable() раньше сносил оверлей через remove() мимо close() — capture-слушатель
   // keydown оставался жить и продолжал глотать Escape и сохранять в отсоединённую форму.
@@ -290,10 +292,14 @@ export function showNoteModal(port: ModalPort, username: string): void {
       return false;
     }
     // Обе плитки игрока (десктоп/мобайл) + открытый тултип в портале.
+    // Ровно те же три обхода, что и до сегрегации: механическая замена
+    // превратила их в три одинаковых «перерисовать всё» — и «Сохранить»
+    // стало стоить втрое дороже плюс полная пересборка ВСЕХ тултипов стола
+    // (adversarial 28.08.2026).
     port.refreshPlayer(username);
-    port.refreshTiles();
-    port.refreshTiles();
-    port.refreshTiles();
+    port.refreshIndicators();
+    port.refreshTags();
+    port.refreshColors();
     // Сохранённый ключ теперь «виден» пользователю — следующие сохранения
     // в этой же модалке работают с ним как со своим.
     openedKey = key;

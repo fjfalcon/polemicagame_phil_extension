@@ -57,6 +57,20 @@ export interface NotesModelContext {
   lookupId(lowerNick: string): number | string | undefined;
 }
 
+/**
+ * Прочитать запись ТОЛЬКО как собственное свойство карты.
+ *
+ * `map[key]` уходит по цепочке прототипов: у ключей `__proto__`,
+ * `constructor`, `prototype` он отдаёт объекты Object.prototype, и путь
+ * записи считал, что «запись уже есть» — присваивал ей поля и отвечал
+ * «сохранено», хотя на диск не уходило ничего (adversarial 28.08.2026,
+ * найдено собственным тестом). Тот же приём, что в санитайзере настроек
+ * панелей: доверять только Object.hasOwn.
+ */
+function ownRecord(map: NotesMap, key: string): NoteRecord | string | undefined {
+  return Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
 export class NotesModel {
   /** Карта заметок этой вкладки. Владелец — этот класс. */
   private map: NotesMap = {};
@@ -111,9 +125,14 @@ export class NotesModel {
     if (Array.isArray(next)) this.tags = next as string[];
   }
 
-  /** Добавить свой цвет в палитру (выбор в модалке). */
+  /**
+   * Добавить свой цвет в палитру (выбор в модалке). Заодно снимает пометку
+   * «удалён в этой сессии»: иначе слияние с диском выбросило бы только что
+   * добавленный цвет.
+   */
   addCustomTag(css: string): void {
     if (!this.tags.includes(css)) this.tags.push(css);
+    this.removedThisSession.delete(css);
   }
 
   /** Сколько записей пользуются этим цветом — для честного вопроса об удалении. */
@@ -121,15 +140,6 @@ export class NotesModel {
     return Object.values(this.map).filter(
       (rec) => typeof rec !== "string" && (rec.nickColor === css || rec.tag === css),
     ).length;
-  }
-
-  /** Забыть всё: фичу выключили. */
-  reset(): void {
-    this.map = {};
-    this.tags = [];
-    this.readOnly = false;
-    this.removedThisSession.clear();
-    this.keys.reset();
   }
 
   enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -371,7 +381,7 @@ export class NotesModel {
    */
   setNickColor(key: string, color: string, createNick?: string): Promise<boolean> {
     return this.enqueue(async (): Promise<boolean> => {
-      const prev = this.map[key];
+      const prev = ownRecord(this.map, key);
       if (prev === undefined) {
         // Без createNick несуществующий ключ — гонка с удалением в другой
         // вкладке: молча выходим, воскрешать запись нельзя.
@@ -421,7 +431,7 @@ export class NotesModel {
    */
   setNoteText(key: string, text: string, createNick?: string): Promise<boolean> {
     return this.enqueue(async (): Promise<boolean> => {
-      const prev = this.map[key];
+      const prev = ownRecord(this.map, key);
       if (prev === undefined) {
         // Записи нет: создаём только при явном намерении (добавление игрока
         // через форму). Иначе это гонка с удалением в другой вкладке —
@@ -461,7 +471,7 @@ export class NotesModel {
   /** Удалить запись игрока целиком (и заметку, и цвет, и метку). */
   deleteEntry(key: string): Promise<boolean> {
     return this.enqueue(async (): Promise<boolean> => {
-      const prev = this.map[key];
+      const prev = ownRecord(this.map, key);
       if (prev === undefined) return true;
       delete this.map[key];
       if (!(await this.saveNotes([key]))) {

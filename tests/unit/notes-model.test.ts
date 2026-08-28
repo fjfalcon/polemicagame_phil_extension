@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   coordinator: null as null | ((msg: unknown) => unknown),
   savedMaps: [] as Record<string, unknown>[],
   saveOk: true,
+  /** Что реально лежит «на диске» после ответов координатора. */
+  saved: {} as Record<string, unknown>,
 }));
 
 vi.mock("@core/env", () => ({
@@ -46,6 +48,7 @@ vi.mock("@core/notes-store", async (importOriginal) => {
   };
 });
 
+import { log } from "@core/log";
 import { showToast } from "@core/toast";
 import { NotesModel } from "@content/features/player-notes/notes-model";
 
@@ -72,7 +75,17 @@ function make(ids: Record<string, number | string> = {}): NotesModel {
 
 beforeEach(() => {
   h.loadResult = { notes: {}, customTags: [], loadFailed: false };
-  h.coordinator = null;
+  h.saved = {};
+  // Координатор по умолчанию: применяет операции и возвращает свежую карту —
+  // как настоящий в background.
+  h.coordinator = (msg: unknown) => {
+    const ops = (msg as { ops?: Array<{ key: string; record: unknown }> }).ops ?? [];
+    for (const op of ops) {
+      if (op.record === null) delete h.saved[op.key];
+      else h.saved[op.key] = op.record;
+    }
+    return { ok: true, truncated: 0, skipped: 0, notes: h.saved };
+  };
   h.savedMaps = [];
   h.saveOk = true;
   Object.assign(signals, { colors: 0, indicators: 0, tags: 0, tooltips: 0 });
@@ -138,6 +151,53 @@ describe("запись через координатора", () => {
     expect(vi.mocked(showToast).mock.calls.some((c) => String(c[0]).includes("не полностью"))).toBe(
       true,
     );
+  });
+
+  test("отказ с обрезкой НЕ говорит «сохранено не полностью»", async () => {
+    // При отказе записи это утверждение врёт в другую сторону — будто часть
+    // текста уцелела (adversarial 27.08.2026). Мутант «снять гейт res.ok»
+    // раньше выживал: тест отказа отдавал нули.
+    h.coordinator = () => ({ ok: false, truncated: 3, skipped: 1 });
+    h.saveOk = false;
+    const m = make();
+    await m.setNoteText("Аня", "текст", "Аня");
+    expect(
+      vi.mocked(showToast).mock.calls.some((c) => String(c[0]).includes("не полностью")),
+      "об обрезке при ОТКАЗЕ говорить нельзя",
+    ).toBe(false);
+  });
+
+  test("отказ отката СУЩЕСТВУЮЩЕЙ записи возвращает прежний текст", async () => {
+    // Интерфейс не должен показывать заметку, которой на диске нет.
+    h.loadResult = {
+      notes: { "u:42": { text: "было на диске", timestamp: 1 } },
+      customTags: [],
+      loadFailed: false,
+    };
+    h.coordinator = () => ({ ok: false, truncated: 0, skipped: 0 });
+    h.saveOk = false;
+    const m = make({ аня: 42 });
+    await m.load();
+    expect(await m.setNoteText("u:42", "не доехало")).toBe(false);
+    expect(m.keys.text("Аня"), "память откатилась под диск").toBe("было на диске");
+  });
+
+  test("пустая правка без метки и цвета удаляет запись — не копим пустышки", async () => {
+    h.loadResult = { notes: { "u:42": { text: "было", timestamp: 1 } }, customTags: [], loadFailed: false };
+    h.saved = { "u:42": { text: "было", timestamp: 1 } };
+    const m = make({ аня: 42 });
+    await m.load();
+    expect(await m.setNoteText("u:42", "")).toBe(true);
+    expect("u:42" in h.saved).toBe(false);
+  });
+
+  test("успех БЕЗ счётчиков помечается в журнале: полнота не подтверждена", async () => {
+    h.coordinator = () => ({ ok: true, notes: {} });
+    const m = make();
+    await m.setNoteText("Аня", "текст", "Аня");
+    expect(
+      vi.mocked(log.warn).mock.calls.some((c) => String(c[1]).includes("без счётчиков")),
+    ).toBe(true);
   });
 
   test("отказ координатора откатывает память под состояние диска", async () => {
@@ -238,5 +298,161 @@ describe("перерисовка заказывается точечно", () =>
     expect(signals.indicators).toBe(1);
     expect(signals.tooltips).toBe(1);
     expect(signals.tags, "палитру трогать незачем").toBe(0);
+  });
+});
+
+describe("миграция ник → id (единственный автоматический писатель карты)", () => {
+  test("заметка переезжает на вечный ключ и ник запоминается в записи", async () => {
+    h.loadResult = {
+      notes: { Аня: { text: "льёт на первого", timestamp: 100 } },
+      customTags: [],
+      loadFailed: false,
+    };
+    const m = make({ аня: 42 });
+    await m.load();
+    await m.migrateToId("Аня", 42);
+    const rec = h.saved["u:42"] as { text: string; nick?: string };
+    expect(rec?.text, "текст не потерян").toBe("льёт на первого");
+    expect(rec?.nick, "ник сохранён внутри записи").toBe("Аня");
+    expect("Аня" in h.saved, "ник-ключ убран").toBe(false);
+  });
+
+  test("побеждает СВЕЖАЯ запись; старая по времени не дописывается", async () => {
+    h.loadResult = {
+      notes: {
+        Аня: { text: "старая заметка", timestamp: 100 },
+        "u:42": { text: "новая заметка", timestamp: 500 },
+      },
+      customTags: [],
+      loadFailed: false,
+    };
+    const m = make({ аня: 42 });
+    await m.load();
+    await m.migrateToId("Аня", 42);
+    expect((h.saved["u:42"] as { text: string }).text).toBe("новая заметка");
+  });
+
+  test("НИЧЬЯ по времени: текст проигравшей не уничтожается молча, а дописывается", async () => {
+    // Обе записи легаси (ts=0) — выбрать «свежую» нечем, и молча выбросить
+    // одну из двух заметок про человека нельзя.
+    h.loadResult = {
+      notes: { Аня: "первый текст", "u:42": "второй текст" },
+      customTags: [],
+      loadFailed: false,
+    };
+    const m = make({ аня: 42 });
+    await m.load();
+    await m.migrateToId("Аня", 42);
+    const text = (h.saved["u:42"] as { text: string }).text;
+    expect(text).toContain("второй текст");
+    expect(text, "проигравший текст сохранён пометкой").toContain("[слито: первый текст]");
+  });
+
+  test("цвет и метка с ник-записи НЕ теряются при переезде", async () => {
+    // Жалоба: «~50 из 200 раскрашенных ников стали белыми» — цвет наследуется
+    // безусловно, даже когда по времени побеждает другая запись.
+    h.loadResult = {
+      notes: {
+        Аня: { text: "", timestamp: 100, nickColor: "#ff0000", tag: "#00ff00" },
+        "u:42": { text: "свежая", timestamp: 900 },
+      },
+      customTags: [],
+      loadFailed: false,
+    };
+    const m = make({ аня: 42 });
+    await m.load();
+    await m.migrateToId("Аня", 42);
+    const rec = h.saved["u:42"] as { nickColor?: string; tag?: string };
+    expect(rec.nickColor).toBe("#ff0000");
+    expect(rec.tag).toBe("#00ff00");
+  });
+
+  test("«Vasya» и «vasya» сливаются в одну запись — оба ник-ключа уходят", async () => {
+    h.loadResult = {
+      notes: {
+        Vasya: { text: "первый", timestamp: 100 },
+        vasya: { text: "второй", timestamp: 200 },
+      },
+      customTags: [],
+      loadFailed: false,
+    };
+    const m = make({ vasya: 7 });
+    await m.load();
+    await m.migrateToId("Vasya", 7);
+    expect(Object.keys(h.saved)).toEqual(["u:7"]);
+  });
+
+  test("сбой чтения диска ОТМЕНЯЕТ миграцию: чужую правку затирать нельзя", async () => {
+    // Миграция срабатывает с hover'а, без действий пользователя, и пишет
+    // карту целиком — работать по устаревшему снимку памяти ей запрещено.
+    h.loadResult = { notes: { Аня: { text: "есть", timestamp: 1 } }, customTags: [], loadFailed: false };
+    const m = make({ аня: 42 });
+    await m.load();
+    h.loadResult = { notes: {}, customTags: [], loadFailed: true };
+    await m.migrateToId("Аня", 42);
+    expect(h.saved, "на диск ничего не ушло").toEqual({});
+  });
+
+  test("мёртвая фича не мигрирует: enable→disable во время hover", async () => {
+    h.loadResult = { notes: { Аня: { text: "есть", timestamp: 1 } }, customTags: [], loadFailed: false };
+    let alive = true;
+    const m = new NotesModel({
+      isActive: () => alive,
+      onColorsChanged: () => undefined,
+      onIndicatorsChanged: () => undefined,
+      onTagsChanged: () => undefined,
+      onTooltipsChanged: () => undefined,
+      onPlayerTooltips: () => undefined,
+      toast: () => undefined,
+      lookupId: () => 42,
+    });
+    await m.load();
+    alive = false;
+    await m.migrateToId("Аня", 42);
+    expect(h.saved).toEqual({});
+  });
+
+  test("нечего мигрировать — в сеть и на диск не ходим вовсе", async () => {
+    h.loadResult = { notes: { "u:42": { text: "уже на месте", timestamp: 1 } }, customTags: [], loadFailed: false };
+    const m = make({ аня: 42 });
+    await m.load();
+    await m.migrateToId("Аня", 42);
+    expect(h.saved).toEqual({});
+  });
+});
+
+describe("цвет ника", () => {
+  test.each(["__proto__", "constructor", "prototype", "", "x".repeat(300)])(
+    "небезопасный ключ %p не создаёт запись",
+    async (badKey) => {
+      // Единственный гейт безопасности ключа на content-стороне при ручном
+      // вводе игрока в менеджере цветов.
+      const m = make();
+      expect(await m.setNickColor(badKey, "#ff0000", "Аня")).toBe(false);
+      expect(h.saved).toEqual({});
+    },
+  );
+
+  test("снятие цвета у пустой записи удаляет её целиком — не копим пустышки", async () => {
+    h.loadResult = {
+      notes: { "u:42": { text: "", timestamp: 1, nickColor: "#ff0000" } },
+      customTags: [],
+      loadFailed: false,
+    };
+    h.saved = { "u:42": { text: "", timestamp: 1, nickColor: "#ff0000" } };
+    const m = make({ аня: 42 });
+    await m.load();
+    expect(await m.setNickColor("u:42", "")).toBe(true);
+    expect("u:42" in h.saved, "запись удалена").toBe(false);
+  });
+
+  test("легаси-строка повышается до записи, текст сохраняется", async () => {
+    h.loadResult = { notes: { Аня: "старый текст" }, customTags: [], loadFailed: false };
+    const m = make();
+    await m.load();
+    expect(await m.setNickColor("Аня", "#00ff00")).toBe(true);
+    const rec = h.saved["Аня"] as { text: string; nickColor?: string };
+    expect(rec.text).toBe("старый текст");
+    expect(rec.nickColor).toBe("#00ff00");
   });
 });

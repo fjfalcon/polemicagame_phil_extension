@@ -58,6 +58,12 @@ interface CrossoverHit {
 }
 
 export interface HistoryContext {
+  /**
+   * Фича жива. Соседние сторы гейт имели, этот — нет, и таймер намерения,
+   * переживший disable(), уводил в полную загрузку двух историй и запись
+   * своего id в хранилище от выключенной фичи (adversarial 28.08.2026).
+   */
+  isActive(): boolean;
   /** Настройки нужны для лимита списка, «ПУ» и гейта прогрева. */
   lastGamesCount(): string | number | undefined;
   firstKilledEnabled(): boolean;
@@ -169,7 +175,7 @@ export class HistoryStore {
    * единственного игрока, на которого сейчас смотрят.
    */
   pumpWarm(names: string[]): void {
-    if (!this.ctx.crossoverEnabled()) return;
+    if (!this.ctx.isActive() || !this.ctx.crossoverEnabled()) return;
     const mine = this.ctx.ownName()?.toLowerCase();
     const pending = names.filter((name) => {
       const key = name.toLowerCase();
@@ -212,6 +218,7 @@ export class HistoryStore {
      *  многостраничный заход остаётся живому ховеру. */
     warm = false,
   ): Promise<Crossover | null | undefined> {
+    if (!this.ctx.isActive()) return Promise.resolve(null);
     const key = username.toLowerCase();
     const hit = this.crossover.get(key);
     if (hit && Date.now() - hit.at < hit.ttl) {
@@ -266,6 +273,9 @@ export class HistoryStore {
         };
       })();
       const [mine, start] = await Promise.all([this.myHistory(myId), theirs]);
+      // Фичу могли выключить, пока ехали две истории: писать в кэш мёртвой
+      // жизни незачем, а дорисовывать её тултипы — вредно.
+      if (!this.ctx.isActive()) return null;
       // Первые строки уже скачанной истории — это и есть «последние игры»
       // (замер 27.08.2026, п.5: их выбрасывали, а потом качали заново).
       // Кладём в кэш ТОЛЬКО если там пусто: живой ховер мог уже дополнить
@@ -320,6 +330,7 @@ export class HistoryStore {
 
   /** Список игр; null — загрузить НЕ УДАЛОСЬ (это не «игр нет»). */
   async getLastGames(username: string): Promise<LastGameEntry[] | null> {
+    if (!this.ctx.isActive()) return null;
     const key = username.toLowerCase();
     const cached = this.lastGames.get(key);
     const fetchedAt = this.lastGamesFetchedAt.get(key) ?? 0;

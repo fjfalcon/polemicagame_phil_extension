@@ -125,3 +125,40 @@ describe("кэш ник-индекса", () => {
     expect(k.keyFor("Аня")).toBe("u:9");
   });
 });
+
+describe("ключи с прототипа не притворяются заметками", () => {
+  test.each(["constructor", "__proto__", "toString", "valueOf"])(
+    "игрок с ником %p не читает объект с Object.prototype",
+    (nick) => {
+      // `map[key]` уходит по цепочке прототипов: до фикса 28.08.2026 такой ник
+      // отдавал функцию-конструктор, и она проходила дальше как «запись».
+      const k = keys({});
+      expect(k.get(nick)).toBeUndefined();
+      expect(k.text(nick)).toBe("");
+      expect(k.tag(nick)).toBe("");
+      expect(k.rawNickColor(nick)).toBe("");
+      expect(k.formerNicks(nick)).toEqual([]);
+    },
+  );
+
+  test("настоящая запись с таким ключом читается как обычно", () => {
+    const k = keys({ constructor: { text: "и такое бывает", timestamp: 1, version: "4" } });
+    expect(k.text("constructor")).toBe("и такое бывает");
+  });
+});
+
+describe("обе записи существуют разом (id и ник)", () => {
+  test("читаем id-запись: она актуальнее, миграция ещё не отработала", () => {
+    // Мутант `||` → `&&` в выборе ключа выживал: этого состояния не было ни в
+    // одном тесте (adversarial 28.08.2026).
+    const k = keys(
+      {
+        "u:42": { text: "актуальная", timestamp: 200, version: "4" },
+        Аня: { text: "устаревшая", timestamp: 100, version: "4" },
+      },
+      { аня: 42 },
+    );
+    expect(k.keyFor("Аня")).toBe("u:42");
+    expect(k.text("Аня")).toBe("актуальная");
+  });
+});

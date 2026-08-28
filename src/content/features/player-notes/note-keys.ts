@@ -64,10 +64,10 @@ export class NoteKeys {
       const key = idKey(id);
       // Для ЧТЕНИЯ id-ключ приоритетен, но если записи под ним ещё нет, а под
       // ником есть — читаем ник (миграция могла не успеть).
-      if (notes[key] !== undefined || notes[username] === undefined) return key;
+      if (Object.hasOwn(notes, key) || !Object.hasOwn(notes, username)) return key;
       return username;
     }
-    if (notes[username] !== undefined) return username;
+    if (Object.hasOwn(notes, username)) return username;
     // id не резолвлен (статистика ещё грузится или профиль скрыт), записи под
     // ником нет — ищем id-запись по её полю nick. Без этого игроки,
     // раскрашенные через менеджер (запись сразу на id-ключе), стояли белыми
@@ -79,7 +79,11 @@ export class NoteKeys {
   }
 
   get(username: string): NoteRecord | string | undefined {
-    return this.ctx.notes()[this.keyFor(username)];
+    // Только СОБСТВЕННОЕ свойство: ник вида «constructor» иначе прочитал бы
+    // объект с прототипа и притворился заметкой (adversarial 28.08.2026).
+    const notes = this.ctx.notes();
+    const key = this.keyFor(username);
+    return Object.hasOwn(notes, key) ? notes[key] : undefined;
   }
 
   text(username: string): string {

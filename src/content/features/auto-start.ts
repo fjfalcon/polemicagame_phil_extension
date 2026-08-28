@@ -106,8 +106,7 @@ const ACCEPT_CANDIDATE_SELECTOR =
  * глубокие совпадения.
  */
 /** Панель принятия игры — вне её мы не кликаем ничего (см. ниже). */
-const ACCEPT_SCOPE_SELECTOR =
-  ".p-play__profile-accept, .p-play-profile__wr, .p-play__profile-panel";
+const ACCEPT_SCOPE_SELECTOR = SITE.acceptScope;
 
 /**
  * Кандидат НЕ лежит внутри уже принятого блока принятия.

@@ -54,6 +54,18 @@ export const SITE = {
     ".button.preset-1.small.desktop-version, button.preset-1.small.desktop-version, div.button.preset-1.small.desktop-version",
   /** Широкий невод кликабельных узлов — по нему ищут кнопки по ТЕКСТУ. */
   clickableCandidates: 'button, [role="button"], .button, .button-comp, li, a, div',
+  /** Панель принятия игры — вне её автокликер не трогает ничего. */
+  acceptScope: ".p-play__profile-accept, .p-play-profile__wr, .p-play__profile-panel",
+  /** Игровые контролы: область, где живут кнопки хода и пауза. */
+  gameControlsScope: ".controls, .game-info-block, .roller",
+  /** Плитки игроков и участников — область, за которой следит player-notes. */
+  playerScope: ".player, .participants-item, .participants, .profileinfo__main-info, .profileinfo",
+  /** То же, но только контейнеры с содержимым (без списка участников). */
+  playerContentScope: ".player, .participants-item, .profileinfo__main-info",
+  /** Модалки сайта поверх поиска (в т.ч. капча) — машина уступает игроку. */
+  siteModalsWide: ".modal, .v--modal-overlay, .vm--overlay, .basemodal",
+  /** Стадии игры и заголовок конца — область слежения за фазой. */
+  phaseScope: ".stage, .substage, .ended__title",
   /** Номер матча на странице игры (role-marker). */
   gameIdBlock: ".game-info-block .game-id, .game-info-block__section.game-id",
   /** Правая колонка профиля и её вкладки — точка вставки наших карточек. */

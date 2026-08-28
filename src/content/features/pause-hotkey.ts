@@ -43,7 +43,7 @@ const RESUME_EXACT = new Set([
  * голосования за продолжение. Меню настроек (где живёт СТАРТ паузы) сюда
  * намеренно не входит.
  */
-const GAME_CONTROLS_SELECTOR = ".controls, .game-info-block, .roller";
+const GAME_CONTROLS_SELECTOR = SITE.gameControlsScope;
 const CLICKABLE_SELECTOR =
   'button, [role="button"], [role="menuitem"], li, a, div.button, .button, .button-comp, .base-menu__item';
 const MENU_SELECTOR =

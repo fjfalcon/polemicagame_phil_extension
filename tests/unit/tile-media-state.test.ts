@@ -72,6 +72,15 @@ describe("мьют: общий для вкладок список", () => {
     expect(store.disk[MUTED_PLAYERS_KEY]).toEqual([]);
   });
 
+  test("toggleMute отвечает НОВЫМ состоянием — по нему красится кнопка", async () => {
+    // Возврат используется в проде (player-notes: applyMuteState/sync), но
+    // не проверялся ничем (adversarial 28.08.2026).
+    const s = make();
+    expect(s.toggleMute("Аня"), "включили").toBe(true);
+    expect(s.toggleMute("Аня"), "выключили").toBe(false);
+    await flush();
+  });
+
   test("повторное включение после снятия снова пишется на диск", async () => {
     const s = make();
     s.toggleMute("Аня");

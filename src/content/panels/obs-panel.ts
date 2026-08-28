@@ -1173,7 +1173,7 @@ function startDOMMonitoring(): void {
   // 14 400 за часовую игру (аудит 01.08.2026, находка 5). Таймер «До смены
   // этапа» живёт соседом списка стадий и может не попасть под селектор —
   // его добирает редкий страховочный опрос ниже.
-  const PHASE_SCOPE = ".stage, .substage, .ended__title";
+  const PHASE_SCOPE = SITE.phaseScope;
   unsubDom = onDomChange((mutations) => {
     let shouldCheckTime = false;
 
