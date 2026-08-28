@@ -37,9 +37,12 @@ npx web-ext lint -s dist/firefox   # 0 errors; ~23 warnings (innerHTML) — но
 вердикта «К РЕЛИЗУ ГОТОВО». Многораундовость — норма: блокеры находились
 и на 3–4-м раунде.
 
-- Один JS-бандл (tsup, iife, без минификации) на оба браузера; различия только
-  в манифесте (`src/manifest/manifest.base.json` + overlay chrome/firefox,
-  сборка `scripts/assemble.mjs`).
+- Один JS-бандл (tsup, iife, **минифицированный** — включено перф-аудитом
+  01.08.2026, находка 6: content.js грузится на каждой странице сайта, и
+  ~449 КБ неминифицированного JS парсились до возврата управления; обфускации
+  нет, это допустимо и для CWS, и для подписи AMO) на оба браузера; различия
+  только в манифесте (`src/manifest/manifest.base.json` + overlay
+  chrome/firefox, сборка `scripts/assemble.mjs`).
 - Версию надо поднимать в ДВУХ местах: `package.json` и
   `src/manifest/manifest.base.json` (автосинка нет).
 - Релиз: бамп версии → commit → push →

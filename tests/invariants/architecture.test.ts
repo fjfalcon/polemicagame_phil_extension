@@ -302,6 +302,21 @@ describe("settings, release and manifest consistency", () => {
     expect(defaults, "§4.12: a setting without a default changes upgrade behavior unpredictably").toEqual(settings);
   });
 
+  test("AGENTS не врёт про минификацию бандла", () => {
+    // Внешнее арх-ревью 28.08.2026 поймало расхождение: AGENTS обещал «без
+    // минификации», а tsup минифицирует с 01.08.2026. Для человека это
+    // мелочь, для агента — источник решений по несуществующей архитектуре,
+    // поэтому автоматически выводимый факт обязан проверяться, а не
+    // пересказываться. Правило шире одного факта: если в AGENTS появляется
+    // утверждение о конфиге — ему нужен такой же страж.
+    const minifies = /^\s*minify:\s*true\s*,/m.test(read("tsup.config.ts"));
+    const doc = read("AGENTS.md");
+    const claimsMinified = /минифицированный/.test(doc);
+    const claimsPlain = /без минификации/.test(doc);
+    expect(claimsPlain, "AGENTS утверждает «без минификации»").toBe(false);
+    expect(claimsMinified, "AGENTS обязан описывать реальную сборку").toBe(minifies);
+  });
+
   test("package and base manifest versions match", () => {
     const pkg = JSON.parse(read("package.json")) as { version: string };
     const manifest = JSON.parse(read("src/manifest/manifest.base.json")) as { version: string };
