@@ -47,6 +47,16 @@ import {
   resetActiveGamesCacheForTest,
   type RatingPlayer,
 } from "@core/polemica-api";
+import {
+  HistoryStore,
+  WARM_PAGE_LIMIT,
+  type LastGameEntry,
+} from "./player-notes/history-store";
+import { parseFlippedPlayers } from "./player-notes/flipped-players";
+import {
+  MUTED_PLAYERS_KEY,
+  TileMediaState,
+} from "./player-notes/tile-media-state";
 import { NoteKeys } from "./player-notes/note-keys";
 import {
   PlayerStatsStore,
@@ -64,8 +74,6 @@ import { createRoleSvg } from "../role-sprite";
 import { formatCrossover } from "../crossover-view";
 import { redactNick } from "@shared/redact";
 
-/** Мелкая страница прогрева пересечений: свежий отрезок вместо всей истории. */
-const WARM_PAGE_LIMIT = 200;
 import { escapeHtml } from "@core/escape";
 import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
 import {
@@ -90,20 +98,6 @@ import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings, ExtMessage, NoteOp, NotesResultMsg } from "@shared/types";
 
 // ───────────────────────── Типы данных API (any допустим) ─────────────────────────
-
-interface LastGameEntry {
-  /** Номер матча: по нему добирается признак «первый убитый». */
-  id: number;
-  role: string;
-  isWin: boolean;
-  mmrChange: number;
-  /**
-   * Игрок был первым убитым. `undefined` — НЕ ЗНАЕМ (разбор матча не
-   * загрузился или признак выключен настройкой): молчать в этом случае
-   * обязательно, «не ПУ» было бы выдумкой.
-   */
-  firstKilled?: boolean;
-}
 
 /* NoteRecord / NotesMap живут в @core/notes-store — их делят content и popup. */
 
@@ -139,50 +133,10 @@ const VERSION = NOTES_VERSION;
  * последние игры без «ПУ») открываются сразу.
  */
 const HOVER_INTENT_MS = 350;
-/**
- * TTL готовой сводки пересечений. Дольше обычной статистики намеренно: она
- * меняется, только когда доигран ОБЩИЙ матч, а текущий доиграться посреди
- * себя не может. MMR за вечер скачет, число совместных игр — нет.
- */
-const CROSSOVER_TTL_MS = 30 * 60 * 1000;
-/** TTL пустой истории игр: короче обычного, чтобы новые игры подтянулись. */
-const EMPTY_GAMES_TTL_MS = 60 * 1000;
 
-/** storage.local: массив ников (lowercase) с выключенным у нас звуком. */
-const MUTED_PLAYERS_KEY = "pn_muted_players";
 
 /** sessionStorage: ники (lowercase) с перевёрнутой камерой в текущей игре. */
 const FLIPPED_PLAYERS_KEY = "pn_flipped_players";
-
-/**
- * Потолок числа перевёрнутых камер. За столом максимум ~12 игроков, 30 — с
- * запасом. sessionStorage принадлежит САЙТУ (недоверенный источник, AGENTS.md
- * §5): без потолка подсунутый гигантский массив навсегда селился в Set и
- * раздувал каждую последующую запись persistFlippedPlayers (аудит хрупкости
- * 06.08.2026). Излишек молча отбрасывается срезом.
- */
-const MAX_FLIPPED = 30;
-
-/**
- * Разбор списка перевёрнутых камер из sessionStorage. Любой вход (не-JSON,
- * не-массив, не-строки, гигантский массив) даёт валидный Set размером не
- * больше MAX_FLIPPED — исключений наружу нет. Экспорт — тестовый шов для
- * property-тестов page-storage-trust (по паттерну noteTrustedInput в
- * queue-requeue.ts).
- */
-export function parseFlippedPlayers(raw: string | null): Set<string> {
-  if (!raw) return new Set();
-  try {
-    const list = JSON.parse(raw);
-    if (!Array.isArray(list)) return new Set();
-    return new Set(
-      list.filter((u): u is string => typeof u === "string" && u !== "").slice(0, MAX_FLIPPED),
-    );
-  } catch {
-    /* повреждённый sessionStorage — просто начинаем с пустого набора */
-    return new Set();
-  }
-}
 
 /**
  * Кому из игроков за столом ещё нужен резолв id.
@@ -216,6 +170,8 @@ export function pendingIdLookups(
  * перекрывается» именно через эту фичу, и точка импорта — часть их смысла.
  */
 export { fetchActiveGames, resetActiveGamesCacheForTest };
+/** Разбор перевёрнутых камер уехал в ./player-notes/flipped-players. */
+export { parseFlippedPlayers };
 /** Стили уехали в ./player-notes/styles; cssAttr сторожат тесты по этому пути. */
 export { cssAttr };
 
@@ -326,6 +282,27 @@ class PlayerNotesManager {
    * Статистика игроков: сеть, кэш и сборка цифр. Обратно фича получает ровно
    * один сигнал — «данные игрока приехали».
    */
+  /**
+   * История игр соперника: кэши пересечений и последних игр, прогрев.
+   * Наружу отдаёт только данные — рисует их фича.
+   */
+  /**
+   * Что игрок решил про чужие плитки: мьют (общий для вкладок, storage.local),
+   * переворот камеры (sessionStorage вкладки) и скрытие видео (память).
+   */
+  private readonly tileMedia = new TileMediaState({
+    onPersistError: (message) => this.toast(message, true),
+    onExternalMuteChange: () => this.processExistingElements(),
+  });
+  private readonly history = new HistoryStore({
+    lastGamesCount: () => this.settings.last_games_count,
+    firstKilledEnabled: () => this.settings.last_games_first_killed !== false,
+    crossoverEnabled: () => this.settings.btn_crossover_enabled !== false,
+    isNight: () => isNightNow(),
+    ownName: () => ownNameFromTable(),
+    myUserId: () => this.myUserId(),
+    resolveUserId: (username, key) => this.resolveUserId(username, key),
+  });
   private readonly stats = new PlayerStatsStore({
     isActive: () => this.active,
     isEnabled: () => this.settings.statistics_enabled !== false,
@@ -370,31 +347,6 @@ class PlayerNotesManager {
   private idResolveInFlight: Promise<void> | null = null;
   /** Когда резолв последний раз упал — чтобы не долбить сеть после отказа. */
   private idResolveFailedAt = 0;
-  /** Кэш последних игр по нику (lowercase). */
-  private lastGamesCache = new Map<string, LastGameEntry[]>();
-  private gamesFetchedAt = new Map<string, number>();
-  /** Запросы истории игр в полёте (дедупликация одновременных hover'ов). */
-  private lastGamesInFlight = new Map<string, Promise<LastGameEntry[]>>();
-  /**
-   * Готовые сводки пересечений. Хранится ТОЛЬКО итог (полтора десятка чисел),
-   * а истории, из которых он посчитан, отпускаются — просьба владельца
-   * 13.08.2026 «не занимать буфер».
-   *
-   * `ttl` у записи свой: удачу держим долго (см. CROSSOVER_TTL_MS), а неудачу
-   * — коротко, иначе сетевая икота замораживала бы «не удалось» на полчаса.
-   */
-  private crossoverCache = new Map<string, { at: number; ttl: number; data: Crossover | null; shallow?: boolean }>();
-  /** Кто ждёт дорисовки «ПУ» по игроку (тултип открыт прямо сейчас). */
-  private lastGamesProgress = new Map<string, (games: LastGameEntry[]) => void>();
-  private crossoverInFlight = new Map<string, Promise<Crossover | null | undefined>>();
-  /** Прогрев занят одним игроком — по одному за проход, без залпа. */
-  private warmBusy = false;
-  /**
-   * Прогрев выключен до конца сессии: свой профиль не определился. Без этого
-   * латча каждый проход (раз в 2с) заново дёргал бы рейтинг ради того же
-   * ответа.
-   */
-  private warmStopped = false;
   /**
    * Счётчик пересборок ряда кнопок на плитку — сторож против «шторма».
    *
@@ -416,13 +368,11 @@ class PlayerNotesManager {
   /** Тултипы, живущие порталом в body (для уборки осиротевших). */
   private portaledTooltips = new Set<HTMLElement>();
   /** Снятые в этой вкладке мьюты — не воскрешаем их при слиянии с диском. */
-  private unmutedThisSession = new Set<string>();
   /** Удалённые в этой вкладке свои цвета — то же для палитры. */
   private removedTagsThisSession = new Set<string>();
   /** Живые плашки-уведомления (снимаются в disable). */
   private toasts = new Set<HTMLElement>();
   /** Ники с временно скрытым видео (в пределах сессии). */
-  private hiddenVideos = new Set<string>();
   /**
    * Локально замьюченные игроки (ники, lowercase). ПЕРСИСТЕНТНО в
    * storage.local (ключ pn_muted_players) — по просьбе владельца мьют
@@ -432,7 +382,6 @@ class PlayerNotesManager {
    * и srcObject, но НЕ volume, поэтому наше значение переживает апдейты
    * компонента; пересоздание элемента ловится обычным refresh-циклом.
    */
-  private mutedPlayers = new Set<string>();
   /** Закрытие открытой модалки заметки — нужно, чтобы disable() снял её слушатели. */
   private closeOpenModal: (() => void) | null = null;
   /**
@@ -441,7 +390,6 @@ class PlayerNotesManager {
    * следующие игры/дни — сайт пересоздаёт video на каждой смене фазы, и без
    * этого набора переворот приходилось нажимать заново после каждой ночи.
    */
-  private flippedPlayers = new Set<string>();
   /** Тултип → его кнопка: на время показа тултип уезжает в body (портал). */
   private tooltipAnchors = new WeakMap<HTMLElement, HTMLElement>();
 
@@ -463,8 +411,8 @@ class PlayerNotesManager {
 
   async enable(): Promise<void> {
     await this.loadNotes();
-    await this.loadMutedPlayers();
-    this.loadFlippedPlayers();
+    await this.tileMedia.loadMuted();
+    this.tileMedia.loadFlipped();
 
     this.syncMatchPageRoute(getMatchId() !== null);
 
@@ -557,13 +505,7 @@ class PlayerNotesManager {
       // Мьюты общие между вкладками: без этой ветки вкладка со старым Set
       // затирала бы чужие мьюты при первом же своём клике (пишется весь список).
       if (changes[MUTED_PLAYERS_KEY]) {
-        const next = changes[MUTED_PLAYERS_KEY].newValue;
-        if (Array.isArray(next)) {
-          this.mutedPlayers = new Set(
-            next.filter((u): u is string => typeof u === "string" && u !== ""),
-          );
-          this.processExistingElements();
-        }
+        this.tileMedia.adoptExternalMuted(changes[MUTED_PLAYERS_KEY].newValue);
       }
       if (!changes[NOTES_KEY]) return;
       this.notes = (changes[NOTES_KEY].newValue as NotesMap) || {};
@@ -661,25 +603,18 @@ class PlayerNotesManager {
     }
 
     this.stats.reset();
-    this.lastGamesCache.clear();
-    this.lastGamesInFlight.clear();
-    this.crossoverCache.clear();
-    this.crossoverInFlight.clear();
-    this.lastGamesProgress.clear();
-    this.warmBusy = false;
-    this.warmStopped = false;
+    this.history.reset();
     this.stats.clearErrorBackoff();
     this.portaledTooltips.clear();
     for (const t of this.toasts) t.remove();
     this.toasts.clear();
-    this.unmutedThisSession.clear();
+    this.tileMedia.clearUnmutedHere();
     this.removedTagsThisSession.clear();
     this.profileIdByNick.clear();
     this.idResolveAttempted.clear();
     this.idResolveFailedAt = 0;
     this.keys.reset();
     this.colorIndexCache = null;
-    this.hiddenVideos.clear();
     // Мьют персистентный, но при выключенной фиче звук обязан вернуться:
     // расширение «ничего не делает», когда его выключили (§4 п.7).
     document
@@ -688,7 +623,7 @@ class PlayerNotesManager {
         if (v.volume === 0) v.volume = 1;
         delete v.dataset.pnMuted;
       });
-    this.mutedPlayers.clear();
+    this.tileMedia.reset();
   }
 
   update(ctx: FeatureContext): void {
@@ -699,10 +634,7 @@ class PlayerNotesManager {
     this.settings = ctx.settings;
     // В кэше лежат СТАРЫЕ списки: без сброса «показывать 8» и «показывать ПУ»
     // включались бы только через пять минут, когда кэш протухнет сам.
-    if (gamesViewChanged) {
-      this.lastGamesCache.clear();
-      this.gamesFetchedAt.clear();
-    }
+    if (gamesViewChanged) this.history.resetLastGames();
     if (cameraWasEnabled && !this.settings.camera_rotate_enabled) unflipAll();
     if (this.settings.statistics_enabled === false) {
       this.removeStatisticsElements();
@@ -757,46 +689,6 @@ class PlayerNotesManager {
       );
     }
     log.debug("player-notes", "notes loaded", Object.keys(this.notes).length);
-  }
-
-  private async loadMutedPlayers(): Promise<void> {
-    try {
-      const res = await browser.storage.local.get({ [MUTED_PLAYERS_KEY]: [] });
-      const list = res[MUTED_PLAYERS_KEY];
-      if (Array.isArray(list)) {
-        for (const u of list) if (typeof u === "string" && u) this.mutedPlayers.add(u);
-      }
-    } catch (e) {
-      log.warn("player-notes", "muted players load failed", e);
-    }
-  }
-
-  /**
-   * Мьюты пишутся СЛИЯНИЕМ со свежим списком с диска: обе вкладки хранят
-   * список целиком, и «последний писатель побеждает» терял мьюты, сделанные
-   * в соседней вкладке (аудит безопасности 01.08.2026, находка 8). Ошибку
-   * записи показываем пользователю — раньше она молча уходила в лог, а после
-   * перезагрузки мьют исчезал.
-   */
-  private persistMutedPlayers(): void {
-    void (async () => {
-      try {
-        const cur = (await browser.storage.local.get({ [MUTED_PLAYERS_KEY]: [] })) as Record<
-          string,
-          unknown
-        >;
-        const disk = Array.isArray(cur[MUTED_PLAYERS_KEY])
-          ? (cur[MUTED_PLAYERS_KEY] as string[])
-          : [];
-        // Снятые в ЭТОЙ вкладке мьюты не должны воскресать из дискового списка.
-        const merged = new Set([...disk.filter((n) => !this.unmutedThisSession.has(n))]);
-        for (const n of this.mutedPlayers) merged.add(n);
-        await browser.storage.local.set({ [MUTED_PLAYERS_KEY]: [...merged] });
-      } catch (e) {
-        log.warn("player-notes", "muted players save failed", e);
-        this.toast("Не удалось сохранить мьют — он слетит после перезагрузки", true);
-      }
-    })();
   }
 
   private async saveCustomTags(): Promise<boolean> {
@@ -1729,9 +1621,7 @@ class PlayerNotesManager {
       // фазы, и ensureFlipState вернёт переворот сам (просьба владельца).
       if (flipped !== null) {
         const uname = username.toLowerCase();
-        if (flipped) this.flippedPlayers.add(uname);
-        else this.flippedPlayers.delete(uname);
-        this.persistFlippedPlayers();
+        this.tileMedia.setFlipped(uname, flipped);
       }
       sync();
     });
@@ -1745,23 +1635,6 @@ class PlayerNotesManager {
     if (button.style.opacity !== opacity) button.style.opacity = opacity;
   }
 
-  private loadFlippedPlayers(): void {
-    try {
-      // Разбор и cap — в parseFlippedPlayers (источник недоверенный).
-      this.flippedPlayers = parseFlippedPlayers(sessionStorage.getItem(FLIPPED_PLAYERS_KEY));
-    } catch {
-      /* sessionStorage недоступен (приватный режим) — начинаем с пустого */
-    }
-  }
-
-  private persistFlippedPlayers(): void {
-    try {
-      sessionStorage.setItem(FLIPPED_PLAYERS_KEY, JSON.stringify([...this.flippedPlayers]));
-    } catch {
-      /* квота/приватный режим — потеряем только память о перевороте */
-    }
-  }
-
   /**
    * Восстановить переворот камеры после того, как сайт пересоздал video
    * (смена дня/ночи, переподключение камеры). Идемпотентно: у перевёрнутого
@@ -1770,7 +1643,7 @@ class PlayerNotesManager {
    */
   private ensureFlipState(container: Element, username: string): void {
     if (this.settings.camera_rotate_enabled === false) return;
-    if (!this.flippedPlayers.has(username.toLowerCase())) return;
+    if (!this.tileMedia.isFlipped(username)) return;
     const el = container as HTMLElement;
     if (isPlayerFlipped(el)) return;
     const video = el.querySelector<HTMLVideoElement>(SITE.playerVideoEl);
@@ -1881,14 +1754,12 @@ class PlayerNotesManager {
       const uname = username.toLowerCase();
       const videoEl = playerContainer.querySelector<HTMLElement>(SITE.playerVideo);
       if (!videoEl) return;
-      if (this.hiddenVideos.has(uname)) {
-        videoEl.style.display = "";
-        delete videoEl.dataset.polemicaHidden;
-        this.hiddenVideos.delete(uname);
-      } else {
+      if (this.tileMedia.toggleHidden(uname)) {
         videoEl.style.display = "none";
         videoEl.dataset.polemicaHidden = "true";
-        this.hiddenVideos.add(uname);
+      } else {
+        videoEl.style.display = "";
+        delete videoEl.dataset.polemicaHidden;
       }
       this.syncHideVideoButton(button, username);
     });
@@ -1898,7 +1769,7 @@ class PlayerNotesManager {
   }
 
   private syncHideVideoButton(button: HTMLElement, username: string): void {
-    const opacity = this.hiddenVideos.has(username.toLowerCase()) ? "1" : "0.7";
+    const opacity = this.tileMedia.isHidden(username) ? "1" : "0.7";
     if (button.style.opacity !== opacity) button.style.opacity = opacity;
   }
 
@@ -1912,14 +1783,7 @@ class PlayerNotesManager {
       e.preventDefault();
       e.stopPropagation();
       const uname = username.toLowerCase();
-      if (this.mutedPlayers.has(uname)) {
-        this.mutedPlayers.delete(uname);
-        this.unmutedThisSession.add(uname);
-      } else {
-        this.mutedPlayers.add(uname);
-        this.unmutedThisSession.delete(uname);
-      }
-      this.persistMutedPlayers();
+      this.tileMedia.toggleMute(uname);
       this.applyMuteState(container, username);
       this.syncMuteButton(btn, username);
     });
@@ -1934,7 +1798,7 @@ class PlayerNotesManager {
    * refresh-цикле onDomChange (инвариант AGENTS.md §4 п.1).
    */
   private syncMuteButton(button: HTMLElement, username: string): void {
-    const muted = this.mutedPlayers.has(username.toLowerCase());
+    const muted = this.tileMedia.isMuted(username);
     const state = muted ? "muted" : "live";
     if (button.dataset.pnMuteState === state) return;
     button.dataset.pnMuteState = state;
@@ -1979,7 +1843,7 @@ class PlayerNotesManager {
     // Выключенная настройка ведёт себя как «никто не замьючен»: звук
     // возвращается живьём, список в storage при этом не трогаем.
     const muteActive = this.settings.player_mute_enabled !== false;
-    const wantMute = muteActive && this.mutedPlayers.has(username.toLowerCase());
+    const wantMute = muteActive && this.tileMedia.isMuted(username);
     media.forEach((el) => {
       if (wantMute) {
         if (el.volume !== 0) el.volume = 0;
@@ -2031,7 +1895,7 @@ class PlayerNotesManager {
       this.showTooltip(tooltip, button);
     };
     const load = async (): Promise<void> => {
-      const games = await this.getLastGames(username);
+      const games = await this.history.getLastGames(username);
       // Курсор мог уйти до ответа — скрытый тултип не трогаем (запись DOM
       // будила бы наблюдатель вхолостую); следующий hover перерисует сам.
       if (tooltip.dataset.pnShown !== "1") return;
@@ -2048,10 +1912,10 @@ class PlayerNotesManager {
     button.addEventListener("mouseenter", () => {
       // Дорисовка «ПУ» по мере готовности разборов (п.4): пока тултип открыт,
       // он подписан на обновление того же списка.
-      this.lastGamesProgress.set(key, paintGames);
+      this.history.watchProgress(key, paintGames);
       // Готовый список — мгновенно (п.6): 350 мс намерения нужны только
       // перед ЕЩЁ НЕ начатыми дорогими запросами.
-      const ready = this.peekLastGames(username);
+      const ready = this.history.peekLastGames(username);
       if (ready) {
         // Сначала ПОКАЗАТЬ, потом красить: paintGames молчит при скрытом
         // тултипе (страж записи в невидимый DOM), и кэш-хит рисовал пустоту
@@ -2081,7 +1945,7 @@ class PlayerNotesManager {
         clearTimeout(intent);
         intent = null;
       }
-      this.lastGamesProgress.delete(key);
+      this.history.unwatchProgress(key);
       this.hideTooltip(tooltip);
     });
 
@@ -3156,211 +3020,11 @@ class PlayerNotesManager {
     }
   }
 
-  // ─────────── Статистика пересечений ───────────
-
-  /**
-   * Своя история игр. Тянется целиком (страницами) и переиспользуется всеми
-   * кнопками за столом: она одна и та же, а весит несколько сотен строк.
-   */
-  private getMyHistory(myId: number | string): Promise<History | null> {
-    // Общий кэш @core/crossover (PERF26-3): та же история нужна карточке
-    // профиля — раньше каждая качала свою копию.
-    return getOwnHistory(myId);
-  }
-
-  /**
-   * Отпустить свою историю: сводки посчитаны, строки больше не нужны.
-   * Пересечения переживают её в кэше — там уже готовые числа.
-   */
-  /**
-   * Прогрев пересечений — по ОДНОМУ игроку за проход.
-   *
-   * Зачем: первая сводка стоит двух историй, и ждать их, уже наведя курсор, —
-   * это те самые «очень долго в первый раз». Ночью игроку не до кнопок, зато
-   * у расширения есть время: к утру сводки готовы и открываются мгновенно
-   * (идея владельца 13.08.2026).
-   *
-   * Почему по одному и без своего таймера: страховочный проход уже тикает раз
-   * в две секунды, и этого ритма хватает, чтобы прогреть стол за ночь. Залп из
-   * десяти историй разом был бы и грубее к серверу, и медленнее для того
-   * единственного игрока, на которого сейчас смотрят.
-   */
-  private pumpCrossoverWarm(names: string[]): void {
-    if (this.settings.btn_crossover_enabled === false) return;
-    const mine = ownNameFromTable()?.toLowerCase();
-    const pending = names.filter((name) => {
-      const key = name.toLowerCase();
-      // Себя пропускаем: «пересечения с собой» — это просто все свои игры.
-      return key !== "" && key !== mine && !this.crossoverCache.has(key);
-    });
-    if (pending.length === 0) {
-      // Стол прогрет. Историю НЕ отпускаем вручную: общий кэш живёт своим
-      // TTL, а release из 2-секундного прохода выбивал её из-под ховер-
-      // апгрейда и профильных карточек (adversarial 26.08.2026, №4/№5).
-      return;
-    }
-    // Прогрев начинается с первой НОЧИ: днём игрок говорит и смотрит на стол,
-    // и фоновые запросы ему ни к чему.
-    if (this.warmStopped || this.warmBusy || !isNightNow()) return;
-    this.warmBusy = true;
-    void this.getCrossover(pending[0], true)
-      .then((data) => {
-        if (data === undefined) {
-          this.warmStopped = true;
-          log.info("player-notes", "прогрев пересечений отключён: свой профиль не определился");
-        }
-      })
-      .finally(() => {
-        this.warmBusy = false;
-      });
-  }
-
-  /**
-   * Пересечение с игроком: сколько сыграно вместе и кем он в этих играх был.
-   *
-   * `undefined` — свой id неизвестен (в комнате шапки сайта нет, а на обычные
-   * страницы игрок ещё не заходил): это НЕ ошибка сети и говорить о ней надо
-   * иначе. `null` — не удалось загрузить историю; пустая сводка читалась бы
-   * как «вы никогда не играли вместе», а это другое утверждение.
-   */
-  /**
-   * Готовая ПОЛНАЯ сводка из кэша — синхронно (замер 27.08.2026, п.2):
-   * повторное наведение платило фиксированные 350 мс намерения, хотя
-   * данные уже лежали. null — нечего показать сразу.
-   */
-  private peekCrossover(username: string): Crossover | null {
-    const hit = this.crossoverCache.get(username.toLowerCase());
-    if (!hit || Date.now() - hit.at >= hit.ttl || !hit.data) return null;
-    return hit.data;
-  }
-
-  /** Мелкая (прогревочная) сводка из кэша — её показываем сразу, п.3. */
-  private peekShallowCrossover(username: string): Crossover | null {
-    const hit = this.crossoverCache.get(username.toLowerCase());
-    if (!hit || Date.now() - hit.at >= hit.ttl || !hit.data || !hit.shallow) return null;
-    return hit.data;
-  }
-
-  /** Готовый список последних игр из кэша — синхронно (п.6). */
-  private peekLastGames(username: string): LastGameEntry[] | null {
-    const key = username.toLowerCase();
-    const cached = this.lastGamesCache.get(key);
-    const at = this.gamesFetchedAt.get(key) ?? 0;
-    if (!cached || Date.now() - at >= STATS_TTL_MS) return null;
-    return cached;
-  }
-
-  private getCrossover(
-    username: string,
-    /** Ночной прогрев: мелкая сводка первой страницей (PERF26-3) — полный
-     *  многостраничный заход остаётся живому ховеру. */
-    warm = false,
-  ): Promise<Crossover | null | undefined> {
-    const key = username.toLowerCase();
-    const hit = this.crossoverCache.get(key);
-    if (hit && Date.now() - hit.at < hit.ttl) {
-      // Мелкий прогревочный кэш ховеру не отдаём — апгрейдим до полного.
-      if (!(hit.shallow && !warm)) return Promise.resolve(hit.data);
-    }
-    const inFlight = this.crossoverInFlight.get(key);
-    if (inFlight) {
-      if (warm) return inFlight;
-      // Летит прогрев? Дождаться и перечитать: либо кэш уже полный, либо
-      // shallow-хит выше отправит на полный заход (второй виток в кэш
-      // не зациклится — non-shallow вернётся сразу).
-      return inFlight.then(() => this.getCrossover(username));
-    }
-    // Промис кладётся в реестр СИНХРОННО, до первого await. Раньше метод
-    // успевал сходить за своим id между проверкой реестра и записью в него, и
-    // два наведения подряд заводили каждое свою пару историй (замечание
-    // владельца 13.08.2026). Повторное наведение обязано ЖДАТЬ первый запрос,
-    // а новый запускать только если тот провалился — за это отвечает кэш
-    // неудачи с коротким TTL.
-    const promise = this.loadCrossover(username, key, warm).finally(() => {
-      this.crossoverInFlight.delete(key);
-    });
-    this.crossoverInFlight.set(key, promise);
-    return promise;
-  }
-
-  /** Собственно загрузка сводки. Не бросает: ждущие не должны получить reject. */
-  private async loadCrossover(
-    username: string,
-    key: string,
-    shallow = false,
-  ): Promise<Crossover | null | undefined> {
-    const myId = await this.myUserId();
-    // Свой профиль неизвестен — это не результат, кэшировать нечего.
-    if (myId === null) return undefined;
-
-    try {
-      // Своя история и первая страница чужой едут ОДНОВРЕМЕННО. Раньше чужая
-      // ждала свою целиком, потому что глубина зависит от моей самой старой
-      // игры, — но от неё зависит только вопрос «нужны ли ещё страницы», а
-      // первая нужна всегда. Ожидание было ровно вдвое длиннее необходимого.
-      const theirs = (async () => {
-        const id = await this.resolveUserId(username, key);
-        // Прогрев — МЕЛКАЯ страница (200 строк). Полный путь берёт всю
-        // историю ОДНИМ запросом: прежняя пара «2000 + 8000» выбрасывала
-        // первый ответ целиком и была медленнее листания (adversarial
-        // 27.08.2026, блокер 2).
-        return {
-          id,
-          first: await fetchFirstPage(id, shallow ? WARM_PAGE_LIMIT : FULL_HISTORY_LIMIT),
-        };
-      })();
-      const [mine, start] = await Promise.all([this.getMyHistory(myId), theirs]);
-      // Первые строки уже скачанной истории — это и есть «последние игры»
-      // (замер 27.08.2026, п.5: их выбрасывали, а потом качали заново).
-      // Кладём в кэш ТОЛЬКО если там пусто: живой ховер мог уже дополнить
-      // список пометками «ПУ», затирать их нельзя.
-      // ТОЛЬКО когда «ПУ» выключен (adversarial 27.08.2026): иначе посев
-      // отдавал готовый список БЕЗ пометок, markFirstKilled по этому пути не
-      // зовётся, и фича молча выключалась на 5 минут кэша.
-      if (
-        this.settings.last_games_first_killed === false &&
-        start.first &&
-        start.first.rows.length > 0 &&
-        !this.peekLastGames(username)
-      ) {
-        const limit = lastGamesLimit(this.settings.last_games_count);
-        this.lastGamesCache.set(
-          key,
-          start.first.rows.slice(0, limit).map((r) => ({
-            id: r.id,
-            role: r.role === "don" ? "godfather" : r.role,
-            isWin: r.win,
-            mmrChange: typeof r.mmrDiff === "number" ? r.mmrDiff : 0,
-          })),
-        );
-        this.gamesFetchedAt.set(key, Date.now());
-      }
-      let data: Crossover | null = null;
-      if (mine && start.first) {
-        if (shallow) {
-          const truncated = start.first.total > start.first.rows.length;
-          data = crossGames(mine.rows, start.first.rows, mine.truncated || truncated);
-        } else {
-          const full = await completeHistory(start.id, start.first, oldestDate(mine.rows));
-          data = crossGames(mine.rows, full.rows, mine.truncated || full.truncated);
-        }
-      }
-      // Кэшируем и неудачу: иначе каждый повторный наведённый курсор гнал бы
-      // пару историй заново (урок кэша последних игр, находка 7). Но держим
-      // её коротко — сеть чинится, а сводка на полчаса «не удалось» нет.
-      this.crossoverCache.set(key, {
-        at: Date.now(),
-        ttl: data ? CROSSOVER_TTL_MS : STATS_TTL_MS,
-        data,
-        shallow: shallow && data !== null,
-      });
-      return data;
-    } catch (e) {
-      log.warn("player-notes", "пересечения не сложились", e);
-      this.crossoverCache.set(key, { at: Date.now(), ttl: STATS_TTL_MS, data: null });
-      return null;
-    }
-  }
+  // ─────────── История игр (./player-notes/history-store) ───────────
+  //
+  // Кэши пересечений и последних игр, дедуп запросов, ночной прогрев и
+  // правило «ошибка ≠ игр нет» живут отдельным модулем: это восемь полей
+  // состояния, не нужных больше никому в фиче. Здесь остаётся ОТРИСОВКА.
 
   /**
    * Свой userId. Сначала дешёвые пути (шапка сайта, кэш), а в комнате шапки
@@ -3383,7 +3047,6 @@ class PlayerNotesManager {
       return null;
     }
   }
-
 
   private createCrossoverButton(username: string): HTMLButtonElement {
     const button = document.createElement("button");
@@ -3415,7 +3078,7 @@ class PlayerNotesManager {
     button.addEventListener("mouseenter", () => {
       // Готовая ПОЛНАЯ сводка — мгновенно, без «Загрузка…» и без намерения
       // (замер 27.08.2026, п.2: повторный ховер платил 350 мс ни за что).
-      const ready = this.peekCrossover(username);
+      const ready = this.history.peekCrossover(username);
       if (ready) {
         tooltip.innerHTML = formatCrossover(ready);
         this.showTooltip(tooltip, button);
@@ -3424,14 +3087,14 @@ class PlayerNotesManager {
       // Мелкая сводка ночного прогрева — показываем СРАЗУ (в ней уже стоит
       // честная пометка «учтён доступный отрезок»), а точную докачиваем
       // после намерения и дорисовываем поверх (п.3).
-      const shallow = this.peekShallowCrossover(username);
+      const shallow = this.history.peekShallowCrossover(username);
       tooltip.innerHTML = shallow ? formatCrossover(shallow) : "Загрузка...";
       this.showTooltip(tooltip, button);
       // Задержка намерения: точная сводка стоит двух историй, и курсор,
       // мазнувший по столу, не должен поднимать десяток таких пар.
       intent = setTimeout(() => {
         intent = null;
-        void this.getCrossover(username).then(paint);
+        void this.history.getCrossover(username).then(paint);
       }, HOVER_INTENT_MS);
     });
     button.addEventListener("mouseleave", () => {
@@ -3446,129 +3109,6 @@ class PlayerNotesManager {
     this.tooltipAnchors.set(tooltip, button);
     this.applyButtonTheme(button);
     return button;
-  }
-
-  // ─────────── История последних игр (с кэшем) ───────────
-
-  /** Список игр; null — загрузить НЕ УДАЛОСЬ (это не «игр нет»). */
-  private async getLastGames(username: string): Promise<LastGameEntry[] | null> {
-    const key = username.toLowerCase();
-    const cached = this.lastGamesCache.get(key);
-    const fetchedAt = this.gamesFetchedAt.get(key) ?? 0;
-    if (cached && Date.now() - fetchedAt < STATS_TTL_MS) return cached;
-    // Дедупликация: несколько mouseenter до первого ответа (или две плитки
-    // одного игрока) запускали одинаковые запросы (аудит 01.08.2026, находка 7).
-    const inFlight = this.lastGamesInFlight.get(key);
-    // .catch: с честным контрактом (ошибка = throw) общий промис может
-    // упасть, и ВТОРОЙ ожидающий получал бы reject мимо обработки ниже —
-    // тултип застревал на «Загрузка…» навсегда (ревью аудита устойчивости).
-    if (inFlight) return inFlight.catch(() => null);
-
-    const promise = this.fetchLastGames(username, key);
-    this.lastGamesInFlight.set(key, promise);
-    try {
-      return await promise;
-    } catch (e) {
-      log.warn("player-notes", "last games unavailable", e);
-      return null;
-    } finally {
-      this.lastGamesInFlight.delete(key);
-    }
-  }
-
-  private async fetchLastGames(username: string, key: string): Promise<LastGameEntry[]> {
-    try {
-      const dataPromise = (async (): Promise<LastGameEntry[]> => {
-        const userId = await this.resolveUserId(username, key);
-        const limit = lastGamesLimit(this.settings.last_games_count);
-
-        try {
-          // Настоящий таймаут через AbortSignal вместо Promise.race: race не
-          // отменял сам запрос, и он висел в сети после «таймаута».
-          const gamesResponse = await fetch(
-            `https://polemicagame.com/profile/default/get-games?userId=${userId}&page=1&limit=${limit}`,
-            { signal: AbortSignal.timeout(15_000) },
-          );
-          if (!gamesResponse.ok) {
-            log.warn("player-notes", `games API error: ${gamesResponse.status}`);
-            // Ошибка ≠ «игр нет»: бросаем, чтобы не закэшировать пустоту и
-            // показать честный текст (ревью аудита, мелочь 4).
-            throw new Error(`games API ${gamesResponse.status}`);
-          }
-          const data: any = await gamesResponse.json();
-          if (!Array.isArray(data?.rows)) {
-            // Сменившееся поле/объект ошибки — не «игр нет»: иначе снова
-            // покажем «Нет данных» и закэшируем пустоту (ревью, мелочь 2).
-            log.warn("player-notes", "games API: unexpected shape");
-            throw new Error("games API: unexpected shape");
-          }
-          const entries = (data.rows as any[]).map(
-            (game): LastGameEntry => ({
-              id: Number(game.id) || 0,
-              role: game.role?.type === "don" ? "godfather" : game.role?.type || "civilian",
-              isWin: game.result?.code === "success",
-              mmrChange: parseInt(game.mmr?.mmr_diff, 10) || 0,
-            }),
-          );
-          // ПУ НЕ ждём: список готов уже сейчас (замер 27.08.2026, п.4 —
-          // пользователь ждал обе стадии подряд, ~0.57 с лишних). Разборы
-          // матчей дорисовывают пометки поверх, когда доедут.
-          if (this.settings.last_games_first_killed !== false) {
-            void this.markFirstKilled(entries, userId)
-              .then(() => {
-                this.lastGamesCache.set(key, entries);
-                const cb = this.lastGamesProgress.get(key);
-                if (cb) cb(entries);
-              })
-              .catch(() => undefined);
-          }
-          return entries;
-        } catch (err) {
-          log.warn("player-notes", "fetching games history failed", err);
-          throw err;
-        }
-      })();
-
-      const result = await dataPromise;
-      // Кэшируем и ПУСТОЙ результат: у нового игрока без сыгранных игр каждый
-      // hover заново гнал запрос (аудит 01.08.2026, находка 7). Пустой ответ
-      // живёт по короткому TTL — появившиеся игры подтянутся.
-      this.lastGamesCache.set(key, result);
-      this.gamesFetchedAt.set(
-        key,
-        result.length > 0 ? Date.now() : Date.now() - STATS_TTL_MS + EMPTY_GAMES_TTL_MS,
-      );
-      return result;
-    } catch (e) {
-      // Наверх летит ошибка: вызывающий отличит её от «игр нет» и НЕ будет
-      // кэшировать пустоту (ревью аудита устойчивости, мелочь 4).
-      log.debug("player-notes", "getLastGames failed", e);
-      throw e;
-    }
-  }
-
-  /**
-   * Проставить «ПУ» в списке игр.
-   *
-   * Разборы матчей едут ОДНОВРЕМЕННО: восемь по полсекунды подряд — это
-   * четыре секунды на наведение, а разом — те же полсекунды. Матч, который не
-   * разобрался, остаётся без пометки вовсе: «не ПУ» по неудаче было бы
-   * утверждением, которого мы не проверяли.
-   */
-  private async markFirstKilled(
-    entries: LastGameEntry[],
-    userId: number | string,
-  ): Promise<void> {
-    if (this.settings.last_games_first_killed === false) return;
-    const mine = Number(userId);
-    if (!Number.isSafeInteger(mine) || mine <= 0) return;
-    const marks = await Promise.all(
-      entries.map((entry) => (entry.id > 0 ? fetchFirstKilled(entry.id) : undefined)),
-    );
-    entries.forEach((entry, i) => {
-      const first = marks[i];
-      if (first !== undefined) entry.firstKilled = first === mine;
-    });
   }
 
   private formatGamesHistory(games: LastGameEntry[]): string {
@@ -3631,7 +3171,7 @@ class PlayerNotesManager {
       // ensurePlayerIdsResolved. Один общий запрос на всех, дальше кэш.
       this.ensurePlayerIdsResolved(names);
       // Пересечения — тем же принципом «заранее», но ночью и по одному.
-      this.pumpCrossoverWarm(names);
+      this.history.pumpWarm(names);
       tiles.forEach((el) => this.processElement(el));
       // Сайтовый список «Участники» — не плитки, обходится отдельно.
       this.applyParticipantColors();
@@ -3806,7 +3346,7 @@ class PlayerNotesManager {
 
     const uname = username.toLowerCase();
     const vid = container.querySelector<HTMLElement>(SITE.playerVideo);
-    if (this.hiddenVideos.has(uname)) {
+    if (this.tileMedia.isHidden(uname)) {
       // Только при реальном изменении — иначе будим MutationObserver вхолостую.
       if (vid) {
         if (vid.style.display !== "none") vid.style.display = "none";

@@ -157,8 +157,10 @@ describe("перф-аудит 26.08.2026: исполняемые бюджеты 
     // прежние 400К «тел» сжимали терпимый бэклог впятеро.
     expect(ws).toContain("export const PENDING_MAX_CHARS = 1_000_000;");
     expect(ws).toContain("export const MAX_CHUNKS = 100;");
-    const pn = src("src/content/features/player-notes.ts");
-    expect(pn).toContain("const WARM_PAGE_LIMIT = 200;");
+    // Прогрев переехал в ./player-notes/history-store вместе с кэшами
+    // (арх-ревью 28.08.2026): пин следует за константой, а не за файлом.
+    const hist = src("src/content/features/player-notes/history-store.ts");
+    expect(hist).toContain("export const WARM_PAGE_LIMIT = 200;");
     // Переехал в @core/polemica-api вместе с сетью и кэшами (арх-ревью
     // 28.08.2026): пин следует за константой, а не за файлом.
     const api = src("src/core/polemica-api.ts");
