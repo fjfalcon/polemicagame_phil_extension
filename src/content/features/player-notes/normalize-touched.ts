@@ -20,7 +20,9 @@ export function normalizeTouched(
   let truncated = 0;
   let skipped = 0;
   for (const key of new Set(keys)) {
-    const note = map[key];
+    // Только СОБСТВЕННОЕ свойство: ключ вроде «toString» иначе отдаёт функцию
+    // с прототипа, и счётчик пропусков врал (adversarial 28.08.2026).
+    const note = Object.hasOwn(map, key) ? map[key] : undefined;
     if (note === undefined) continue;
     const safe = normalizeNoteRecord(note, MAX_OWN_NOTE_TEXT);
     if (!safe) {

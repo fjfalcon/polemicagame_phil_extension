@@ -318,7 +318,13 @@ export function openNickColorManager(port: ModalPort): void {
                 expandedKey = null;
                 flashSaved(entry.key);
                 render();
+                return;
               }
+              // Единственный обработчик диалога, у которого не было ветки
+              // отказа: клик по цвету в осиротевшей вкладке или при
+              // нечитаемом хранилище просто ничего не делал — ни ошибки, ни
+              // движения (adversarial 28.08.2026).
+              port.toast("Не удалось сохранить цвет — обнови страницу (F5)", true);
             });
           });
           palette.appendChild(sw);

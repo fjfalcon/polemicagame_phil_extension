@@ -55,6 +55,14 @@ export function isIdKey(key: string): boolean {
 
 export const NOTES_KEY = "playerNotes";
 export const TAGS_KEY = "tagCustomColors";
+
+/**
+ * Потолок числа своих цветов в палитре. Живёт здесь, а не в координаторе:
+ * его обязаны соблюдать ВСЕ писатели — фон, фолбэк вкладки и импорт бэкапа.
+ * Раньше он был только у импорта, и бэкап собственной палитры молча терял
+ * всё сверх сотни (adversarial 28.08.2026).
+ */
+export const MAX_CUSTOM_TAGS = 100;
 export const NOTES_VERSION = "1.0";
 
 /** Флаг «перенос из sync выполнен». Версионирован: следующий перенос — v2. */

@@ -44,8 +44,7 @@ const RESUME_EXACT = new Set([
  * намеренно не входит.
  */
 const GAME_CONTROLS_SELECTOR = SITE.gameControlsScope;
-const CLICKABLE_SELECTOR =
-  'button, [role="button"], [role="menuitem"], li, a, div.button, .button, .button-comp, .base-menu__item';
+const CLICKABLE_SELECTOR = SITE.menuClickable;
 const MENU_SELECTOR = SITE.siteMenuWide;
 const OWNING_MENU_SELECTOR = SITE.siteMenuOwning;
 
@@ -209,19 +208,7 @@ class PauseHotkey {
   }
 
   private getSettingsButtons(): Element[] {
-    const direct = [
-      '.button.preset-1.small.desktop-version img.button__icon[src*="e3a7cf4ee64b975985ad.svg"]',
-      '.button.preset-1.small.desktop-version svg use[href*="#settings"]',
-      '.button.preset-1.small.desktop-version svg use[xlink\\:href*="#settings"]',
-      'img.button__icon[src*="e3a7cf4ee64b975985ad.svg"]',
-      'use[href*="#settings"]',
-      'use[xlink\\:href*="#settings"]',
-      '[class*="settings"]',
-      '[class*="gear"]',
-      '[class*="cog"]',
-      'button[aria-label*="setting"]',
-      'button[title*="setting"]',
-    ];
+    const direct = SITE.settingsButtonProbes;
     const out: Element[] = [];
     const seen = new Set<Element>();
     const push = (node: Element | null) => {
@@ -321,7 +308,7 @@ class PauseHotkey {
   }
 
   private getCloseButton(root?: ParentNode): HTMLElement | null {
-    const selectors = [".close", '[aria-label]', "button[title]"];
+    const selectors = SITE.closeButtonProbes;
     const scopes = root ? [root] : this.getMenuRoots().filter((menu) => isVisible(menu));
     for (const scope of scopes) {
       for (const s of selectors) {

@@ -278,8 +278,13 @@ export interface NotesTagOpsMsg {
 export interface NotesTagsResultMsg {
   ok: boolean;
   tags?: string[];
-  /** «read_failed» — свежее состояние не прочиталось, писать отказались. */
+  /**
+   * «read_failed» — свежее состояние не прочиталось, писать отказались;
+   * «unsafe_tag» — всё, что просили добавить, отбраковано санитайзером.
+   */
   reason?: string;
+  /** Сколько цветов не влезло в потолок палитры. */
+  dropped?: number;
 }
 
 /** Слить карту заметок (импорт бэкапа) через тот же координатор. */

@@ -16,12 +16,24 @@ const h = vi.hoisted(() => ({
   saveOk: true,
   /** Что реально лежит «на диске» после ответов координатора. */
   saved: {} as Record<string, unknown>,
+  /** Палитра «на диске» — для веток фолбэка (фон не ответил). */
+  diskTags: [] as string[],
+  /** Чтение диска падает: приватный режим, осиротевший контекст. */
+  diskThrows: false,
+  /** Что фолбэк реально записал (undefined — не писал). */
+  savedTags: undefined as string[] | undefined,
 }));
 
 vi.mock("@core/env", () => ({
   browser: {
     storage: {
-      local: { get: vi.fn(async () => ({})), set: vi.fn(async () => undefined) },
+      local: {
+        get: vi.fn(async (defaults: Record<string, unknown>) => {
+          if (h.diskThrows) throw new Error("storage недоступен");
+          return { ...defaults, tagCustomColors: h.diskTags };
+        }),
+        set: vi.fn(async () => undefined),
+      },
       sync: { get: vi.fn(async () => ({})), set: vi.fn(async () => undefined) },
     },
     runtime: { id: "x" },
@@ -40,11 +52,14 @@ vi.mock("@core/notes-store", async (importOriginal) => {
   return {
     ...real,
     loadNotes: vi.fn(async () => h.loadResult),
+    saveCustomTags: vi.fn(async (tags: string[]) => {
+      h.savedTags = tags;
+      return true;
+    }),
     saveNotes: vi.fn(async (map: Record<string, unknown>) => {
       h.savedMaps.push(map);
       return h.saveOk;
     }),
-    saveCustomTags: vi.fn(async () => true),
   };
 });
 
@@ -80,6 +95,9 @@ async function flushMicrotasks(): Promise<void> {
 beforeEach(() => {
   h.loadResult = { notes: {}, customTags: [], loadFailed: false };
   h.saved = {};
+  h.diskTags = [];
+  h.diskThrows = false;
+  h.savedTags = undefined;
   // Координатор по умолчанию: применяет операции и возвращает свежую карту —
   // как настоящий в background.
   h.coordinator = (msg: unknown) => {
@@ -88,7 +106,9 @@ beforeEach(() => {
       if (op.record === null) delete h.saved[op.key];
       else h.saved[op.key] = op.record;
     }
-    return { ok: true, truncated: 0, skipped: 0, notes: h.saved };
+    // КОПИЯ, а не сам объект: иначе «диск» и память вкладки — одна ссылка, и
+    // мутация памяти выглядела бы записью на диск (adversarial 28.08.2026).
+    return { ok: true, truncated: 0, skipped: 0, notes: { ...h.saved } };
   };
   h.savedMaps = [];
   h.saveOk = true;
@@ -280,8 +300,8 @@ describe("палитра меток", () => {
     const m = make();
     await m.load();
     m.removeCustomTag("#ff0000");
+    await flushMicrotasks();
     expect(m.customTags).toEqual([]);
-    expect(m.removedThisSession.has("#ff0000")).toBe(true);
   });
 });
 
@@ -463,12 +483,16 @@ describe("цвет ника", () => {
 
 describe("палитра: интент вместо снимка", () => {
   test("добавление уходит координатору как «добавь этот», а не «вот весь список»", async () => {
+    // Палитра НЕпустая: со снимком интент содержал бы оба цвета, и мутация
+    // «шлём this.tags целиком» была бы неотличима (adversarial 28.08.2026).
+    h.loadResult = { notes: {}, customTags: ["#ff0000"], loadFailed: false };
     const sent: unknown[] = [];
     h.coordinator = (msg) => {
       sent.push(msg);
       return { ok: true, tags: ["#ff0000", "#00ff00"] };
     };
     const m = make();
+    await m.load();
     expect(await m.addCustomTag("#00ff00")).toBe(true);
     expect(sent[0]).toMatchObject({ type: "notes_tag_ops", add: ["#00ff00"], remove: [] });
     expect(m.customTags, "принят свежий список координатора — с чужим цветом").toEqual([
@@ -506,5 +530,40 @@ describe("палитра: интент вместо снимка", () => {
     };
     expect(await m.addCustomTag("#00ff00")).toBe(false);
     expect(asked, "до координатора дело не дошло").toBe(false);
+  });
+});
+
+describe("палитра: мёртвый фон и откат памяти", () => {
+  test("фон не ответил — пишем сами, прочитав свежий список", async () => {
+    h.coordinator = () => undefined; // осиротевшая вкладка после обновления
+    h.diskTags = ["#ff0000"];
+    const m = make();
+    expect(await m.addCustomTag("#00ff00")).toBe(true);
+    expect(h.savedTags?.sort(), "чужой цвет с диска сохранён").toEqual(["#00ff00", "#ff0000"]);
+  });
+
+  test("фон мёртв И диск не читается — НЕ пишем ничего (fail-safe)", async () => {
+    h.coordinator = () => undefined;
+    h.diskThrows = true;
+    const m = make();
+    expect(await m.addCustomTag("#00ff00")).toBe(false);
+    expect(h.savedTags, "запись отменена").toBeUndefined();
+  });
+
+  test("отказ отката: цвет не остаётся в палитре на экране", async () => {
+    h.coordinator = () => ({ ok: false, reason: "read_failed" });
+    h.loadResult = { notes: {}, customTags: ["#ff0000"], loadFailed: false };
+    const m = make();
+    await m.load();
+    expect(await m.addCustomTag("#00ff00")).toBe(false);
+    expect(m.customTags, "память откатилась под диск").toEqual(["#ff0000"]);
+  });
+
+  test("небезопасный цвет мимо фона тоже не проходит", async () => {
+    h.coordinator = () => undefined;
+    h.diskTags = [];
+    const m = make();
+    expect(await m.addCustomTag("red;position:fixed;inset:0")).toBe(false);
+    expect(h.savedTags, "фолбэк не чёрный ход мимо санитайзера").toBeUndefined();
   });
 });

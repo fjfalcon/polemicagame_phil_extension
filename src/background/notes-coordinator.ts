@@ -20,6 +20,7 @@
 import {
   isSafeNoteKey,
   isSafeTag,
+  MAX_CUSTOM_TAGS,
   loadNotes,
   saveCustomTags,
   MIGRATED_KEY,
@@ -117,20 +118,38 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
  */
 export function applyTagOps(add: unknown, remove: unknown): Promise<NotesTagsResultMsg> {
   return enqueue(async () => {
-    const toAdd = (Array.isArray(add) ? add : []).filter(isSafeTag);
+    const asked = Array.isArray(add) ? add : [];
+    const toAdd = asked.filter(isSafeTag);
     const toRemove = (Array.isArray(remove) ? remove : []).filter(
       (t): t is string => typeof t === "string" && t !== "",
     );
-    if (toAdd.length === 0 && toRemove.length === 0) return { ok: true };
+    // Отбраковали ВСЁ, что просили добавить — это не успех. Иначе вкладка
+    // рисует цвет, рапортует «сохранено», а на диске его нет никогда
+    // (adversarial 28.08.2026).
+    if (toAdd.length === 0 && toRemove.length === 0) {
+      return asked.length > 0 ? { ok: false, reason: "unsafe_tag" } : { ok: true };
+    }
     const { customTags, loadFailed } = await loadNotes({ persistMigration: true });
     if (loadFailed) {
       log.warn("notes-coordinator", "read failed, tag write refused");
       return { ok: false, reason: "read_failed" };
     }
     const removeSet = new Set(toRemove);
-    const next = [...new Set([...customTags.filter((t) => !removeSet.has(t)), ...toAdd])];
+    // Санация ВСЕГО списка, а не только добавляемого: на диск он уезжает
+    // целиком, а значение цвета попадает в style.cssText. Элемент, доехавший
+    // со старой версии или из чужой ветки записи, — единственный шанс его
+    // отфильтровать (adversarial 28.08.2026).
+    const kept = customTags.filter((t) => isSafeTag(t) && !removeSet.has(t));
+    const merged = [...new Set([...kept, ...toAdd])];
+    // Потолок: у импорта он есть (100), у ручного добавления не было —
+    // бэкап собственной палитры молча терял бы всё сверх сотни.
+    const next = merged.slice(0, MAX_CUSTOM_TAGS);
+    const dropped = merged.length - next.length;
+    if (dropped > 0) {
+      log.warn("notes-coordinator", `палитра упёрлась в потолок ${MAX_CUSTOM_TAGS}: не влезло ${dropped}`);
+    }
     const ok = await saveCustomTags(next);
-    return ok ? { ok, tags: next } : { ok };
+    return ok ? { ok, tags: next, dropped } : { ok };
   });
 }
 

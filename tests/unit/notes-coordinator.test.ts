@@ -7,6 +7,11 @@ const state = vi.hoisted(() => ({
   readFailed: false,
   saves: 0,
   tagSaves: 0,
+  tagSaveOk: true,
+  /** Сколько задач координатора выполняется ПРЯМО СЕЙЧАС. */
+  inFlight: 0,
+  /** Зафиксировано ли наложение двух задач (доказательство разных очередей). */
+  overlapped: false,
 }));
 
 vi.mock("@core/env", () => ({
@@ -26,15 +31,22 @@ vi.mock("@core/notes-store", async (importOriginal) => {
   return {
     ...real,
     // loadNotes/saveNotes остаются управляемыми — это ввод-вывод теста.
-    loadNotes: vi.fn(async () =>
-      state.readFailed
+    loadNotes: vi.fn(async () => {
+      // Вход в критическую секцию: если сюда попали двое разом — очередей
+      // больше одной, и обещание координатора не выполняется.
+      state.inFlight++;
+      if (state.inFlight > 1) state.overlapped = true;
+      await new Promise((r) => setTimeout(r, 5));
+      state.inFlight--;
+      return state.readFailed
         ? { notes: {}, customTags: [], loadFailed: true }
-        : { notes: state.notes, customTags: state.tags },
-    ),
+        : { notes: state.notes, customTags: state.tags };
+    }),
     saveCustomTags: vi.fn(async (tags: string[]) => {
       // Пауза между чтением и записью — то самое окно, в котором вкладки
       // затирали цвета друг друга.
       await Promise.resolve();
+      if (!state.tagSaveOk) return false;
       state.tags = tags;
       state.tagSaves++;
       return true;
@@ -59,6 +71,9 @@ beforeEach(() => {
   state.readFailed = false;
   state.saves = 0;
   state.tagSaves = 0;
+  state.tagSaveOk = true;
+  state.inFlight = 0;
+  state.overlapped = false;
 });
 
 describe("notes background coordinator", () => {
@@ -169,5 +184,63 @@ describe("палитра: правки интентом, а не снимком"
     state.tags = ["#ff0000"];
     const res = await applyTagOps(["#0000ff"], []);
     expect(res.tags?.sort()).toEqual(["#0000ff", "#ff0000"]);
+  });
+});
+
+describe("палитра: очередь и отказы", () => {
+  test("операции тегов и заметок живут в ОДНОЙ очереди", async () => {
+    // «Единственная очередь на браузер» — обещание шапки координатора. Без
+    // теста мутант «завести отдельную очередь для тегов» проходил незаметно,
+    // а цена его настоящая: обе задачи зовут loadNotes({persistMigration}),
+    // то есть две очереди = две одновременные миграции sync→local
+    // (adversarial 28.08.2026).
+    const order: string[] = [];
+    await Promise.all([
+      applyTagOps(["#00ff00"], []).then(() => order.push("теги")),
+      applyNoteOps([{ key: "Аня", record: { text: "заметка", timestamp: 1 } }]).then(() =>
+        order.push("заметки"),
+      ),
+      applyTagOps(["#0000ff"], []).then(() => order.push("теги2")),
+    ]);
+    expect(state.overlapped, "две задачи координатора выполнялись ОДНОВРЕМЕННО").toBe(false);
+    expect(order, "порядок сохранён очередью").toEqual(["теги", "заметки", "теги2"]);
+    expect(state.tags.sort(), "обе правки палитры доехали").toEqual(["#0000ff", "#00ff00"]);
+  });
+
+  test("легаси-цвет с диска удаляется, даже если он небезопасен", async () => {
+    // Удаление по МЯГКОМУ правилу — симметрия с ключами заметок: строгий
+    // фильтр делал бы такую запись неудаляемой («удалил, а она вернулась»).
+    state.tags = ["url(javascript:alert(1))", "#00ff00"];
+    const res = await applyTagOps([], ["url(javascript:alert(1))"]);
+    expect(res.ok).toBe(true);
+    expect(state.tags).toEqual(["#00ff00"]);
+  });
+
+  test("небезопасный цвет с диска не переживает запись палитры", async () => {
+    // Список уезжает на диск целиком — это единственная точка, где можно
+    // просеять то, что доехало со старой версии.
+    state.tags = ["red;position:fixed", "#00ff00"];
+    await applyTagOps(["#0000ff"], []);
+    expect(state.tags.sort()).toEqual(["#00ff00", "#0000ff"].sort());
+  });
+
+  test("провал записи не выдаётся за успех", async () => {
+    state.tagSaveOk = false;
+    const res = await applyTagOps(["#00ff00"], []);
+    expect(res.ok).toBe(false);
+    expect(res.tags, "списка при отказе нет").toBeUndefined();
+  });
+
+  test("дубликат не удваивает цвет в палитре", async () => {
+    state.tags = ["#00ff00"];
+    await applyTagOps(["#00ff00"], []);
+    expect(state.tags).toEqual(["#00ff00"]);
+  });
+
+  test("палитра не растёт бесконечно: потолок тот же, что у импорта", async () => {
+    state.tags = Array.from({ length: 100 }, (_, i) => `#${String(i).padStart(6, "0")}`);
+    const res = await applyTagOps(["#abcdef"], []);
+    expect(state.tags.length).toBe(100);
+    expect(res.dropped, "о потере сказано вслух").toBe(1);
   });
 });

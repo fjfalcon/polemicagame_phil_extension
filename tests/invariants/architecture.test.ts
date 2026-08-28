@@ -158,6 +158,79 @@ describe("AGENTS §4 storage and data ownership", () => {
     expect(counted, "§4.3: new whole-map writer bypasses the single background queue").toEqual(allowed);
   });
 
+  test("§4.3: палитру меток тоже пишет ТОЛЬКО координатор", () => {
+    // У палитры с 28.08.2026 та же модель согласованности, что у карты
+    // заметок: интент в единственную очередь. Но стража у неё не было —
+    // новый писатель прошёл бы ревью бесшумно (adversarial 28.08.2026,
+    // проверено диверсией: saveCustomTags из history-store не уронил ничего).
+    //
+    // Ловим оба способа записи: функцию хранилища и прямую запись элемента.
+    const writers: string[] = [];
+    for (const file of sourceFiles()) {
+      if (file === "src/core/notes-store.ts") continue;
+      const sf = parseTs(file);
+      const aliases = new Set<string>();
+      for (const st of sf.statements) {
+        if (
+          !ts.isImportDeclaration(st) ||
+          !ts.isStringLiteral(st.moduleSpecifier) ||
+          !st.moduleSpecifier.text.includes("notes-store")
+        ) {
+          continue;
+        }
+        const named = st.importClause?.namedBindings;
+        if (!named || !ts.isNamedImports(named)) continue;
+        for (const el of named.elements) {
+          if ((el.propertyName ?? el.name).text === "saveCustomTags") aliases.add(el.name.text);
+        }
+      }
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          if (ts.isIdentifier(callee) && aliases.has(callee.text)) writers.push(file);
+          // Прямая запись элемента хранилища: storage.local.set({ tagCustomColors })
+          // или set(patch), где patch содержит ключ палитры.
+          if (
+            ts.isPropertyAccessExpression(callee) &&
+            callee.name.text === "set" &&
+            /storage\.(local|sync)/.test(callee.expression.getText(sf))
+          ) {
+            const arg = node.arguments[0];
+            const text = arg ? arg.getText(sf) : "";
+            if (/TAGS_KEY|tagCustomColors/.test(text)) writers.push(file);
+            // Запись через собранный ПАТЧ: `patch[TAGS_KEY] = …; set(patch)`.
+            // Прямого упоминания ключа в аргументе нет, но писатель настоящий.
+            if (
+              arg &&
+              ts.isIdentifier(arg) &&
+              new RegExp(`${arg.text}\\[(?:TAGS_KEY|"tagCustomColors")\\]\\s*=`).test(
+                sf.getFullText(),
+              )
+            ) {
+              writers.push(file);
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+    }
+    const counted = writers.reduce<Record<string, number>>((acc, file) => {
+      acc[file] = (acc[file] ?? 0) + 1;
+      return acc;
+    }, {});
+    expect(counted, "новый писатель палитры мимо координатора").toEqual({
+      "src/background/notes-coordinator.ts": 1,
+      // Фолбэк осиротевшей вкладки: фон не ответил (MV3 выгружает воркер).
+      // Санитайзер и потолок там те же, что у координатора.
+      "src/content/features/player-notes/notes-model.ts": 1,
+      // Импорт бэкапа в попапе: пишет патч настроек целиком, вместе с
+      // палитрой. ЗНАЕМ и держим как reviewed-путь — карта заметок из того
+      // же обработчика уже ходит через координатор (notes_merge).
+      "src/popup/index.ts": 1,
+    });
+  });
+
   test("§4.3/§4.11: frozen note bridge is read-only in storage.sync", () => {
     const violations: string[] = [];
     const protectedTokens = /NOTES_KEY|TAGS_KEY|LEGACY_KEY|playerNotes|tagCustomColors/;
@@ -363,72 +436,89 @@ describe("settings, release and manifest consistency", () => {
 
   test("селекторы сайта живут ТОЛЬКО в selectors.ts", () => {
     // Обещание selectors.ts: «при редизайне polemicagame.com правится ТОЛЬКО
-    // этот файл». Правило исполняемое — но два раза оказывалось, что страж
-    // видит меньше, чем обещает: сначала мимо шли классы в КОНСТАНТАХ, потом
-    // (арх-ревью 28.08.2026) — дженерик-вызовы `querySelectorAll<HTMLElement>(".x")`,
-    // потому что `<HTMLElement>` стоит между именем метода и скобкой.
+    // этот файл». Страж трижды оказывался слабее обещания: сначала не видел
+    // классы в константах, потом дженерик-вызовы, потом (adversarial
+    // 28.08.2026) — шаблонные строки, массивы, поля классов и, главное,
+    // ЦЕЛУЮ строку вместо её частей: `".participants-item, .pn-x"` проходил,
+    // потому что где-то в конце стоял наш префикс.
     //
-    // Поэтому здесь БОЛЬШЕ НЕ РЕГУЛЯРКА, а разбор синтаксического дерева:
-    // `qs(".x")`, `qs<T>(".x")`, `el?.qs<T>(\n  ".x")` — для TypeScript это
-    // один и тот же CallExpression, и латать regex под каждую форму записи
-    // означало бы гоняться за синтаксисом вместо смысла.
-    //
-    // Разрешено: НАША собственная разметка (префиксы pn-/fp-/ss-/twitch-/
-    // polemica-/obs-, data-pn-*, #app) — это не знание о вёрстке чужого сайта.
-    const QUERY_METHODS = new Set(["querySelector", "querySelectorAll", "closest", "matches"]);
-    const OURS = /(pn-|polemica-|fp-|ss-|twitch-|obs-|scene-item|data-pn|#app|#tag-|#note-|#pn)/;
+    // Поэтому правило смотрит не на форму записи и не на строку целиком, а
+    // на КАЖДЫЙ класс в КАЖДОМ строковом литерале файла — включая шаблонные
+    // (в них живут CSS-блоки, где знание о чужой вёрстке ровно такое же).
+    // «Наше» — не список префиксов на глаз, а РЕЕСТР собственных классов
+    // (OWN в selectors.ts) плюс наши префиксы. Реестр читается из исходника:
+    // добавили свой элемент — страж узнаёт о нём сам.
+    const ownSource = read("src/core/selectors.ts");
+    const ownNames = new Set(
+      [...ownSource.matchAll(/^\s*(?:\w+): "([a-z][\w-]*)",/gm)].map((m) => m[1]),
+    );
+    const OURS = /^(pn|polemica|fp|ss|twitch|obs|enhanced|session-stats|note|stats|player|last-games|hide-video|rotate|mute|copy|penalty|vote|best-move|cross)[-_]|^(pn|player-icons|player-stats)$/;
+    /** Не селекторы: расширения файлов, домены, свойства промисов. */
+    const NOT_SELECTORS = new Set([
+      "json", "txt", "zip", "xpi", "css", "html", "js", "ts", "md", "png", "svg", "log",
+      "com", "org", "net", "ru", "io", "dev", "local", "then", "catch", "finally",
+      "polemicagame", "github", "twitch", "mozilla",
+    ]);
     /**
-     * НАША разметка с общими именами классов. Это не поблажка правилу:
-     * перечисленные узлы создаёт сам код расширения, и при редизайне сайта
-     * они не меняются. Список поимённый и короткий — новый пункт требует
-     * такого же объяснения.
+     * Файлы, где мы СТИЛИЗУЕМ разметку сайта своим CSS. Это тоже знание о
+     * чужой вёрстке, но живёт оно в правилах стилей, а не в запросах: при
+     * редизайне такой блок не бросает исключение, он просто перестаёт
+     * применяться. Прятать это в общем правиле нечестно, поэтому список
+     * поимённый — он же чек-лист «что проверить после редизайна сайта».
+     *
+     * Правило остаётся жёстким для ЗАПРОСОВ: querySelector и компания в этих
+     * файлах всё равно обязаны ходить через SITE.
      */
-    const OWN_MARKUP: Record<string, string[]> = {
-      // Таблица разбора матча строится match-stats.ts (className "row"/"cell").
-      "src/content/features/match-stats.ts": [".row[data-phase]", ".cell:not(.title)"],
-      // Наш тултип намеренно повторяет имена классов сайта ради единого вида;
-      // запрос ограничен нашим же .enhanced-tooltip (см. комментарий в файле).
-      "src/content/features/tooltip.ts": [".player-name"],
+    const SITE_CSS = new Set([
+      "src/content/features/auto-start.ts", // скрытие ролей на плитках
+      "src/content/features/nick-plate.ts", // сворачивание ников
+      "src/content/features/match-stats.ts", // таблица разбора матча
+      "src/content/features/player-notes.ts", // страница матча
+      "src/content/features/tooltip.ts", // тултипы поверх узлов сайта
+      "src/content/features/controls-safety.ts", // порядок кнопок в контролах
+      "src/content/panels/obs-panel.ts", // подсветка активной сцены
+    ]);
+    /** Классы САЙТА, которые мы обязаны знать вне реестра — с объяснением. */
+    const EXEMPT: Record<string, string[]> = {
+      // Наша разметка с общими именами: узлы создаёт сам код расширения.
+      "src/content/features/match-stats.ts": [
+        "row", "cell", "title", "table", "phase-row", "detail", "header", "sticky",
+      ],
+      "src/content/features/tooltip.ts": ["player-name", "player-number", "player-info"],
     };
-    const offenders: string[] = [];
 
+    const offenders: string[] = [];
     for (const file of sourceFiles("src/**/*.ts")) {
       if (file === "src/core/selectors.ts") continue;
       // Попап — НАШ документ (src/static/popup.html), а не страница сайта.
       if (file.startsWith("src/popup/")) continue;
       const sf = parseTs(file);
-      const report = (node: ts.Node, selector: string): void => {
-        // Классы сайта — литералы с точкой, которых нет в нашем префиксе.
-        if (!selector.includes(".")) return;
-        if (OURS.test(selector)) return;
-        if (OWN_MARKUP[file]?.includes(selector)) return;
-        const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        offenders.push(`${file}:${line + 1} → ${selector}`);
+      const seen = new Set<string>();
+      const check = (node: ts.Node, text: string): void => {
+        // URL — не селектор: домен в адресе даёт ложные «.polemicagame».
+        if (/\w+:\/\//.test(text)) return;
+        // Блок CSS в разрешённом файле: знание признано и перечислено выше.
+        if (SITE_CSS.has(file) && /\{[^}]*:[^}]*\}/s.test(text)) return;
+        // Классы: `.foo-bar` в любом месте строки (селектор, список, CSS).
+        for (const m of text.matchAll(/\.([a-zA-Z][\w-]{2,})/g)) {
+          const cls = m[1];
+          if (NOT_SELECTORS.has(cls.toLowerCase())) continue;
+          if (OURS.test(cls) || ownNames.has(cls)) continue;
+          if (EXEMPT[file]?.includes(cls)) continue;
+          const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+          const key = `${file}:${line + 1} → .${cls}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          offenders.push(key);
+        }
       };
       const visit = (node: ts.Node): void => {
-        // 1) Вызов запроса к DOM — в любой форме записи.
-        if (ts.isCallExpression(node)) {
-          const callee = node.expression;
-          const name = ts.isPropertyAccessExpression(callee)
-            ? callee.name.text
-            : ts.isIdentifier(callee)
-              ? callee.text
-              : "";
-          const arg = node.arguments[0];
-          if (QUERY_METHODS.has(name) && arg && ts.isStringLiteral(arg)) {
-            report(arg, arg.text);
-          }
-        }
-        // 2) Строковая КОНСТАНТА-селектор: `const SCOPE = ".player, .info"`.
-        //    Такие живут вдали от места использования, и при редизайне их не
-        //    находит ни поиск по querySelector, ни глаз.
-        if (
-          ts.isVariableDeclaration(node) &&
-          node.initializer &&
-          ts.isStringLiteral(node.initializer) &&
-          node.initializer.text.trimStart().startsWith(".")
-        ) {
-          report(node.initializer, node.initializer.text);
+        if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+          check(node, node.text);
+        } else if (ts.isTemplateExpression(node)) {
+          // Шаблон с подстановками: проверяем статические куски — именно в
+          // них живут классы (`.player__role[data-x="${id}"]`).
+          check(node, node.head.text + node.templateSpans.map((sp) => sp.literal.text).join(" "));
         }
         ts.forEachChild(node, visit);
       };
@@ -437,7 +527,7 @@ describe("settings, release and manifest consistency", () => {
 
     expect(
       offenders,
-      "селектор сайта вне selectors.ts: при редизайне его никто не найдёт — заведи ключ в SITE",
+      "класс сайта вне selectors.ts: при редизайне его никто не найдёт — заведи ключ в SITE",
     ).toEqual([]);
   });
 

@@ -94,8 +94,7 @@ let nightAutoShowStartedAt = 0;
 // ─────────────────────────── автопринятие игр ───────────────────────────
 
 /** Кликабельные кандидаты на «Принять игру» — вместо обхода всего документа. */
-const ACCEPT_CANDIDATE_SELECTOR =
-  'button, a, [role="button"], div.cursor-pointer, [class*="accept"]';
+const ACCEPT_CANDIDATE_SELECTOR = SITE.acceptCandidates;
 
 /**
  * Элементы с текстом «Принять игру».
@@ -1043,9 +1042,7 @@ function queueRolePhaseCheck() {
  */
 const MAX_START_CLICK_ATTEMPTS = 3;
 /** Кликабельные кандидаты на «НАЧАТЬ ИГРУ» — вместо обхода всего окна. */
-const START_CANDIDATE_SELECTOR =
-  'button, a, li, [role="button"], [tabindex], div.cursor-pointer, ' +
-  '[class*="btn"], [class*="button"], [class*="start"]';
+const START_CANDIDATE_SELECTOR = SITE.startCandidates;
 const USER_ACTION_BACKOFF_MS = 5000;
 let startClickAttempts = 0;
 let startModalSeen = false;

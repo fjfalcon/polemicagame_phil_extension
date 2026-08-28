@@ -49,7 +49,7 @@ export function setupDiagnostics(): void {
     if (looksLikeGame && document.querySelectorAll(SITE.player).length === 0) {
       log.warn(
         "diag",
-        "похоже на игру, но селектор .player пуст — возможно, изменилась разметка сайта. Запусти polemicaDiag() в консоли для деталей.",
+        `похоже на игру, но селектор ${SITE.player} пуст — возможно, изменилась разметка сайта. Запусти polemicaDiag() в консоли для деталей.`,
       );
     }
   }, 8000);

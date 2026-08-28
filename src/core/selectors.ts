@@ -82,6 +82,35 @@ export const SITE = {
     '.game-room__settings, .base-menu, .dropdown-menu, .context-menu, [role="menu"]',
   /** Область настроек/паузы: только здесь принимаем слово «продолжить». */
   siteSettingsScope: '.game-room__settings, [class*="settings"], [class*="pause"]',
+  /** Кнопка закрытия меню сайта — приметы от точной к грубой. */
+  closeButtonProbes: [".close", "[aria-label]", "button[title]"] as readonly string[],
+  /** Кандидаты на кнопку «Принять игру» — вместо обхода всего документа. */
+  acceptCandidates: 'button, a, [role="button"], div.cursor-pointer, [class*="accept"]',
+  /** Кандидаты на кнопку старта игры. */
+  startCandidates:
+    'button, a, li, [role="button"], [tabindex], div.cursor-pointer, [class*="btn"], [class*="button"], [class*="start"]',
+  /** Кликабельные узлы, среди которых ищут пункт меню по тексту. */
+  menuClickable:
+    'button, [role="button"], [role="menuitem"], li, a, div.button, .button, .button-comp, .base-menu__item',
+  /**
+   * Кнопка настроек игры — все известные приметы, от точной к грубой.
+   * Хеш svg-ассета сайта самый хрупкий: при пересборке фронта он меняется, и
+   * поиск честно деградирует к следующим вариантам.
+   */
+  settingsButtonProbes: [
+    '.button.preset-1.small.desktop-version img.button__icon[src*="e3a7cf4ee64b975985ad.svg"]',
+    '.button.preset-1.small.desktop-version svg use[href*="#settings"]',
+    '.button.preset-1.small.desktop-version svg use[xlink\\:href*="#settings"]',
+    'img.button__icon[src*="e3a7cf4ee64b975985ad.svg"]',
+    'use[href*="#settings"]',
+    'use[xlink\\:href*="#settings"]',
+    '[class*="settings"]',
+    '[class*="gear"]',
+    '[class*="cog"]',
+    'button[aria-label*="setting"]',
+    'button[title*="setting"]',
+  ] as readonly string[],
+
   /** Ник и аватар на странице профиля. */
   profileNickname: ".profileinfo__main-info-username",
   profileAvatarImg: "img.profileinfo__main-info-avatar",

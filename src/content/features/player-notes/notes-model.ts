@@ -19,6 +19,8 @@ import { showToast } from "@core/toast";
 import {
   ID_KEY_PREFIX,
   idKey,
+  isSafeTag,
+  MAX_CUSTOM_TAGS,
   isIdKey,
   isSafeNoteKey,
   loadNotes as loadNotesFromStore,
@@ -82,8 +84,6 @@ export class NotesModel {
   private tags: string[] = [];
   /** Хранилище не прочиталось — запись заблокирована, чтобы не стереть данные. */
   private readOnly = false;
-  /** Цвета, убранные из палитры в этой сессии (не воскресают из sync). */
-  readonly removedThisSession = new Set<string>();
   /** Резолв «ник → ключ записи»: владелец карты владеет и её индексом. */
   readonly keys: NoteKeys;
 
@@ -126,7 +126,9 @@ export class NotesModel {
 
   /** Палитра пришла из другой вкладки. */
   adoptExternalTags(next: unknown): void {
-    if (Array.isArray(next)) this.tags = next as string[];
+    // Просеиваем поэлементно: значение цвета уезжает в style.cssText, а
+    // прийти оно может из чужого контекста или со старой версии.
+    if (Array.isArray(next)) this.tags = next.filter(isSafeTag);
   }
 
   /**
@@ -136,8 +138,6 @@ export class NotesModel {
    * памяти, и после перезагрузки он исчезал.
    */
   addCustomTag(css: string): Promise<boolean> {
-    if (!this.tags.includes(css)) this.tags.push(css);
-    this.removedThisSession.delete(css);
     return this.commitTagOps([css], []);
   }
 
@@ -192,36 +192,74 @@ export class NotesModel {
   private async commitTagOps(add: string[], remove: string[]): Promise<boolean> {
     if (this.readOnly) return false;
     if (add.length === 0 && remove.length === 0) return true;
+    // Снимок памяти ДО оптимистичной правки: при отказе записи палитра
+    // обязана вернуться к состоянию диска — ровно как карта заметок. Без
+    // этого человек видел цвет весь вечер, а после F5 тот исчезал
+    // (adversarial 28.08.2026).
+    // Снимок берётся ДО оптимистичной правки — и правку делаем здесь же.
+    // Раньше её делал вызывающий, и снимок уже содержал новый цвет: откат
+    // возвращал ровно то, что откатывал (поймано собственным тестом).
+    const before = [...this.tags];
+    const removeSet = new Set(remove);
+    this.tags = [...new Set([...this.tags.filter((t) => !removeSet.has(t)), ...add])];
+    this.ctx.onTagsChanged();
+    const rollback = (): false => {
+      this.tags = before;
+      this.ctx.onTagsChanged();
+      return false;
+    };
     try {
       const res = await sendRuntime<NotesTagsResultMsg>({ type: "notes_tag_ops", add, remove });
       if (res && typeof res.ok === "boolean") {
-        // Координатор вернул свежий список — принимаем целиком: в нём уже
-        // есть и цвета соседних вкладок.
-        if (res.ok && Array.isArray(res.tags)) this.tags = res.tags;
         if (!res.ok) {
           log.warn("player-notes", "палитра не сохранена:", res.reason ?? "отказ координатора");
+          return rollback();
         }
-        return res.ok;
+        // Координатор вернул свежий список — принимаем целиком: в нём уже
+        // есть и цвета соседних вкладок. Элементы всё равно просеиваем:
+        // ответ приходит из другого контекста.
+        if (Array.isArray(res.tags)) {
+          this.tags = res.tags.filter(isSafeTag);
+          this.ctx.onTagsChanged();
+        } else {
+          // Контракт требует свежий список при успехе. Его отсутствие значит
+          // ответ чужой/старой версии: записать могли неполно, и молчать об
+          // этом нельзя (та же доктрина, что у карты заметок).
+          log.warn("player-notes", "палитра: успех без списка — полнота не подтверждена");
+        }
+        if (typeof res.dropped === "number" && res.dropped > 0) {
+          this.ctx.toast(`Палитра переполнена: ${res.dropped} цвет(ов) не сохранено`, true);
+        }
+        return true;
       }
     } catch (e) {
       log.debug("player-notes", "tag coordinator unavailable", e);
     }
-    // Фолбэк: фон не ответил (старая вкладка после обновления расширения).
-    // Читаем свежий список сами — и, в отличие от прежнего поведения, при
-    // НЕУДАЧЕ чтения не пишем ничего.
+    // Фолбэк: фон не ответил (осиротевшая вкладка после обновления
+    // расширения). Читаем свежий список сами — и, в отличие от прежнего
+    // поведения, при НЕУДАЧЕ чтения не пишем ничего.
     try {
       const cur = (await browser.storage.local.get({ [TAGS_KEY]: [] })) as Record<string, unknown>;
       const disk = Array.isArray(cur[TAGS_KEY]) ? (cur[TAGS_KEY] as string[]) : [];
       const removeSet = new Set(remove);
-      const next = [...new Set([...disk.filter((t) => !removeSet.has(t)), ...add])];
+      // Санитайзер и потолок — те же, что у координатора: фолбэк не имеет
+      // права быть чёрным ходом мимо проверок.
+      const safeAdd = add.filter(isSafeTag);
+      if (safeAdd.length === 0 && remove.length === 0) return rollback();
+      const next = [
+        ...new Set([...disk.filter((t) => isSafeTag(t) && !removeSet.has(t)), ...safeAdd]),
+      ].slice(0, MAX_CUSTOM_TAGS);
       const ok = await saveCustomTagsToStore(next);
-      if (ok) this.tags = next;
-      return ok;
+      if (!ok) return rollback();
+      this.tags = next;
+      this.ctx.onTagsChanged();
+      return true;
     } catch (e) {
       log.warn("player-notes", "палитра: свежее состояние не прочиталось — запись отменена", e);
-      return false;
+      return rollback();
     }
   }
+
 
 
   /**
@@ -240,7 +278,11 @@ export class NotesModel {
     if (this.readOnly) return false;
     const ops: NoteOp[] = touchedKeys.map((key) => ({
       key,
-      record: (this.map[key] as unknown) ?? null,
+      // ownRecord, а не map[key]: у игрока с ником вроде «toString» индекс
+      // уходит по цепочке прототипов и отдаёт функцию — удаление переставало
+      // быть удалением, запись «возвращалась», а пользователь получал разом
+      // «Сохранено ✓» и «сохранена не полностью» (adversarial 28.08.2026).
+      record: (ownRecord(this.map, key) as unknown) ?? null,
     }));
     return await this.commitOps(ops);
   }
@@ -453,8 +495,6 @@ export class NotesModel {
 
   /** Убрать свой цвет из палитры (сама палитра — это customTags). */
   removeCustomTag(css: string): void {
-    this.tags = this.tags.filter((c) => c !== css);
-    this.removedThisSession.add(css);
     void this.commitTagOps([], [css]).then((ok) => {
       if (!ok) this.ctx.toast("Не удалось сохранить палитру — цвет вернётся после перезагрузки", true);
     });
