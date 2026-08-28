@@ -9,7 +9,12 @@ import { installErrorCapture } from "@core/errors";
 import { handleInstalled } from "./onboarding";
 import { onMessage, sendToTab } from "@core/messaging";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
-import { applyNoteOps, mergeNotesViaCoordinator, migrateViaCoordinator } from "./notes-coordinator";
+import {
+  applyNoteOps,
+  applyTagOps,
+  mergeNotesViaCoordinator,
+  migrateViaCoordinator,
+} from "./notes-coordinator";
 import { sanitizeObsHost } from "@shared/safe-endpoint";
 import {
   OBS_RETRY_BLOCKED_KEY,
@@ -602,6 +607,9 @@ onMessage((msg: ExtMessage, sender) => {
   }
   // Запись заметок идёт ТОЛЬКО отсюда: одна очередь на браузер (см.
   // notes-coordinator). Возвращаем промис, чтобы воркер не уснул на полпути.
+  if ("type" in msg && msg.type === "notes_tag_ops") {
+    return applyTagOps(msg.add, msg.remove);
+  }
   if ("type" in msg && msg.type === "notes_apply_ops") {
     return applyNoteOps(msg.ops);
   }

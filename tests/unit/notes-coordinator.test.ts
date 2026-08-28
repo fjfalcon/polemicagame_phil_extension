@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   notes: {} as Record<string, unknown>,
+  /** Палитра «на диске» — общая для всех вкладок, как настоящая. */
+  tags: [] as string[],
   readFailed: false,
   saves: 0,
+  tagSaves: 0,
 }));
 
 vi.mock("@core/env", () => ({
@@ -24,8 +27,18 @@ vi.mock("@core/notes-store", async (importOriginal) => {
     ...real,
     // loadNotes/saveNotes остаются управляемыми — это ввод-вывод теста.
     loadNotes: vi.fn(async () =>
-      state.readFailed ? { notes: {}, customTags: [], loadFailed: true } : { notes: state.notes, customTags: [] },
+      state.readFailed
+        ? { notes: {}, customTags: [], loadFailed: true }
+        : { notes: state.notes, customTags: state.tags },
     ),
+    saveCustomTags: vi.fn(async (tags: string[]) => {
+      // Пауза между чтением и записью — то самое окно, в котором вкладки
+      // затирали цвета друг друга.
+      await Promise.resolve();
+      state.tags = tags;
+      state.tagSaves++;
+      return true;
+    }),
     saveNotes: vi.fn(async (notes: Record<string, unknown>) => {
       await Promise.resolve();
       state.notes = notes;
@@ -38,12 +51,14 @@ vi.mock("@core/log", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { applyNoteOps, mergeNotesViaCoordinator } from "../../src/background/notes-coordinator";
+import { applyNoteOps, applyTagOps, mergeNotesViaCoordinator } from "../../src/background/notes-coordinator";
 
 beforeEach(() => {
   state.notes = {};
+  state.tags = [];
   state.readFailed = false;
   state.saves = 0;
+  state.tagSaves = 0;
 });
 
 describe("notes background coordinator", () => {
@@ -108,5 +123,51 @@ describe("notes background coordinator", () => {
       expect(result).toEqual({ ok: false, reason: "bad_request" });
     }
     expect(state.saves, "ни одной записи").toBe(0);
+  });
+});
+
+describe("палитра: правки интентом, а не снимком", () => {
+  test("две вкладки добавляют РАЗНЫЕ цвета одновременно — оба выживают", async () => {
+    // Раньше вкладка присылала весь массив: обе читали [красный], строили
+    // [красный, свой] и вторая затирала первую (внешний аудит 28.08.2026).
+    state.tags = ["#ff0000"];
+    await Promise.all([applyTagOps(["#0000ff"], []), applyTagOps(["#00ff00"], [])]);
+    expect(state.tags.sort()).toEqual(["#0000ff", "#00ff00", "#ff0000"]);
+  });
+
+  test("удаление в одной вкладке не воскресает из снимка другой", async () => {
+    state.tags = ["#ff0000", "#00ff00"];
+    await Promise.all([applyTagOps([], ["#ff0000"]), applyTagOps(["#0000ff"], [])]);
+    expect(state.tags).not.toContain("#ff0000");
+    expect(state.tags.sort()).toEqual(["#0000ff", "#00ff00"]);
+  });
+
+  test("нечитаемое состояние — ОТКАЗ, а не запись поверх неизвестного", async () => {
+    state.tags = ["#ff0000"];
+    state.readFailed = true;
+    const res = await applyTagOps(["#0000ff"], []);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("read_failed");
+    expect(state.tagSaves, "на диск не ходили вовсе").toBe(0);
+    expect(state.tags, "чужие цвета целы").toEqual(["#ff0000"]);
+  });
+
+  test("небезопасный цвет не попадает в палитру", async () => {
+    // url(...)/expression в CSS-значении — то, ради чего заведён isSafeTag.
+    await applyTagOps(["url(javascript:alert(1))", "#00ff00", 42 as unknown as string], []);
+    expect(state.tags).toEqual(["#00ff00"]);
+  });
+
+  test("пустой интент не трогает диск", async () => {
+    state.tags = ["#ff0000"];
+    const res = await applyTagOps([], []);
+    expect(res.ok).toBe(true);
+    expect(state.tagSaves).toBe(0);
+  });
+
+  test("ответ содержит свежий список — вкладка принимает его целиком", async () => {
+    state.tags = ["#ff0000"];
+    const res = await applyTagOps(["#0000ff"], []);
+    expect(res.tags?.sort()).toEqual(["#0000ff", "#ff0000"]);
   });
 });

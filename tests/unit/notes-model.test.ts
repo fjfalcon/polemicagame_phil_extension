@@ -73,6 +73,10 @@ function make(ids: Record<string, number | string> = {}): NotesModel {
   });
 }
 
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+}
+
 beforeEach(() => {
   h.loadResult = { notes: {}, customTags: [], loadFailed: false };
   h.saved = {};
@@ -454,5 +458,53 @@ describe("цвет ника", () => {
     const rec = h.saved["Аня"] as { text: string; nickColor?: string };
     expect(rec.text).toBe("старый текст");
     expect(rec.nickColor).toBe("#00ff00");
+  });
+});
+
+describe("палитра: интент вместо снимка", () => {
+  test("добавление уходит координатору как «добавь этот», а не «вот весь список»", async () => {
+    const sent: unknown[] = [];
+    h.coordinator = (msg) => {
+      sent.push(msg);
+      return { ok: true, tags: ["#ff0000", "#00ff00"] };
+    };
+    const m = make();
+    expect(await m.addCustomTag("#00ff00")).toBe(true);
+    expect(sent[0]).toMatchObject({ type: "notes_tag_ops", add: ["#00ff00"], remove: [] });
+    expect(m.customTags, "принят свежий список координатора — с чужим цветом").toEqual([
+      "#ff0000",
+      "#00ff00",
+    ]);
+  });
+
+  test("отказ координатора виден вызывающему: цвет не «сохранён» молча", async () => {
+    h.coordinator = () => ({ ok: false, reason: "read_failed" });
+    const m = make();
+    expect(await m.addCustomTag("#00ff00")).toBe(false);
+  });
+
+  test("удаление уходит тем же интентом", async () => {
+    const sent: unknown[] = [];
+    h.coordinator = (msg) => {
+      sent.push(msg);
+      return { ok: true, tags: [] };
+    };
+    const m = make();
+    m.removeCustomTag("#ff0000");
+    await flushMicrotasks();
+    expect(sent[0]).toMatchObject({ type: "notes_tag_ops", add: [], remove: ["#ff0000"] });
+  });
+
+  test("блок записи при непрочитанном хранилище распространяется на палитру", async () => {
+    h.loadResult = { notes: {}, customTags: [], loadFailed: true };
+    const m = make();
+    await m.load();
+    let asked = false;
+    h.coordinator = () => {
+      asked = true;
+      return { ok: true, tags: [] };
+    };
+    expect(await m.addCustomTag("#00ff00")).toBe(false);
+    expect(asked, "до координатора дело не дошло").toBe(false);
   });
 });

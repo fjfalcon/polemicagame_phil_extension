@@ -392,7 +392,7 @@ src/
 |---|---|---|
 | sync | все Settings кроме obs_password | settings.ts; точечные писатели: панели (закрытие крестиком) |
 | sync | playerNotes, notes, tagCustomColors | ЗАМОРОЖЕНО: мост миграции для старых устройств, не трогать |
-| local | playerNotes, tagCustomColors, pn_notes_migrated_v1 | notes-store.ts. Ключи заметок (8.1.29): `u:<userId>` (предпочтительно, вечный) + легаси-ники (фолбэк, лениво мигрируют) |
+| local | playerNotes, tagCustomColors, pn_notes_migrated_v1 | notes-store.ts. Ключи заметок (8.1.29): `u:<userId>` (предпочтительно, вечный) + легаси-ники (фолбэк, лениво мигрируют). ОБА элемента пишутся ТОЛЬКО координатором в background и ТОЛЬКО интентом («поставь ключ», «добавь цвет»), а не снимком: запись элемента — замена целиком, и вкладка со снимком затирает правку соседней (заметки — 26.08.2026, палитра — 28.08.2026) |
 | local | obs_password | settings.ts (LOCAL_KEYS) |
 | local | roleMarks | role-marker (метки «мой read», ключи g:<id> / l:<состав>) |
 | local | pn_muted_players | player-notes/tile-media-state.ts: ники (lowercase) с локально выключенным звуком (8.1.41, глушение через video.volume=0 + маркер data-pn-muted). Пишется СЛИЯНИЕМ со свежим списком с диска — обе вкладки хранят список целиком |

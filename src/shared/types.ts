@@ -257,6 +257,31 @@ export interface NotesApplyOpsMsg {
   ops: NoteOp[];
 }
 
+/**
+ * Правки ПАЛИТРЫ через тот же координатор — ИНТЕНТОМ, а не снимком.
+ *
+ * Раньше вкладка читала палитру, доливала свой цвет и писала массив целиком.
+ * Окно гонки было маленьким, но не нулевым: две вкладки, добавившие разные
+ * цвета одновременно, читали один и тот же диск и вторая затирала первый
+ * (внешний аудит 28.08.2026). Заметки этот класс гонки прошли ещё 26.08 —
+ * палитра осталась на старой модели согласованности.
+ */
+export interface NotesTagOpsMsg {
+  type: "notes_tag_ops";
+  /** Цвета, которые надо ДОБАВИТЬ в палитру. */
+  add?: string[];
+  /** Цвета, которые надо УБРАТЬ. */
+  remove?: string[];
+}
+
+/** Ответ координатора на правку палитры: свежий список для синхронизации UI. */
+export interface NotesTagsResultMsg {
+  ok: boolean;
+  tags?: string[];
+  /** «read_failed» — свежее состояние не прочиталось, писать отказались. */
+  reason?: string;
+}
+
 /** Слить карту заметок (импорт бэкапа) через тот же координатор. */
 export interface NotesMergeMsg {
   type: "notes_merge";
@@ -400,6 +425,7 @@ export type ExtMessage =
   | GetContentVersionMsg
   | ObsSceneOwnerPingMsg
   | NotesApplyOpsMsg
+  | NotesTagOpsMsg
   | NotesMergeMsg
   | StartSearchMsg
   | StopSearchMsg

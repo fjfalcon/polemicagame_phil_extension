@@ -86,7 +86,6 @@ import {
   normalizeNoteRecord,
   loadNotes as loadNotesFromStore,
   saveNotes as saveNotesToStore,
-  saveCustomTags as saveCustomTagsToStore,
   isSafeNoteKey,
   idKey,
   isIdKey,

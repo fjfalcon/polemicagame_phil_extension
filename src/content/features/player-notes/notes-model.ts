@@ -31,7 +31,7 @@ import {
   type NoteRecord,
   type NotesMap,
 } from "@core/notes-store";
-import type { NoteOp, NotesResultMsg } from "@shared/types";
+import type { NoteOp, NotesResultMsg, NotesTagsResultMsg } from "@shared/types";
 import { browser } from "@core/env";
 import { normalizeTouched } from "./normalize-touched";
 import { NoteKeys } from "./note-keys";
@@ -74,7 +74,11 @@ function ownRecord(map: NotesMap, key: string): NoteRecord | string | undefined 
 export class NotesModel {
   /** Карта заметок этой вкладки. Владелец — этот класс. */
   private map: NotesMap = {};
-  /** Пользовательские цвета меток (палитра), хранятся в storage.sync. */
+  /**
+   * Пользовательские цвета меток (палитра). Хранятся в storage.LOCAL рядом с
+   * заметками; копия в sync осталась только мостом старых версий (комментарий
+   * про sync врал с переезда 8.1.22 — внешний аудит 28.08.2026).
+   */
   private tags: string[] = [];
   /** Хранилище не прочиталось — запись заблокирована, чтобы не стереть данные. */
   private readOnly = false;
@@ -126,13 +130,15 @@ export class NotesModel {
   }
 
   /**
-   * Добавить свой цвет в палитру (выбор в модалке). Заодно снимает пометку
-   * «удалён в этой сессии»: иначе слияние с диском выбросило бы только что
-   * добавленный цвет.
+   * Добавить свой цвет в палитру (выбор в модалке). Память обновляется сразу
+   * — человек видит цвет мгновенно, — а диском занимается координатор.
+   * Возвращает результат записи: молчаливый провал оставлял цвет только в
+   * памяти, и после перезагрузки он исчезал.
    */
-  addCustomTag(css: string): void {
+  addCustomTag(css: string): Promise<boolean> {
     if (!this.tags.includes(css)) this.tags.push(css);
     this.removedThisSession.delete(css);
+    return this.commitTagOps([css], []);
   }
 
   /** Сколько записей пользуются этим цветом — для честного вопроса об удалении. */
@@ -169,25 +175,54 @@ export class NotesModel {
     log.debug("player-notes", "notes loaded", Object.keys(this.map).length);
   }
 
-  async saveCustomTags(): Promise<boolean> {
-    // Та же дыра «пишем непрочитанное», что у заметок: при упавшем loadNotes
-    // палитра в памяти пуста, и запись стёрла бы пользовательские цвета.
+  /**
+   * Правка палитры — ИНТЕНТОМ через координатор в background.
+   *
+   * Раньше здесь был read-modify-write: читаем свежий список, доливаем свои
+   * цвета, пишем массив целиком. Окно гонки маленькое, но не нулевое — две
+   * вкладки, добавившие разные цвета одновременно, читали один диск, и
+   * вторая затирала первый (внешний аудит 28.08.2026). Заметки этот класс
+   * прошли ещё 26.08; палитра жила рядом с ними на более слабой модели
+   * согласованности.
+   *
+   * Fail-safe, как у заметок: если свежее состояние не прочиталось —
+   * НЕ ПИШЕМ. Потерять одно действие пользователя неприятно, перетереть
+   * чужие сохранённые цвета хуже.
+   */
+  private async commitTagOps(add: string[], remove: string[]): Promise<boolean> {
     if (this.readOnly) return false;
-    // Слияние со свежей палитрой с диска — по той же причине, что у мьютов:
-    // две вкладки писали массив целиком и теряли цвета друг друга.
+    if (add.length === 0 && remove.length === 0) return true;
+    try {
+      const res = await sendRuntime<NotesTagsResultMsg>({ type: "notes_tag_ops", add, remove });
+      if (res && typeof res.ok === "boolean") {
+        // Координатор вернул свежий список — принимаем целиком: в нём уже
+        // есть и цвета соседних вкладок.
+        if (res.ok && Array.isArray(res.tags)) this.tags = res.tags;
+        if (!res.ok) {
+          log.warn("player-notes", "палитра не сохранена:", res.reason ?? "отказ координатора");
+        }
+        return res.ok;
+      }
+    } catch (e) {
+      log.debug("player-notes", "tag coordinator unavailable", e);
+    }
+    // Фолбэк: фон не ответил (старая вкладка после обновления расширения).
+    // Читаем свежий список сами — и, в отличие от прежнего поведения, при
+    // НЕУДАЧЕ чтения не пишем ничего.
     try {
       const cur = (await browser.storage.local.get({ [TAGS_KEY]: [] })) as Record<string, unknown>;
       const disk = Array.isArray(cur[TAGS_KEY]) ? (cur[TAGS_KEY] as string[]) : [];
-      const merged = [
-        ...new Set([...disk.filter((t) => !this.removedThisSession.has(t)), ...this.customTags]),
-      ];
-      this.tags = merged;
-      return await saveCustomTagsToStore(merged);
+      const removeSet = new Set(remove);
+      const next = [...new Set([...disk.filter((t) => !removeSet.has(t)), ...add])];
+      const ok = await saveCustomTagsToStore(next);
+      if (ok) this.tags = next;
+      return ok;
     } catch (e) {
-      log.warn("player-notes", "custom tags merge failed", e);
-      return await saveCustomTagsToStore(this.customTags);
+      log.warn("player-notes", "палитра: свежее состояние не прочиталось — запись отменена", e);
+      return false;
     }
   }
+
 
   /**
    * Сохранить ЗАТРОНУТЫЕ ключи через координатор в background.
@@ -420,7 +455,7 @@ export class NotesModel {
   removeCustomTag(css: string): void {
     this.tags = this.tags.filter((c) => c !== css);
     this.removedThisSession.add(css);
-    void this.saveCustomTags().then((ok) => {
+    void this.commitTagOps([], [css]).then((ok) => {
       if (!ok) this.ctx.toast("Не удалось сохранить палитру — цвет вернётся после перезагрузки", true);
     });
   }

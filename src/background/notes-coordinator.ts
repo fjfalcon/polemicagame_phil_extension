@@ -19,7 +19,9 @@
  */
 import {
   isSafeNoteKey,
+  isSafeTag,
   loadNotes,
+  saveCustomTags,
   MIGRATED_KEY,
   saveNotes,
   mergeNotes,
@@ -29,7 +31,7 @@ import {
 import { browser } from "@core/env";
 import type { NotesMap, NoteRecord } from "@core/notes-store";
 import { log } from "@core/log";
-import type { NoteOp, NotesResultMsg } from "@shared/types";
+import type { NoteOp, NotesResultMsg, NotesTagsResultMsg } from "@shared/types";
 
 let queue: Promise<unknown> = Promise.resolve();
 
@@ -97,6 +99,38 @@ export function applyNoteOps(ops: NoteOp[]): Promise<NotesResultMsg> {
     return ok
       ? { ok, notes: next as Record<string, unknown>, truncated, skipped }
       : { ok, truncated, skipped };
+  });
+}
+
+/**
+ * Правки палитры — ИНТЕНТОМ, в той же единственной очереди.
+ *
+ * Палитра, как и карта заметок, хранится одним элементом storage: запись —
+ * это замена целиком. Вкладка, посылающая снимок массива, неизбежно
+ * затирает цвет, добавленный соседней вкладкой между её чтением и записью
+ * (внешний аудит 28.08.2026). Поэтому наружу выставлен не «сохрани список»,
+ * а «добавь эти, убери эти»: свежее чтение и запись не покидают background.
+ *
+ * Отказ при нечитаемом состоянии — ОСОЗНАННО fail-safe, как у заметок:
+ * потерять одно действие пользователя неприятно, перетереть чужие
+ * сохранённые цвета — хуже.
+ */
+export function applyTagOps(add: unknown, remove: unknown): Promise<NotesTagsResultMsg> {
+  return enqueue(async () => {
+    const toAdd = (Array.isArray(add) ? add : []).filter(isSafeTag);
+    const toRemove = (Array.isArray(remove) ? remove : []).filter(
+      (t): t is string => typeof t === "string" && t !== "",
+    );
+    if (toAdd.length === 0 && toRemove.length === 0) return { ok: true };
+    const { customTags, loadFailed } = await loadNotes({ persistMigration: true });
+    if (loadFailed) {
+      log.warn("notes-coordinator", "read failed, tag write refused");
+      return { ok: false, reason: "read_failed" };
+    }
+    const removeSet = new Set(toRemove);
+    const next = [...new Set([...customTags.filter((t) => !removeSet.has(t)), ...toAdd])];
+    const ok = await saveCustomTags(next);
+    return ok ? { ok, tags: next } : { ok };
   });
 }
 
