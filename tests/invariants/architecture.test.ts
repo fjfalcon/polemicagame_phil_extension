@@ -251,22 +251,90 @@ describe("AGENTS §4 storage and data ownership", () => {
 
   test("obs_host пишется только через границу settings (ревью 27.08.2026)", () => {
     // Санитайзер стоит в setSettings; прямая запись ключа мимо него снова
-    // вынесла бы креды в облако. Исключения — записи ФОНА, которые сами
-    // нормализуют значение: разовое самолечение и транзакция endpoint
-    // (она владеет обеими частями пары, ревью 27.08.2026).
+    // вынесла бы креды («ws://user:pass@host») в облачную синхронизацию.
+    //
+    // Разбор ДЕРЕВА, а не текста: прежняя регулярка видела только литеральный
+    // объект прямо в вызове (`set({ obs_host: x })`) и была слепа к
+    // `const patch = { obs_host: x }; set(patch)`. Хуже — амнистия давалась по
+    // ТЕКСТОВОЙ БЛИЗОСТИ слова «sanitizeObsHost» в ±400 символах: годился
+    // комментарий или чужой соседний вызов. Это одно из двух мест, где промах
+    // = утечка кредов, поэтому здесь строгие правила (внешний аудит
+    // 28.08.2026).
+    //
+    // Законно ровно одно: значение, которое ПРЯМО В ЭТОМ выражении прошло
+    // sanitizeObsHost(...), либо переменная, присвоенная его результатом.
     const offenders: string[] = [];
     for (const file of sourceFiles()) {
+      const sf = parseTs(file);
       const source = read(file);
-      for (const m of source.matchAll(/storage\.sync\.set\(\{[^}]*obs_host/g)) {
-        const line = lineOf(source, m.index);
-        const around = source.slice(Math.max(0, (m.index ?? 0) - 400), (m.index ?? 0) + 200);
-        if (/sanitizeObsHost/.test(around)) continue; // самолечение фона
-        // Транзакция: host уже прошёл sanitizeObsHost в начале обработчика.
-        if (/OBS: адрес не записался|storage\.sync\.set\(\{ obs_host: host \}\)/.test(around)) continue;
-        offenders.push(`${file}:${line}`);
-      }
+      // Переменные, чьё значение — результат санитайзера.
+      const sanitized = new Set<string>();
+      const collect = (node: ts.Node): void => {
+        if (
+          ts.isVariableDeclaration(node) &&
+          node.initializer &&
+          /sanitizeObsHost\s*\(/.test(node.initializer.getText(sf)) &&
+          ts.isIdentifier(node.name)
+        ) {
+          sanitized.add(node.name.text);
+        }
+        if (
+          ts.isBinaryExpression(node) &&
+          node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          /sanitizeObsHost\s*\(/.test(node.right.getText(sf)) &&
+          ts.isIdentifier(node.left)
+        ) {
+          sanitized.add(node.left.text);
+        }
+        ts.forEachChild(node, collect);
+      };
+      collect(sf);
+
+      /** Значение под ключом obs_host в объекте — безопасно ли оно. */
+      const valueIsSafe = (expr: ts.Expression): boolean => {
+        const text = expr.getText(sf);
+        if (/sanitizeObsHost\s*\(/.test(text)) return true;
+        return ts.isIdentifier(expr) && sanitized.has(expr.text);
+      };
+
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          const isStorageSet =
+            ts.isPropertyAccessExpression(callee) &&
+            callee.name.text === "set" &&
+            /storage\.(sync|local)/.test(callee.expression.getText(sf));
+          if (isStorageSet) {
+            const arg = node.arguments[0];
+            // Литеральный объект: смотрим само значение ключа.
+            if (arg && ts.isObjectLiteralExpression(arg)) {
+              for (const prop of arg.properties) {
+                if (
+                  ts.isPropertyAssignment(prop) &&
+                  prop.name.getText(sf).replace(/["']/g, "") === "obs_host" &&
+                  !valueIsSafe(prop.initializer)
+                ) {
+                  const { line } = sf.getLineAndCharacterOfPosition(prop.getStart(sf));
+                  offenders.push(`${file}:${line + 1} → сырой obs_host в storage.set`);
+                }
+              }
+            }
+            // Патч-переменная: ключ мог быть положен в неё выше по файлу.
+            if (arg && ts.isIdentifier(arg)) {
+              const assign = new RegExp(`${arg.text}(?:\\.obs_host|\\["obs_host"\\])\\s*=\\s*([^;\n]+)`);
+              const m = assign.exec(source);
+              if (m && !/sanitizeObsHost/.test(m[1]) && !sanitized.has(m[1].trim())) {
+                const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+                offenders.push(`${file}:${line + 1} → obs_host в патч-объекте мимо санитайзера`);
+              }
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
     }
-    expect(offenders, "obs_host мимо setSettings/санитайзера").toEqual([]);
+    expect(offenders, "obs_host мимо setSettings/санитайзера — креды уедут в облако").toEqual([]);
   });
 
   test("§4.11: notes migration commits data and completion flag atomically", () => {
@@ -448,11 +516,22 @@ describe("settings, release and manifest consistency", () => {
     // «Наше» — не список префиксов на глаз, а РЕЕСТР собственных классов
     // (OWN в selectors.ts) плюс наши префиксы. Реестр читается из исходника:
     // добавили свой элемент — страж узнаёт о нём сам.
+    // ТОЛЬКО блок OWN: прежняя регулярка шла по всему файлу и подбирала
+    // заодно значения SITE_CLASS — то есть имена классов САЙТА объявлялись
+    // «нашими», и страж молчал на них (поймано мутацией при закрытии
+    // техдолга 28.08.2026).
     const ownSource = read("src/core/selectors.ts");
-    const ownNames = new Set(
-      [...ownSource.matchAll(/^\s*(?:\w+): "([a-z][\w-]*)",/gm)].map((m) => m[1]),
+    const ownBlock = ownSource.slice(
+      ownSource.indexOf("export const OWN = {"),
+      ownSource.indexOf("} as const;", ownSource.indexOf("export const OWN = {")),
     );
-    const OURS = /^(pn|polemica|fp|ss|twitch|obs|enhanced|session-stats|note|stats|player|last-games|hide-video|rotate|mute|copy|penalty|vote|best-move|cross)[-_]|^(pn|player-icons|player-stats)$/;
+    const ownNames = new Set(
+      [...ownBlock.matchAll(/^\s*(?:\w+): "([a-z][\w-]*)",/gm)].map((m) => m[1]),
+    );
+    // «Наше» — узкий список НАШИХ префиксов плюс реестр OWN. Раньше сюда
+    // входил голый `player`, и он отбеливал классы САЙТА `player__info`,
+    // `player__role` (найдено при закрытии техдолга 28.08.2026).
+    const OURS = /^(pn|polemica|fp|ss|twitch|obs|enhanced|session-stats)[-_]|^pn$/;
     /** Не селекторы: расширения файлов, домены, свойства промисов. */
     const NOT_SELECTORS = new Set([
       "json", "txt", "zip", "xpi", "css", "html", "js", "ts", "md", "png", "svg", "log",
@@ -513,6 +592,23 @@ describe("settings, release and manifest consistency", () => {
         }
       };
       const visit = (node: ts.Node): void => {
+        // ИМЕНА классов в classList: знание о вёрстке без точки, поэтому
+        // общий разбор литералов его не видит. Реестр — SITE_CLASS
+        // (внешний аудит 28.08.2026: 18 таких мест жили мимо правила).
+        if (
+          ts.isCallExpression(node) &&
+          ts.isPropertyAccessExpression(node.expression) &&
+          /^(contains|add|remove|toggle)$/.test(node.expression.name.text) &&
+          /classList$/.test(node.expression.expression.getText(sf))
+        ) {
+          for (const arg of node.arguments) {
+            if (!ts.isStringLiteral(arg)) continue;
+            const cls = arg.text;
+            if (OURS.test(cls) || ownNames.has(cls) || EXEMPT[file]?.includes(cls)) continue;
+            const { line } = sf.getLineAndCharacterOfPosition(arg.getStart(sf));
+            offenders.push(`${file}:${line + 1} → classList «${cls}»`);
+          }
+        }
         if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
           check(node, node.text);
         } else if (ts.isTemplateExpression(node)) {
@@ -523,6 +619,41 @@ describe("settings, release and manifest consistency", () => {
         ts.forEachChild(node, visit);
       };
       visit(sf);
+    }
+
+    // CSS, который едет в дистрибутив: там знание о чужой вёрстке в самом
+    // хрупком виде — scoped-хеш Vue-компонента сайта. Файл не сканировался
+    // ничем (внешний аудит 28.08.2026), поэтому здесь он хотя бы ПЕРЕЧИСЛЕН:
+    // список — чек-лист «что проверить после редизайна».
+    const cssKnown: Record<string, string[]> = {
+      "src/static/notes.css": [
+        // Разметка САЙТА, на которую мы вешаем свои правила.
+        "player__video-wrapper",
+        "player__info",
+        "player__botleftmenu",
+        "player",
+        // НАША разметка с общими именами: внутри .player-stats / .pn-tooltip.
+        "player-icons",
+        "mmr",
+        "games",
+        "winrate",
+        "kills",
+        "tooltip-text",
+      ],
+    };
+    for (const [file, known] of Object.entries(cssKnown)) {
+      const css = read(file);
+      // ВСЕ классы файла — по ним же проверяем устаревание списка.
+      const all = new Set([...css.matchAll(/\.([a-zA-Z][\w-]{2,})/g)].map((m) => m[1]));
+      const unknown = [...all].filter(
+        (cls) =>
+          !known.includes(cls) && !OURS.test(cls) && !ownNames.has(cls) && !NOT_SELECTORS.has(cls),
+      );
+      expect(unknown, `${file}: новый класс сайта в CSS дистрибутива — впиши его в список`).toEqual(
+        [],
+      );
+      const stale = known.filter((cls) => !all.has(cls));
+      expect(stale, `${file}: класс из списка больше не используется — убери`).toEqual([]);
     }
 
     expect(
@@ -617,18 +748,48 @@ describe("settings, release and manifest consistency", () => {
 
 describe("logging and popup invariants", () => {
   test("secrets are not passed directly to log calls", () => {
+    // Файл лога человек пересылает в поддержку — секрет в нём это утечка.
+    // Раньше вызов разбирался по AST, а АРГУМЕНТЫ проверялись регуляркой по
+    // тексту вызова: `const p = settings.obs_password; log.info("obs", p)` и
+    // `const l = log; l.info(…, settings.obs_password)` проходили насквозь
+    // (внешний аудит 28.08.2026). Теперь по дереву проверяется и то, и другое.
+    const SECRET = /obs_password|authKey|current-user/i;
     const violations: string[] = [];
     for (const file of sourceFiles()) {
       const sf = parseTs(file);
-      const visit = (node: ts.Node) => {
+      /** Переменные, в которых лежит секрет. */
+      const secretVars = new Set<string>();
+      /** Имена, под которыми доступен логгер (`const l = log`). */
+      const logNames = new Set(["log"]);
+      const collect = (node: ts.Node): void => {
+        if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
+          const init = node.initializer.getText(sf);
+          if (SECRET.test(init)) secretVars.add(node.name.text);
+          if (/^log$/.test(init.trim())) logNames.add(node.name.text);
+        }
+        // Деструктуризация секрета: `const { obs_password } = settings`.
+        if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name)) {
+          for (const el of node.name.elements) {
+            const name = (el.propertyName ?? el.name).getText(sf);
+            if (SECRET.test(name) && ts.isIdentifier(el.name)) secretVars.add(el.name.text);
+          }
+        }
+        ts.forEachChild(node, collect);
+      };
+      collect(sf);
+
+      const visit = (node: ts.Node): void => {
         if (
           ts.isCallExpression(node) &&
           ts.isPropertyAccessExpression(node.expression) &&
           ts.isIdentifier(node.expression.expression) &&
-          node.expression.expression.text === "log"
+          logNames.has(node.expression.expression.text)
         ) {
-          const call = node.getText(sf);
-          if (/obs_password|authKey|current-user/i.test(call)) {
+          const leaks = node.arguments.some((arg) => {
+            if (SECRET.test(arg.getText(sf))) return true;
+            return ts.isIdentifier(arg) && secretVars.has(arg.text);
+          });
+          if (leaks) {
             const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf));
             violations.push(`${file}:${pos.line + 1}`);
           }
@@ -736,7 +897,9 @@ describe("§4.7 lifecycle heuristic", () => {
     },
     "src/content/features/match-stats.ts": {
       listeners: 2,
-      timers: 3,
+      // 3 → 2 при переходе на счёт по дереву (28.08.2026): один «таймер»
+      // был словом в строке/комментарии, а не вызовом.
+      timers: 2,
       reason: "timeline row listeners are removed with nodes; timers are tracked in module sets",
     },
     // Диалоги: обработчики висят на УЗЛАХ САМОГО ОКНА и умирают вместе с
@@ -792,6 +955,22 @@ describe("§4.7 lifecycle heuristic", () => {
     },
   };
 
+  test("§4.7: пауза проходов наблюдателя всегда снимается", () => {
+    // suspendDomPasses(true) без парного false «выключает» расширение до
+    // перезагрузки страницы: подписчики перестают видеть стол. Симметрия
+    // важнее места — считаем по файлу (закрытие техдолга 28.08.2026).
+    for (const file of sourceFiles()) {
+      const source = read(file);
+      const on = count(source, /suspendDomPasses\(true\)/g);
+      const off = count(source, /suspendDomPasses\(false\)/g);
+      if (on === 0 && off === 0) continue;
+      expect(
+        off,
+        `${file}: пауза проходов ставится ${on} раз, снимается ${off} — жест обязан её отпустить`,
+      ).toBeGreaterThanOrEqual(on);
+    }
+  });
+
   test("§4.7: delayed tails are held in named handles and cleared on teardown", () => {
     const roleMarker = read("src/content/features/role-marker.ts");
     expect(roleMarker, "§4.7: menu arm timer must be cancellable").toMatch(
@@ -820,16 +999,31 @@ describe("§4.7 lifecycle heuristic", () => {
     // из-под инварианта не потому, что получили teardown, а потому, что
     // переехали в подпапку (adversarial 28.08.2026, находка 1).
     for (const file of sourceFiles("src/content/features/**/*.ts")) {
-      const source = read(file);
-      const listenerDelta = Math.max(
-        0,
-        count(source, /\.addEventListener\s*\(/g) - count(source, /\.removeEventListener\s*\(/g),
-      );
-      const timerDelta = Math.max(
-        0,
-        count(source, /\bset(?:Timeout|Interval)\s*\(/g) -
-          count(source, /\bclear(?:Timeout|Interval)\s*\(/g),
-      );
+      // Счёт по ДЕРЕВУ, а не по тексту: комментарий со словом
+      // removeEventListener уменьшал дельту и выдавал бесплатную квоту, а
+      // строка в шаблоне могла «добавить» несуществующий слушатель (внешний
+      // аудит 28.08.2026). Идентичность колбэка это по-прежнему не
+      // доказывает — но считает ровно вызовы, а не буквы.
+      const sf = parseTs(file);
+      const calls = { add: 0, remove: 0, set: 0, clear: 0 };
+      const countCalls = (node: ts.Node): void => {
+        if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          const name = ts.isPropertyAccessExpression(callee)
+            ? callee.name.text
+            : ts.isIdentifier(callee)
+              ? callee.text
+              : "";
+          if (name === "addEventListener") calls.add++;
+          else if (name === "removeEventListener") calls.remove++;
+          else if (name === "setTimeout" || name === "setInterval") calls.set++;
+          else if (name === "clearTimeout" || name === "clearInterval") calls.clear++;
+        }
+        ts.forEachChild(node, countCalls);
+      };
+      countCalls(sf);
+      const listenerDelta = Math.max(0, calls.add - calls.remove);
+      const timerDelta = Math.max(0, calls.set - calls.clear);
       if (!listenerDelta && !timerDelta) continue;
       const allowed = allowances[file];
       if (allowed) seenAllowances.add(file);

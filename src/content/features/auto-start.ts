@@ -18,7 +18,7 @@
 import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { keyboard } from "@core/keyboard";
 import { log } from "@core/log";
-import { SITE, TEXT, OWN, classifyPhaseText, endedScreenVisible } from "@core/selectors";
+import { SITE, TEXT, OWN, classifyPhaseText, endedScreenVisible, SITE_CLASS } from "@core/selectors";
 import { isAutoAcceptSuppressed } from "../auto-accept-gate";
 import { noteAutoAcceptDispatched } from "./queue-requeue";
 import type { Feature, FeatureContext } from "@core/feature";
@@ -122,7 +122,7 @@ const ACCEPT_SCOPE_SELECTOR = SITE.acceptScope;
  */
 function notInsideAcceptedBlock(el: HTMLElement): boolean {
   const acceptRoot = el.closest<HTMLElement>(SITE.profileAccept);
-  return !(acceptRoot && !acceptRoot.classList.contains("cursor-pointer"));
+  return !(acceptRoot && !acceptRoot.classList.contains(SITE_CLASS.cursorPointer));
 }
 
 function findAcceptTextElements(): HTMLElement[] {
@@ -898,8 +898,8 @@ function isDayText(text: string): boolean {
 
 function detectRolePhase(): "day" | "night" {
   const body = document.body;
-  if (body?.classList.contains("night")) return "night";
-  if (body?.classList.contains("day")) return "day";
+  if (body?.classList.contains(SITE_CLASS.night)) return "night";
+  if (body?.classList.contains(SITE_CLASS.day)) return "day";
 
   // Игра закончилась: сайт перед этим стартует день, но экран результата
   // фазовых маркеров не несёт — без этой ветки фаза оставалась ночной, и

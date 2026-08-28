@@ -4,6 +4,7 @@
  * убирая ~400 строк дублированного кода.
  */
 import { log } from "./log";
+import { suspendDomPasses } from "./dom";
 
 export interface FloatingPanelOptions {
   /** Уникальный ключ для localStorage (позиция/размер). */
@@ -138,6 +139,11 @@ export abstract class FloatingPanel {
 
   unmount(): void {
     if (!this.mounted) return;
+    // Панель могла уйти посреди жеста — пауза не имеет права его пережить.
+    if (this.gestureActive) {
+      this.gestureActive = false;
+      suspendDomPasses(false);
+    }
     this.cleanup.forEach((fn) => fn());
     this.cleanup = [];
     this.root.remove();
@@ -326,6 +332,7 @@ export abstract class FloatingPanel {
       applyPosition();
       pointerId = null;
       this.gestureActive = false;
+      suspendDomPasses(false);
       detach();
       try {
         if (handle.hasPointerCapture(finishedPointerId)) {
@@ -351,6 +358,9 @@ export abstract class FloatingPanel {
       const r = root.getBoundingClientRect();
       pointerId = e.pointerId;
       this.gestureActive = true;
+      // Пока панель едет за курсором, состав стола не меняется — проходы
+      // подписчиков на наши же покадровые записи style откладываются.
+      suspendDomPasses(true);
       startX = e.clientX;
       startY = e.clientY;
       latestX = e.clientX;
@@ -464,6 +474,7 @@ export abstract class FloatingPanel {
       applySize();
       pointerId = null;
       this.gestureActive = false;
+      suspendDomPasses(false);
       detach();
       try {
         if (h.hasPointerCapture(finishedPointerId)) h.releasePointerCapture(finishedPointerId);
@@ -487,6 +498,7 @@ export abstract class FloatingPanel {
       const r = root.getBoundingClientRect();
       pointerId = e.pointerId;
       this.gestureActive = true;
+      suspendDomPasses(true);
       startX = e.clientX;
       startY = e.clientY;
       latestX = e.clientX;

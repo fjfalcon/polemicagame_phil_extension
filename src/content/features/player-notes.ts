@@ -80,7 +80,7 @@ import { formatCrossover } from "../crossover-view";
 import { redactNick } from "@shared/redact";
 
 import { escapeHtml } from "@core/escape";
-import { SITE, OWN, OWN_BUTTON_SELECTOR } from "@core/selectors";
+import { SITE, OWN, OWN_BUTTON_SELECTOR, SITE_CLASS } from "@core/selectors";
 import {
   MAX_OWN_NOTE_TEXT,
   normalizeNoteRecord,
@@ -246,7 +246,7 @@ export function throttleRebuild(
  * стадий незачем — цена ошибки здесь всего лишь «прогреемся на минуту позже».
  */
 export function isNightNow(): boolean {
-  return document.body?.classList.contains("night") === true;
+  return document.body?.classList.contains(SITE_CLASS.night) === true;
 }
 
 class PlayerNotesManager {
@@ -2055,7 +2055,7 @@ class PlayerNotesManager {
       this.removeStatisticsElements();
       return;
     }
-    if (!element.classList.contains("player")) return;
+    if (!element.classList.contains(SITE_CLASS.player)) return;
 
     const nicknameElement = element.querySelector(SITE.playerName);
     if (!nicknameElement) return;

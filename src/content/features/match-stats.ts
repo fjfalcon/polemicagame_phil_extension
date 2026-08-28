@@ -8,7 +8,7 @@
  * это учитывает FeatureManager на уровне регистрации; здесь дополнительно
  * проверяем оба флага из ctx.settings, как в оригинале).
  */
-import { SITE } from "@core/selectors";
+import { SITE, SITE_CLASS } from "@core/selectors";
 import { onDomChange } from "@core/dom";
 import { escapeHtml } from "@core/escape";
 import { actionTip, isLiftBallot, resolveDayOutcome } from "../match-outcome";
@@ -332,7 +332,7 @@ function unlinkPlayerNames(root: ParentNode = document): void {
 function removeEnhancements(): void {
   document
     .querySelectorAll(
-      ".row[data-phase], .best-move-dot, .best-move-tooltip, .penalty-dots, .pn-timeline",
+      `${SITE.statsRowPhase}, ${SITE.bestMoveDot}, ${SITE.bestMoveTooltip}, ${SITE.penaltyDots}, .pn-timeline`,
     )
     .forEach((element) => element.remove());
 }
@@ -1197,7 +1197,7 @@ function addPenaltyDot(
         if (
           penaltyKey &&
           dotContainer.querySelector(
-            `.penalty-dot[data-penalty-key="${CSS.escape(penaltyKey)}"]`,
+            `${SITE.penaltyDot}[data-penalty-key="${CSS.escape(penaltyKey)}"]`,
           )
         ) {
           return;
@@ -1300,9 +1300,9 @@ export function applyAutoHeight(): void {
     if (
       computedStyle.overflow.includes("scroll") ||
       computedStyle.overflowY === "scroll" ||
-      parent.classList.contains("__vuescroll") ||
-      parent.classList.contains("__panel") ||
-      parent.classList.contains("__view")
+      parent.classList.contains(SITE_CLASS.vueScroll) ||
+      parent.classList.contains(SITE_CLASS.vueScrollPanel) ||
+      parent.classList.contains(SITE_CLASS.vueScrollView)
     ) {
       setStyleProp(parent, "height", "auto");
       setStyleProp(parent, "maxHeight", "none");

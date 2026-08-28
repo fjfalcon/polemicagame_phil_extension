@@ -9,7 +9,7 @@
  */
 import { log } from "@core/log";
 import { onDomChange } from "@core/dom";
-import { SITE } from "@core/selectors";
+import { SITE, SITE_CLASS } from "@core/selectors";
 import { escapeHtml } from "@core/escape";
 import { getLastGameData } from "../match-data";
 import { ROLE_COLORS } from "./match-stats";
@@ -342,16 +342,16 @@ function enhanceTooltip(element: HTMLElement): void {
     tooltipTimeout = undefined;
     removeTooltip();
     document
-      .querySelectorAll<HTMLDivElement>(`.penalty-tooltip[data-tooltip-owner="${owner}"]`)
+      .querySelectorAll<HTMLDivElement>(`${SITE.penaltyTooltip}[data-tooltip-owner="${owner}"]`)
       .forEach((orphan) => {
         activeTooltips.delete(orphan);
         orphan.remove();
       });
     const tooltip = createTooltip(
       originalTitle,
-      element.classList.contains("best-move-dot"),
+      element.classList.contains(SITE_CLASS.bestMoveDot),
     );
-    tooltip.classList.add("penalty-tooltip");
+    tooltip.classList.add(SITE_CLASS.penaltyTooltip);
     tooltip.dataset.tooltipOwner = owner;
     document.body.appendChild(tooltip);
     activeTooltips.set(tooltip, element);

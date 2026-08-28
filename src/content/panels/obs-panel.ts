@@ -29,6 +29,7 @@ import {
   classifyPhaseText,
   endedScreenVisible,
   matchFinishedVisible,
+  SITE_CLASS,
 } from "@core/selectors";
 import { isGameRoomPath } from "@shared/routes";
 import { showToast } from "@core/toast";
@@ -926,7 +927,7 @@ function detectTimeOfDayInner(): TimeOfDay {
     let hasAnyDayStage = false;
     allStages.forEach((stage) => {
       const stageText = norm(stage);
-      const isSubstage = stage.classList.contains("substage");
+      const isSubstage = stage.classList.contains(SITE_CLASS.substage);
       const isIsolatedNight =
         isSubstage && (stageText.trim() === "ночь" || stageText.trim() === "night");
 

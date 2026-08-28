@@ -4,7 +4,7 @@
  */
 import { keyboard } from "@core/keyboard";
 import { isVisible } from "@core/dom";
-import { SITE, TEXT as SITE_TEXT } from "@core/selectors";
+import { SITE, TEXT as SITE_TEXT, SITE_CLASS } from "@core/selectors";
 import type { Feature, FeatureContext } from "@core/feature";
 
 const TEXT = {
@@ -300,7 +300,7 @@ class PauseHotkey {
     if (!button) return false;
     const c = (this.clickableFrom(button) || button) as HTMLElement;
     return (
-      c.classList?.contains("disabled") ||
+      c.classList?.contains(SITE_CLASS.disabled) ||
       c.hasAttribute?.("disabled") ||
       c.getAttribute?.("aria-disabled") === "true" ||
       norm(c.className?.toString?.() || "").includes("disabled")

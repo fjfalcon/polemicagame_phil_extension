@@ -36,8 +36,42 @@ import type { NoteOp, NotesResultMsg, NotesTagsResultMsg } from "@shared/types";
 
 let queue: Promise<unknown> = Promise.resolve();
 
+/**
+ * Предел ожидания одной задачи очереди.
+ *
+ * Очередь одна на весь браузер, и зависшая задача (MV3 усыпил воркер посреди
+ * storage-вызова) вешала бы ВСЕХ — и фон, и очередь вкладки, которая ждёт
+ * ответа: без тоста, без фолбэка, до перезагрузки страницы (внешний аудит
+ * 28.08.2026). Лучше честный отказ: вызывающий покажет ошибку и не потеряет
+ * данные молча.
+ */
+const TASK_TIMEOUT_MS = 10_000;
+
+/** Задача с пределом ожидания: очередь не имеет права зависнуть навсегда. */
+function withTimeout<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      log.warn("notes-coordinator", `задача не уложилась в ${TASK_TIMEOUT_MS} мс — отказ`);
+      reject(new Error("notes coordinator timeout"));
+    }, TASK_TIMEOUT_MS);
+    task().then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err as Error);
+      },
+    );
+  });
+}
+
 function enqueue<T>(task: () => Promise<T>): Promise<T> {
-  const run = queue.then(task, task);
+  // Хвост очереди не ждёт зависшую задачу дольше предела: иначе одна
+  // повисшая операция останавливает запись заметок во всех вкладках.
+  const guarded = () => withTimeout(task);
+  const run = queue.then(guarded, guarded);
   queue = run.then(
     () => undefined,
     () => undefined,

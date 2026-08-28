@@ -19,7 +19,7 @@
  */
 import { onDomChange, isVisible } from "@core/dom";
 import { formatKeyCode } from "@core/keyboard";
-import { SITE, TEXT } from "@core/selectors";
+import { SITE, TEXT, SITE_CLASS } from "@core/selectors";
 import { isGameRoomPath } from "@shared/routes";
 import { findOutcryButton } from "./outcry-hotkey";
 import type { Feature, FeatureContext } from "@core/feature";
@@ -73,7 +73,7 @@ export function findPauseItem(root: ParentNode = document): HTMLElement | null {
       // Заблокированный пункт (пауза уже идёт) клавишей не сработает —
       // подсказка на нём обещала бы неправду.
       return !(
-        item.classList.contains("disabled") ||
+        item.classList.contains(SITE_CLASS.disabled) ||
         item.hasAttribute("disabled") ||
         item.getAttribute("aria-disabled") === "true"
       );

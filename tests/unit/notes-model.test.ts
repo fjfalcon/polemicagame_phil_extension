@@ -567,3 +567,67 @@ describe("палитра: мёртвый фон и откат памяти", () 
     expect(h.savedTags, "фолбэк не чёрный ход мимо санитайзера").toBeUndefined();
   });
 });
+
+describe("фолбэк заметок при мёртвом фоне", () => {
+  test("пишет поверх СВЕЖЕЙ карты с диска, а не снимка памяти", async () => {
+    // Асимметрия с палитрой: две вкладки в фолбэке затирали правки друг
+    // друга снимками (внешний аудит 28.08.2026).
+    h.loadResult = {
+      notes: { "u:1": { text: "было в памяти", timestamp: 1 } },
+      customTags: [],
+      loadFailed: false,
+    };
+    const m = make({ аня: 42 });
+    await m.load();
+    // Пока вкладка думала, соседняя записала СВОЮ заметку.
+    h.loadResult = {
+      notes: {
+        "u:1": { text: "было в памяти", timestamp: 1 },
+        "u:99": { text: "правка соседней вкладки", timestamp: 5 },
+      },
+      customTags: [],
+      loadFailed: false,
+    };
+    h.coordinator = () => undefined; // фон мёртв
+    expect(await m.setNoteText("u:42", "моя правка", "Аня")).toBe(true);
+    const written = h.savedMaps.at(-1) as Record<string, { text: string }>;
+    expect(written["u:99"]?.text, "чужая правка не затёрта").toBe("правка соседней вкладки");
+    expect(written["u:42"]?.text, "своя правка доехала").toBe("моя правка");
+  });
+
+  test("свежая карта не прочиталась — фолбэк отменяется целиком", async () => {
+    h.loadResult = { notes: {}, customTags: [], loadFailed: false };
+    const m = make();
+    await m.load();
+    h.coordinator = () => undefined;
+    h.loadResult = { notes: {}, customTags: [], loadFailed: true };
+    expect(await m.setNoteText("Аня", "текст", "Аня")).toBe(false);
+    expect(h.savedMaps, "на диск ничего не ушло").toEqual([]);
+  });
+});
+
+describe("готовность карты и палитры — раздельно", () => {
+  test("приход заметок из соседней вкладки НЕ разблокирует палитру", async () => {
+    // Раньше один флаг отвечал за оба агрегата: валидная карта снимала блок
+    // и с палитры, про которую не было известно ничего (внешний аудит
+    // 28.08.2026).
+    h.loadResult = { notes: {}, customTags: [], loadFailed: true };
+    const m = make();
+    await m.load();
+    expect(m.isReadOnly).toBe(true);
+    expect(m.isPaletteReadOnly).toBe(true);
+    m.adoptExternalNotes({ Аня: { text: "из соседней вкладки", timestamp: 1 } });
+    expect(m.isReadOnly, "карта прочитана — писать можно").toBe(false);
+    expect(m.isPaletteReadOnly, "про палитру всё ещё ничего не известно").toBe(true);
+    expect(await m.addCustomTag("#00ff00"), "и запись палитры отказывает").toBe(false);
+  });
+
+  test("приход палитры разблокирует именно её", async () => {
+    h.loadResult = { notes: {}, customTags: [], loadFailed: true };
+    const m = make();
+    await m.load();
+    m.adoptExternalTags(["#ff0000"]);
+    expect(m.isPaletteReadOnly).toBe(false);
+    expect(m.isReadOnly, "а карта заметок по-прежнему заблокирована").toBe(true);
+  });
+});

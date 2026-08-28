@@ -22,7 +22,7 @@
 import { keyboard } from "@core/keyboard";
 import { isVisible, safeClick } from "@core/dom";
 import { log } from "@core/log";
-import { SITE, TEXT } from "@core/selectors";
+import { SITE, TEXT, SITE_CLASS } from "@core/selectors";
 import { isGameRoomPath } from "@shared/routes";
 import type { Feature, FeatureContext } from "@core/feature";
 
@@ -34,7 +34,7 @@ const norm = (text: string | null | undefined): string =>
 /** Кнопка выключена сайтом (выкрик уже потрачен, не твой момент). */
 function disabled(el: Element): boolean {
   return (
-    el.classList.contains("disabled") ||
+    el.classList.contains(SITE_CLASS.disabled) ||
     el.hasAttribute("disabled") ||
     el.getAttribute("aria-disabled") === "true"
   );

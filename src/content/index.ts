@@ -214,6 +214,11 @@ onSettingsChanged((patch) => {
 // в localStorage САЙТА у всех, кто ставил прежние версии.
 try {
   localStorage.removeItem(LEGACY_PROBE_FLAG_KEY);
+  // Ключи ПРЕЖНЕЙ версии расширения (twitch-панель до рефакторинга): они
+  // лежат в localStorage САЙТА у всех, кто ставил старую сборку, и ничем не
+  // читаются с 9.x. Разовая уборка — та же вежливость, что и строкой выше.
+  localStorage.removeItem("twitch-chat-position");
+  localStorage.removeItem("twitch-chat-size");
 } catch {
   /* приватный режим — чистить нечего */
 }

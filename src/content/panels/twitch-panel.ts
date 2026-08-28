@@ -587,6 +587,34 @@ class TwitchChatPanel extends FloatingPanel {
    * и держала общий DOM-наблюдатель насыщенным (аудит 01.08.2026, находка 3).
    * Полный renderMessages остаётся для смены prefs/инициализации/show().
    */
+  /** Кадр доскролла уже заказан — второй не нужен. */
+  private scrollFrame: number | null = null;
+
+  /**
+   * Доскроллить вниз СЛЕДУЮЩИМ кадром.
+   *
+   * Чтение `scrollHeight` сразу после вставки строки — принудительный
+   * пересчёт layout в том же такте, и на живом чате это 5-10 пересчётов в
+   * секунду поверх игровой страницы (внешний аудит 28.08.2026). Кадр отдаёт
+   * ту же картинку, но платит один раз за пачку сообщений.
+   */
+  /** Панель уходит — заказанный кадр не должен пережить её (§4 п.7). */
+  unmount(): void {
+    if (this.scrollFrame !== null) {
+      cancelAnimationFrame(this.scrollFrame);
+      this.scrollFrame = null;
+    }
+    super.unmount();
+  }
+
+  private scrollToBottomSoon(el: HTMLElement): void {
+    if (this.scrollFrame !== null) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = null;
+      if (el.isConnected && this.atBottom) el.scrollTop = el.scrollHeight;
+    });
+  }
+
   private appendLastMessage(): void {
     const el = this.messagesEl;
     const msg = this.messages[this.messages.length - 1];
@@ -603,7 +631,7 @@ class TwitchChatPanel extends FloatingPanel {
       Math.max(this.prefs.visibleCount, 1) + (this.atBottom ? 0 : this.unseen);
     const target = Math.min(this.messages.length, windowSize);
     while (el.childElementCount > target) el.firstElementChild?.remove();
-    if (this.atBottom) el.scrollTop = el.scrollHeight;
+    this.scrollToBottomSoon(el);
     this.updateNewBtn();
   }
 

@@ -10,6 +10,8 @@ const state = vi.hoisted(() => ({
   tagSaveOk: true,
   /** Сколько задач координатора выполняется ПРЯМО СЕЙЧАС. */
   inFlight: 0,
+  /** Промис, на котором «зависает» чтение (эмуляция усыплённого воркера). */
+  hang: null as Promise<void> | null,
   /** Зафиксировано ли наложение двух задач (доказательство разных очередей). */
   overlapped: false,
 }));
@@ -36,6 +38,7 @@ vi.mock("@core/notes-store", async (importOriginal) => {
       // больше одной, и обещание координатора не выполняется.
       state.inFlight++;
       if (state.inFlight > 1) state.overlapped = true;
+      if (state.hang) await state.hang;
       await new Promise((r) => setTimeout(r, 5));
       state.inFlight--;
       return state.readFailed
@@ -74,6 +77,7 @@ beforeEach(() => {
   state.tagSaveOk = true;
   state.inFlight = 0;
   state.overlapped = false;
+  state.hang = null;
 });
 
 describe("notes background coordinator", () => {
@@ -242,5 +246,29 @@ describe("палитра: очередь и отказы", () => {
     const res = await applyTagOps(["#abcdef"], []);
     expect(state.tags.length).toBe(100);
     expect(res.dropped, "о потере сказано вслух").toBe(1);
+  });
+});
+
+describe("очередь не висит вечно", () => {
+  test("зависшая задача отпускает очередь по таймауту, а не держит браузер", async () => {
+    // MV3 усыпляет воркер посреди storage-вызова. Без предела ожидания одна
+    // повисшая операция останавливала запись заметок во ВСЕХ вкладках — без
+    // тоста и без фолбэка (внешний аудит 28.08.2026).
+    vi.useFakeTimers();
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
+    let release: () => void = () => undefined;
+    state.hang = new Promise<void>((r) => {
+      release = r;
+    });
+    const hung = applyTagOps(["#00ff00"], []);
+    const after = applyNoteOps([{ key: "Аня", record: { text: "после", timestamp: 1 } }]);
+    // Ждём предел: задача обязана отвалиться сама.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await expect(hung).rejects.toThrow(/timeout/);
+    state.hang = null;
+    release();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(after, "следующая задача очереди прошла").resolves.toMatchObject({ ok: true });
+    vi.useRealTimers();
   });
 });

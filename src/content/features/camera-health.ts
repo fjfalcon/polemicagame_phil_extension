@@ -28,7 +28,7 @@ import { browser } from "@core/env";
 import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
 import { showToast } from "@core/toast";
-import { SITE, TEXT } from "@core/selectors";
+import { SITE, TEXT, SITE_CLASS } from "@core/selectors";
 import { isGameRoomPath } from "@shared/routes";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
@@ -186,7 +186,7 @@ class CameraHealth {
     if (this.settings.stream_lost_icon_enabled === false) return;
     for (const tile of Array.from(document.querySelectorAll<HTMLElement>(SITE.player))) {
       // Своя плитка: локальный поток от сети не зависит, метка на себе врала бы.
-      if (tile.classList.contains("my-player")) continue;
+      if (tile.classList.contains(SITE_CLASS.myPlayer)) continue;
       const video = tile.querySelector<HTMLVideoElement>(SITE.playerVideoEl);
       this.markTile(tile, video ? this.probeVideo(video) : null);
     }
@@ -284,7 +284,7 @@ class CameraHealth {
     const disabled = speaking || this.reconnecting;
     if (button.disabled !== disabled) {
       button.disabled = disabled;
-      button.classList.toggle("disabled", disabled);
+      button.classList.toggle(SITE_CLASS.disabled, disabled);
       button.style.opacity = disabled ? "0.5" : "1";
       button.title = speaking
         ? "Идёт твоя речь — переподключение спрячет твою камеру у всех"
@@ -330,7 +330,7 @@ class CameraHealth {
         button.className = "";
         const sibling = Array.from(host.children).find(
           (el): el is HTMLElement =>
-            el !== button && el instanceof HTMLElement && el.classList.contains("button"),
+            el !== button && el instanceof HTMLElement && el.classList.contains(SITE_CLASS.button),
         );
         const cs = sibling ? getComputedStyle(sibling) : null;
         const bg =

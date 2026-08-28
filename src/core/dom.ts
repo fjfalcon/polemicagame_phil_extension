@@ -56,6 +56,12 @@ const MAX_PENDING = 4000;
  * 250мс — незаметная для глаза задержка появления наших кнопок/цветов, но
  * в непрерывном потоке мутаций это в ~15 раз меньше работы.
  */
+/**
+ * Контейнеры расширения: плавающие панели и наши оверлеи. По ним сторож
+ * шторма отличает собственную работу от чужого цикла.
+ */
+const OWN_PANEL_SELECTOR = ".fp-panel, .polemica-note-modal, .pn-tooltip";
+
 const MIN_FLUSH_INTERVAL_MS = 250;
 
 /** Общий наблюдатель за всем документом с debounce и набором подписчиков. */
@@ -166,6 +172,34 @@ class SharedDomObserver {
    * запись» (класс блокера профильных карточек). Ловим его в ЖИВОМ логе,
    * а не только в тестовом харнесе.
    */
+  /**
+   * Батч состоит ТОЛЬКО из наших собственных записей.
+   *
+   * Сторож шторма ищет цикл «подписчик пишет — наблюдатель будит подписчика».
+   * Живой чат Twitch даёт непрерывный поток childList-мутаций в СВОЁЙ панели
+   * (сообщение раз в секунду — минута непрерывности), и сторож латчился на
+   * штатной работе, обесценивая себя ровно тогда, когда понадобится (внешний
+   * аудит 28.08.2026). Наши узлы узнаём по контейнеру с id/классом расширения.
+   */
+  private allOurs(batch: MutationRecord[]): boolean {
+    if (batch.length === 0) return false;
+    return batch.every((m) => {
+      const target = m.target as Element | null;
+      const el = target?.nodeType === 1 ? (target as Element) : target?.parentElement ?? null;
+      return !!el?.closest?.(OWN_PANEL_SELECTOR);
+    });
+  }
+
+  /** Жест пользователя: проходы отложены до его конца. */
+  private suspended = false;
+
+  setSuspended(value: boolean): void {
+    if (this.suspended === value) return;
+    this.suspended = value;
+    // Отпустили — разбираем накопленное сразу, не дожидаясь новой мутации.
+    if (!value && this.pending.length > 0) this.schedule();
+  }
+
   private trackStorm(startedAt: number, prevFlushAt: number): void {
     const gap = startedAt - prevFlushAt;
     // Отрицательный gap — прыжок часов (сон системы, тестовые часы): серию
@@ -192,10 +226,15 @@ class SharedDomObserver {
 
   private flush() {
     this.scheduled = false;
+    // Жест пользователя продолжается: батчи ждут. Ничего не теряем — записи
+    // копятся в pending и разберутся одним проходом после отпускания.
+    if (this.suspended) return;
     const prevFlushAt = this.lastFlushAt;
     this.lastFlushAt = performance.now();
-    this.trackStorm(this.lastFlushAt, prevFlushAt);
     const batch = this.pending;
+    // Собственные записи в свои же панели циклом не считаются.
+    if (!this.allOurs(batch)) this.trackStorm(this.lastFlushAt, prevFlushAt);
+    else this.busySince = 0;
     this.pending = [];
     if (this.dropped) {
       log.warn("dom", `dropped ${this.dropped} mutation records (buffer cap)`);
@@ -242,6 +281,24 @@ class SharedDomObserver {
 export const domObserver = new SharedDomObserver();
 
 /** Подписаться на изменения DOM через общий наблюдатель. */
+/**
+ * Пауза проходов подписчиков на время ЖЕСТА пользователя.
+ *
+ * Перетаскивание и ресайз панели пишут style покадрово, и общий наблюдатель
+ * будил ВСЕХ подписчиков четыре раза в секунду всё время жеста — до двадцати
+ * полных проходов на пятисекундное движение мышью (перф-аудит, подтверждено
+ * внешним ревью 28.08.2026). Пока человек держит панель, состав стола не
+ * меняется, и пересканировать его незачем: батчи копятся и разбираются одним
+ * проходом после отпускания.
+ *
+ * Гарантия: пауза снимается в `finish()` жеста, в том числе по
+ * pointercancel и при размонтировании панели — иначе подписчики замолчали бы
+ * навсегда.
+ */
+export function suspendDomPasses(suspended: boolean): void {
+  domObserver.setSuspended(suspended);
+}
+
 export function onDomChange(fn: DomSubscriber): () => void {
   return domObserver.subscribe(fn);
 }

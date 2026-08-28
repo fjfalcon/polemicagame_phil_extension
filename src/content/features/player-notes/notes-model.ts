@@ -82,8 +82,17 @@ export class NotesModel {
    * про sync врал с переезда 8.1.22 — внешний аудит 28.08.2026).
    */
   private tags: string[] = [];
-  /** Хранилище не прочиталось — запись заблокирована, чтобы не стереть данные. */
-  private readOnly = false;
+  /**
+   * Карта заметок прочиталась. Не прочиталась — запись заблокирована, чтобы
+   * пустая память не стёрла данные.
+   */
+  private notesHydrated = true;
+  /**
+   * Палитра прочиталась. ОТДЕЛЬНЫЙ флаг: приход заметок из соседней вкладки
+   * снимает блок с карты, но про палитру не доказывает ничего — а раньше
+   * один флаг отвечал за оба агрегата (внешний аудит 28.08.2026).
+   */
+  private tagsHydrated = true;
   /** Резолв «ник → ключ записи»: владелец карты владеет и её индексом. */
   readonly keys: NoteKeys;
 
@@ -109,8 +118,14 @@ export class NotesModel {
     return this.tags;
   }
 
+  /** Запись КАРТЫ ЗАМЕТОК заблокирована. */
   get isReadOnly(): boolean {
-    return this.readOnly;
+    return !this.notesHydrated;
+  }
+
+  /** Запись ПАЛИТРЫ заблокирована. */
+  get isPaletteReadOnly(): boolean {
+    return !this.tagsHydrated;
   }
 
   /**
@@ -120,7 +135,9 @@ export class NotesModel {
    */
   adoptExternalNotes(next: unknown): void {
     this.map = (next as NotesMap) || {};
-    this.readOnly = false;
+    // Валидная карта из другого контекста снимает блок ЗАМЕТОК. Палитру она
+    // не доказывает — её флаг снимает только приход палитры.
+    this.notesHydrated = true;
     this.keys.reset();
   }
 
@@ -128,7 +145,9 @@ export class NotesModel {
   adoptExternalTags(next: unknown): void {
     // Просеиваем поэлементно: значение цвета уезжает в style.cssText, а
     // прийти оно может из чужого контекста или со старой версии.
-    if (Array.isArray(next)) this.tags = next.filter(isSafeTag);
+    if (!Array.isArray(next)) return;
+    this.tags = next.filter(isSafeTag);
+    this.tagsHydrated = true;
   }
 
   /**
@@ -161,8 +180,9 @@ export class NotesModel {
     const { notes, customTags, loadFailed } = await loadNotesFromStore();
     this.map = notes;
     this.tags = customTags;
-    this.readOnly = loadFailed === true;
-    if (this.readOnly) {
+    this.notesHydrated = loadFailed !== true;
+    this.tagsHydrated = loadFailed !== true;
+    if (!this.notesHydrated) {
       log.warn("player-notes", "заметки не прочитались — запись заблокирована");
       // Сказать СРАЗУ, а не когда человек нажмёт «Сохранить» и получит отказ:
       // до этого момента он видит пустые заметки и думает, что они пропали
@@ -190,7 +210,7 @@ export class NotesModel {
    * чужие сохранённые цвета хуже.
    */
   private async commitTagOps(add: string[], remove: string[]): Promise<boolean> {
-    if (this.readOnly) return false;
+    if (!this.tagsHydrated) return false;
     if (add.length === 0 && remove.length === 0) return true;
     // Снимок памяти ДО оптимистичной правки: при отказе записи палитра
     // обязана вернуться к состоянию диска — ровно как карта заметок. Без
@@ -275,7 +295,7 @@ export class NotesModel {
    * Возвращает false, если запись не удалась — интерфейс обязан это показать.
    */
   async saveNotes(touchedKeys: string[]): Promise<boolean> {
-    if (this.readOnly) return false;
+    if (!this.notesHydrated) return false;
     const ops: NoteOp[] = touchedKeys.map((key) => ({
       key,
       // ownRecord, а не map[key]: у игрока с ником вроде «toString» индекс
@@ -325,7 +345,27 @@ export class NotesModel {
     // расширения, воркер недоступен). Пишем как раньше — не хуже прежнего
     // поведения, зато правка пользователя не теряется молча.
     log.warn("player-notes", "координатор недоступен — пишем карту напрямую");
-    const raw = fallbackMap ?? this.notes;
+    // База для записи — СВЕЖИЙ диск, а не снимок памяти. Палитра этот класс
+    // уже прошла, заметки оставались асимметрией: две вкладки в фолбэке
+    // затирали правки друг друга снимками (внешний аудит 28.08.2026).
+    // Если свежее состояние не читается — НЕ ПИШЕМ вовсе: перетереть чужое
+    // хуже, чем потерять одно действие.
+    let base = fallbackMap;
+    if (!base) {
+      const fresh = await loadNotesFromStore();
+      if (fresh.loadFailed) {
+        log.warn("player-notes", "фолбэк отменён: свежая карта не прочиталась");
+        return false;
+      }
+      base = fresh.notes;
+      // Свою правку доносим поверх свежей карты — иначе фолбэк запишет диск
+      // без того, ради чего вызывался.
+      for (const op of ops) {
+        if (op.record === null) delete base[op.key];
+        else base[op.key] = op.record as NoteRecord;
+      }
+    }
+    const raw = base;
     // Нормализуем ТОЛЬКО затронутые записи (ревью 27.08.2026): полная
     // нормализация карты резала ЧУЖУЮ давнюю длинную заметку при сохранении
     // совсем другой — правка одного игрока портила данные другого.

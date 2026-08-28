@@ -333,9 +333,14 @@ export const SITE = {
   statsCellTitle: ".cell.title",
   /** Ячейка с ником игрока в таблице разбора — якорь ссылки на профиль. */
   statsUsernameCell: ".cell.username",
+  /** Строка фазы в таблице разбора (её строим мы, имя общее). */
+  statsRowPhase: ".row[data-phase]",
   penaltyDots: ".penalty-dots",
   penaltyDot: ".penalty-dot",
   bestMoveDot: ".best-move-dot",
+  /** Тултипы наших пометок в таблице разбора (создаём мы, имена общие). */
+  bestMoveTooltip: ".best-move-tooltip",
+  penaltyTooltip: ".penalty-tooltip",
 } as const;
 
 /** Текстовые маркеры (сайт двуязычный). Используются для поиска кнопок/фаз по тексту. */
@@ -539,6 +544,40 @@ export const OWN = {
   matchPageStyle: "polemica-match-page-style",
 } as const;
 
+/**
+ * ИМЕНА классов сайта — для `classList.contains/add/remove`.
+ *
+ * Отдельно от SITE: там селекторы (с точкой), здесь голые имена. До
+ * 28.08.2026 это знание жило россыпью по восемнадцати местам и мимо реестра:
+ * страж селекторов его не видел, и при редизайне гейты отваливались бы
+ * молча, пока `SITE` выглядел бы исправленным (внешний аудит).
+ */
+export const SITE_CLASS = {
+  /** Плитка игрока и своя плитка. */
+  player: "player",
+  myPlayer: "my-player",
+  /** Плитка судьи — её нельзя размечать как игрока. */
+  judgePlayer: "judge-player",
+  /** Фаза игры: сайт вешает класс на body. */
+  night: "night",
+  day: "day",
+  /** Подстадия и «пауза после конца» в контролах. */
+  substage: "substage",
+  endedPause: "ended-pause",
+  /** Кликабельный див сайта и его же кнопка. */
+  cursorPointer: "cursor-pointer",
+  button: "button",
+  /** Кнопка сайта в недоступном состоянии. */
+  disabled: "disabled",
+  /** Контейнеры vue-scroll: по ним ищем прокручиваемого предка. */
+  vueScroll: "__vuescroll",
+  vueScrollPanel: "__panel",
+  vueScrollView: "__view",
+  /** Наши пометки в таблице разбора — имена общие, узлы создаём мы. */
+  bestMoveDot: "best-move-dot",
+  penaltyTooltip: "penalty-tooltip",
+} as const;
+
 /** Все классы наших элементов, которые надо удалять при выключении фичи. */
 export const OWN_BUTTON_SELECTOR =
   ".stats-button, .note-button, .last-games-button, .pn-crossover-button, " +
@@ -589,7 +628,7 @@ export function endedScreenVisible(): boolean {
   // "ended-pause"), но игра не закончилась и фаза не «день». Без этой
   // проверки ночная пауза — а с нашим же F8 они частые — уводила бы OBS на
   // дневную сцену и обратно (поймано ревью аудита устойчивости 01.08.2026).
-  return !el.classList.contains("ended-pause");
+  return !el.classList.contains(SITE_CLASS.endedPause);
 }
 
 /**

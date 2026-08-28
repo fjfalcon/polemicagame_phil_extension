@@ -10,7 +10,7 @@ import { browser } from "@core/env";
 import { onDomChange } from "@core/dom";
 import { log } from "@core/log";
 import { showToast } from "@core/toast";
-import { SITE } from "@core/selectors";
+import { SITE, SITE_CLASS } from "@core/selectors";
 import { createRoleSvg } from "../role-sprite";
 import type { Feature } from "@core/feature";
 
@@ -98,7 +98,7 @@ function resolveGameKey(): string | null {
   // Судья рендерится тем же компонентом .player (с классом .judge-player):
   // он не игрок — не должен ни получать метку, ни менять подпись состава.
   const names = Array.from(document.querySelectorAll(SITE.player))
-    .filter((p) => !p.classList.contains("judge-player"))
+    .filter((p) => !p.classList.contains(SITE_CLASS.judgePlayer))
     .map((p) => p.querySelector(SITE.playerName)?.textContent?.trim())
     .filter((n): n is string => !!n);
   if (names.length >= 4) return "l:" + names.slice().sort().join("|");
@@ -287,7 +287,7 @@ function openMenu(marker: HTMLElement, username: string): void {
 function ensureMarker(player: HTMLElement): void {
   // Судья — не игрок: метка «мой read» на нём бессмысленна (тот же компонент
   // .player, отличается классом .judge-player).
-  if (player.classList.contains("judge-player")) return;
+  if (player.classList.contains(SITE_CLASS.judgePlayer)) return;
   const username = usernameOf(player);
   if (!username) return;
   let marker = player.querySelector<HTMLElement>(`.${MARKER_CLASS}`);

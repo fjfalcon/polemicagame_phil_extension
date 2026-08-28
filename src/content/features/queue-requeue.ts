@@ -47,7 +47,7 @@
  * (visibilitychange, навигация), — это молчаливая смерть машины.
  */
 import { onDomChange, safeClick, isVisible } from "@core/dom";
-import { SITE, TEXT } from "@core/selectors";
+import { SITE, TEXT, SITE_CLASS } from "@core/selectors";
 import { isGameRoomPath, isSearchPath } from "@shared/routes";
 import { log } from "@core/log";
 import { showToast } from "@core/toast";
@@ -736,7 +736,7 @@ export function classifyIntentTarget(target: Element): "room-ready" | "search-ac
     return "room-ready";
   }
   const accept = target.closest(SITE.profileAccept);
-  if (accept && accept.classList.contains("cursor-pointer")) return "search-accept";
+  if (accept && accept.classList.contains(SITE_CLASS.cursorPointer)) return "search-accept";
   return null;
 }
 
@@ -866,7 +866,7 @@ function tick(): void {
     // и сборка лобби B уложились в один тик, cursor-pointer на месте — это
     // НОВОЕ, не принятое лобби, и accepted обязан сброситься. Иначе клик
     // «Играть» ушёл бы за игрока, который решил B не принимать (ревью №2).
-    accepted = !acceptEl.classList.contains("cursor-pointer");
+    accepted = !acceptEl.classList.contains(SITE_CLASS.cursorPointer);
     // Мост переживает ПЕРЕЗАГРУЗКУ: сайт на `on_stop_game_search` с причиной
     // game_not_accepted делает window.location.reload() (сверено с бандлом
     // game-search), и наши accepted/disappearedAt умирали вместе со страницей
