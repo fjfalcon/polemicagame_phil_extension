@@ -68,18 +68,20 @@ function makePort(
     toast: (m) => toasts.push(m),
     lookupId: (lower) => (lower === "аня" ? 42 : undefined),
   });
-  const port = {
+  const port: ModalPort = {
     model,
     toast: (m: string) => toasts.push(m),
     registerModal: () => undefined,
+    unregisterModal: () => undefined,
     closeOpenModal: () => undefined,
-    statsOf: () => undefined,
     resolvePlayerInput: async () => null,
     confirmRemoveCustomTag: () => true,
-    refreshTiles: () => undefined,
+    refreshColors: () => undefined,
+    refreshIndicators: () => undefined,
+    refreshTags: () => undefined,
     refreshPlayer: () => undefined,
     ...over,
-  } as ModalPort;
+  };
   return { port, model, toasts };
 }
 
