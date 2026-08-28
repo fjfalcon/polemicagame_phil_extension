@@ -170,7 +170,10 @@ describe("AGENTS §4 storage and data ownership", () => {
 describe("AGENTS §4 source safety", () => {
   test("§4.1/§4.2: feature scans never use querySelectorAll('*')", () => {
     const violations: string[] = [];
-    for (const file of sourceFiles("src/content/features/*.ts")) {
+    // ** и подпапки: после сегрегации player-notes (28.08.2026) диалоги и
+    // сторы живут в features/player-notes/*, и плоский glob перестал бы их
+    // видеть — инвариант ослаб бы молча ровно тогда, когда кода стало больше.
+    for (const file of sourceFiles("src/content/features/**/*.ts")) {
       const sf = parseTs(file);
       const visit = (node: ts.Node) => {
         if (
@@ -310,14 +313,14 @@ describe("settings, release and manifest consistency", () => {
 
   test("player-notes не растёт обратно: новая подсистема — новый модуль", () => {
     // Арх-ревью 28.08.2026: файл дорос до 4326 строк и держал сеть, кэши,
-    // резолв ключей, статистику, стили и весь UI сразу. Семь слоёв
-    // вынесены (4326 → 3176); потолок стоит
+    // резолв ключей, статистику, стили и весь UI сразу. Двенадцать модулей
+    // вынесено (4326 → 2381); потолок стоит
     // не ради красивой цифры, а чтобы следующая подсистема заводилась
     // отдельным модулем, а не «ещё одной тысячей строк здесь».
     //
     // Потолок можно ОПУСКАТЬ свободно. Поднимать — только осознанно, вместе
     // с объяснением, почему подсистема неотделима.
-    const CAP = 3200;
+    const CAP = 2400;
     const lines = read("src/content/features/player-notes.ts").split("\n").length;
     expect(
       lines,
@@ -564,10 +567,13 @@ describe("§4.7 lifecycle heuristic", () => {
       reason: "timeline row listeners are removed with nodes; timers are tracked in module sets",
     },
     "src/content/features/player-notes.ts": {
-      listeners: 36,
+      // 36 → 12 после сегрегации 28.08.2026: обработчики диалогов уехали в
+      // ./player-notes/note-modal и ./player-notes/nick-color-manager, и
+      // сканируются теперь там же (glob включает подпапки).
+      listeners: 12,
       timers: 1,
       reason:
-        "modal/button handlers are removed with owned nodes; toast removal is a harmless one-shot; " +
+        "button handlers are removed with owned nodes; toast removal is a harmless one-shot; " +
         "+2 (9.13.0) — hover-обработчики кнопки пересечений живут на её же узле, а таймер намерения гасится в mouseleave",
     },
     "src/content/features/postgame-search.ts": {
