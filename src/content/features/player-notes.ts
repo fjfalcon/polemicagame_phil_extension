@@ -49,6 +49,12 @@ import {
 } from "@core/polemica-api";
 import { NoteKeys } from "./player-notes/note-keys";
 import {
+  PlayerStatsStore,
+  STATS_TTL_MS,
+  unavailablePlayerStats,
+  type PlayerStatsEntry,
+} from "./player-notes/player-stats";
+import {
   BUTTON_CIRCLE_CSS,
   BUTTON_PLAIN_CSS,
   cssAttr,
@@ -84,31 +90,6 @@ import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings, ExtMessage, NoteOp, NotesResultMsg } from "@shared/types";
 
 // ───────────────────────── Типы данных API (any допустим) ─────────────────────────
-
-interface RoleWinrate {
-  winrate: string;
-}
-
-interface PlayerStatsEntry {
-  ratingUnavailable?: boolean;
-  fromRating?: boolean;
-  mmr: number | string;
-  totalGames: number | string;
-  id: number | string;
-  generalStats: {
-    gamesCount: number;
-    winsCount: number;
-    firstKilledCount: number;
-    killpercent: number;
-    winrate: string;
-  };
-  roleStats: {
-    civilian: RoleWinrate;
-    sheriff: RoleWinrate;
-    mafia: RoleWinrate;
-    godfather: RoleWinrate;
-  };
-}
 
 interface LastGameEntry {
   /** Номер матча: по нему добирается признак «первый убитый». */
@@ -151,8 +132,6 @@ const TAG_PRESETS: Array<{ css: string; name: string }> = [
 ];
 const VERSION = NOTES_VERSION;
 
-/** TTL кэшей статистики: за игровой вечер MMR меняется каждой игрой. */
-const STATS_TTL_MS = 5 * 60 * 1000;
 /**
  * Задержка намерения для ДОРОГИХ окон: сводка пересечений стоит двух историй,
  * а окно последних игр с «ПУ» — разбора каждой игры. Курсор, мазнувший по
@@ -166,8 +145,6 @@ const HOVER_INTENT_MS = 350;
  * себя не может. MMR за вечер скачет, число совместных игр — нет.
  */
 const CROSSOVER_TTL_MS = 30 * 60 * 1000;
-/** Пауза перед повторной попыткой после ошибки статистики (не долбим API). */
-const STATS_ERROR_BACKOFF_MS = 30 * 1000;
 /** TTL пустой истории игр: короче обычного, чтобы новые игры подтянулись. */
 const EMPTY_GAMES_TTL_MS = 60 * 1000;
 
@@ -231,29 +208,6 @@ export function pendingIdLookups(
     out.push(username);
   }
   return out;
-}
-
-function unavailablePlayerStats(): PlayerStatsEntry {
-  return {
-    ratingUnavailable: true,
-    fromRating: true,
-    mmr: "—",
-    totalGames: "—",
-    id: "—",
-    generalStats: {
-      gamesCount: 0,
-      winsCount: 0,
-      firstKilledCount: 0,
-      killpercent: 0,
-      winrate: "—",
-    },
-    roleStats: {
-      civilian: { winrate: "—" },
-      sheriff: { winrate: "—" },
-      mafia: { winrate: "—" },
-      godfather: { winrate: "—" },
-    },
-  };
 }
 
 /**
@@ -366,7 +320,29 @@ class PlayerNotesManager {
    */
   private readonly keys = new NoteKeys({
     notes: () => this.notes,
-    lookupId: (lower) => this.playerStats.get(lower)?.id ?? this.profileIdByNick.get(lower),
+    lookupId: (lower) => this.stats.idOf(lower) ?? this.profileIdByNick.get(lower),
+  });
+  /**
+   * Статистика игроков: сеть, кэш и сборка цифр. Обратно фича получает ровно
+   * один сигнал — «данные игрока приехали».
+   */
+  private readonly stats = new PlayerStatsStore({
+    isActive: () => this.active,
+    isEnabled: () => this.settings.statistics_enabled !== false,
+    onLoaded: (username) => {
+      // userId резолвлен — самое время лениво перевезти заметку с ник-ключа
+      // на вечный id-ключ (смена ника больше не теряет заметку).
+      const resolvedId = this.keys.userId(username);
+      if (resolvedId !== undefined) {
+        this.migrateNoteToId(username, resolvedId).catch((e) =>
+          log.error("player-notes", "note migration failed", e),
+        );
+      }
+      // Обновляем ВСЕ отрисованные тултипы этого игрока: сайт рендерит одного
+      // игрока в двух плитках (десктоп/мобайл), а querySelector обновлял
+      // только первую — вторая навсегда оставалась с заглушками «???».
+      this.updatePlayerTooltips(username);
+    },
   });
   /**
    * Полный проход по плиткам сейчас падает (латч, а не счётчик строк).
@@ -380,11 +356,9 @@ class PlayerNotesManager {
   private notes: NotesMap = {};
   /** Пользовательские цвета меток (палитра), хранятся в storage.sync. */
   private customTags: string[] = [];
-  /** Кэш статистики по нику (lowercase) — не дёргаем API повторно на hover. */
-  private playerStats = new Map<string, PlayerStatsEntry>();
   /**
    * id игроков, известные ПОМИМО статистики (страница профиля: id из URL).
-   * Отдельная карта, а не фейковая запись в playerStats: та несёт mmr/winrate,
+   * Отдельная карта, а не фейковая запись в статистике: та несёт mmr/winrate,
    * и заглушка с нулями отравила бы тултипы/инлайн-статистику.
    */
   private profileIdByNick = new Map<string, string>();
@@ -398,18 +372,7 @@ class PlayerNotesManager {
   private idResolveFailedAt = 0;
   /** Кэш последних игр по нику (lowercase). */
   private lastGamesCache = new Map<string, LastGameEntry[]>();
-  /**
-   * Время загрузки кэша по нику. Раньше кэши жили до F5: MMR и винрейт в
-   * тултипе замораживались с первого наведения на весь игровой вечер.
-   */
-  private statsFetchedAt = new Map<string, number>();
-  /** Последняя проверка /api/games для записей, найденных только через рейтинг. */
-  private activeGameCheckedAt = new Map<string, number>();
   private gamesFetchedAt = new Map<string, number>();
-  /** Ники, по которым запрос уже в полёте (пересборка плитки не дублирует его). */
-  private statsInFlight = new Set<string>();
-  /** Время последней ошибки загрузки статистики по нику (для бэкоффа). */
-  private statsErrorAt = new Map<string, number>();
   /** Запросы истории игр в полёте (дедупликация одновременных hover'ов). */
   private lastGamesInFlight = new Map<string, Promise<LastGameEntry[]>>();
   /**
@@ -697,7 +660,7 @@ class PlayerNotesManager {
       document.body.removeAttribute("data-page-type");
     }
 
-    this.playerStats.clear();
+    this.stats.reset();
     this.lastGamesCache.clear();
     this.lastGamesInFlight.clear();
     this.crossoverCache.clear();
@@ -705,7 +668,7 @@ class PlayerNotesManager {
     this.lastGamesProgress.clear();
     this.warmBusy = false;
     this.warmStopped = false;
-    this.statsErrorAt.clear();
+    this.stats.clearErrorBackoff();
     this.portaledTooltips.clear();
     for (const t of this.toasts) t.remove();
     this.toasts.clear();
@@ -1421,159 +1384,14 @@ class PlayerNotesManager {
     this.applyParticipantColors();
   }
 
-  // ─────────── Загрузка статистики (с кэшем) ───────────
+  // ─────────── Статистика игрока ───────────
+  //
+  // Загрузка, кэш и сборка цифр живут в ./player-notes/player-stats: этот
+  // кластер владел пятью картами состояния, которые не нужны больше никому,
+  // а сами ЧИСЛА про человека теперь проверяются без живого стола.
 
-  private async loadPlayerStats(username: string): Promise<void> {
-    if (!this.active || this.settings.statistics_enabled === false) return;
-    const key = username.toLowerCase();
-    const fetchedAt = this.statsFetchedAt.get(key) ?? 0;
-    const cached = this.playerStats.get(key);
-    const now = Date.now();
-    const needsActiveRecheck =
-      cached?.fromRating === true &&
-      now - (this.activeGameCheckedAt.get(key) ?? 0) >= ACTIVE_GAMES_TTL_MS;
-    if (cached && now - fetchedAt < STATS_TTL_MS && !needsActiveRecheck) return;
-    if (this.statsInFlight.has(key)) return; // запрос уже в полёте
-    // Бэкофф после ошибки: без него каждый повторный hover заново гнал три
-    // профильных запроса по игроку с падающим API (аудит 01.08.2026).
-    if (now - (this.statsErrorAt.get(key) ?? 0) < STATS_ERROR_BACKOFF_MS) return;
-    this.statsInFlight.add(key);
-
-    try {
-      let games: any[] = [];
-      try {
-        games = await fetchActiveGames();
-      } catch (e) {
-        log.warn("player-notes", "active games lookup failed, using rating", e);
-      }
-
-      let player: any = null;
-      for (const game of games) {
-        const found = game.players?.find(
-          (p: any) => p.username?.toLowerCase() === key,
-        );
-        if (found) {
-          player = found;
-          break;
-        }
-      }
-
-      let userId: number | string;
-      let mmr: number | string = "—";
-      if (player) {
-        userId = player.id;
-        mmr = player.mmr ?? "—";
-      } else {
-        this.activeGameCheckedAt.set(key, Date.now());
-        if (cached?.fromRating && Date.now() - fetchedAt < STATS_TTL_MS) return;
-        log.debug("player-notes", `player ${username} not found in active games, using rating`);
-        const ratingPlayer = await findRatingPlayer(username);
-        if (!ratingPlayer) {
-          if (!this.active) return;
-          this.playerStats.set(key, unavailablePlayerStats());
-          this.statsFetchedAt.set(key, Date.now());
-          this.updatePlayerTooltips(username);
-          return;
-        }
-        userId = ratingPlayer.user_id;
-      }
-
-      // ok-чек и таймаут: раньше не-2xx молча парсился, а зависший запрос
-      // висел вечно (аудит 01.08.2026, находка 4).
-      const getJson = (url: string) =>
-        fetch(url, { signal: AbortSignal.timeout(15_000) }).then((r) => {
-          if (!r.ok) throw new Error(`stats API ${r.status}`);
-          return r.json();
-        });
-      const [generalStats, roleStats, killcount]: [any[], any, any[]] = await Promise.all([
-        getJson(
-          `https://polemicagame.com/profile/default/get-role-statistic?user_id=${userId}&role=&game_type=league&scoring_type=scoring_2%2Cscoring_3`,
-        ),
-        getJson(
-          `https://polemicagame.com/profile/default/get-statistic?user_id=${userId}&game_type=league&scoring_type=scoring_2%2Cscoring_3`,
-        ),
-        getJson(
-          `https://polemicagame.com/profile/default/get-role-statistic?user_id=${userId}&role=civilian%2Csheriff&game_type=league&scoring_type=scoring_2%2Cscoring_3`,
-        ),
-      ]);
-
-      const generalData = generalStats[0] || {};
-      const killcounter = killcount[0] || {};
-
-      const calculateWinrate = (wins: unknown, total: unknown): string => {
-        const w = Number(wins) || 0;
-        const t = Number(total) || 0;
-        if (t === 0) return "0.0";
-        return ((w / t) * 100).toFixed(1);
-      };
-
-      const entry: PlayerStatsEntry = {
-        fromRating: !player,
-        mmr,
-        totalGames: Number(generalData.games_count) || "?",
-        id: userId,
-        generalStats: {
-          gamesCount: Number(generalData.games_count) || 0,
-          winsCount: Number(generalData.wins_count) || 0,
-          firstKilledCount: Number(killcounter.first_killed_count) || 0,
-          killpercent:
-            Number(
-              Math.trunc((killcounter.first_killed_count / killcounter.games_count) * 100),
-            ) || 0,
-          winrate: calculateWinrate(generalData.wins_count, generalData.games_count),
-        },
-        roleStats: {
-          civilian: {
-            winrate: calculateWinrate(
-              roleStats.civilian?.wins_count,
-              roleStats.civilian?.games_count,
-            ),
-          },
-          sheriff: {
-            winrate: calculateWinrate(
-              roleStats.sheriff?.wins_count,
-              roleStats.sheriff?.games_count,
-            ),
-          },
-          mafia: {
-            winrate: calculateWinrate(
-              roleStats.mafia?.wins_count,
-              roleStats.mafia?.games_count,
-            ),
-          },
-          godfather: {
-            winrate: calculateWinrate(
-              roleStats.godfather?.wins_count,
-              roleStats.godfather?.games_count,
-            ),
-          },
-        },
-      };
-
-      if (!this.active) return;
-      this.playerStats.set(key, entry);
-      this.statsFetchedAt.set(key, Date.now());
-      if (player) this.activeGameCheckedAt.delete(key);
-
-      // userId резолвлен — самое время лениво перевезти заметку с ник-ключа
-      // на вечный id-ключ (смена ника больше не теряет заметку).
-      const resolvedId = this.noteUserId(username);
-      if (resolvedId !== undefined) {
-        this.migrateNoteToId(username, resolvedId).catch((e) =>
-          log.error("player-notes", "note migration failed", e),
-        );
-      }
-
-      // Обновляем ВСЕ отрисованные тултипы этого игрока: сайт рендерит одного
-      // игрока в двух плитках (десктоп/мобайл), а querySelector обновлял
-      // только первую — вторая навсегда оставалась с заглушками «???».
-      this.updatePlayerTooltips(username);
-    } catch (e) {
-      this.statsErrorAt.set(key, Date.now());
-      log.error("player-notes", `loadPlayerStats failed for ${redactNick(username)}`, e);
-    } finally {
-      this.statsInFlight.delete(key);
-    }
+  private loadPlayerStats(username: string): Promise<void> {
+    return this.stats.load(username);
   }
 
   // ─────────── Тема кнопок ───────────
@@ -1617,7 +1435,7 @@ class PlayerNotesManager {
   // ─────────── Тултипы ───────────
 
   private generateTooltipContent(username: string): string {
-    const stats: PlayerStatsEntry = this.playerStats.get(username.toLowerCase()) || {
+    const stats: PlayerStatsEntry = this.stats.get(username) || {
       mmr: "???",
       totalGames: "?",
       id: "?",
@@ -1822,7 +1640,7 @@ class PlayerNotesManager {
 
     statsButton.addEventListener("click", async (e) => {
       e.stopPropagation();
-      const stats = this.playerStats.get(username.toLowerCase());
+      const stats = this.stats.get(username);
       if (stats && !stats.ratingUnavailable && stats.id) {
         window.open(`https://polemicagame.com/profile/${stats.id}`, "_blank");
         return;
@@ -3321,7 +3139,7 @@ class PlayerNotesManager {
    * пустого ответа, который читается как «у игрока ничего нет».
    */
   private async resolveUserId(username: string, key: string): Promise<number | string> {
-    const stats = this.playerStats.get(key);
+    const stats = this.stats.get(key);
     if (stats && !stats.ratingUnavailable && stats.id) return stats.id;
     const fromNote = this.noteUserId(username);
     if (fromNote !== undefined) return fromNote;

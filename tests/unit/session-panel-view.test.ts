@@ -84,12 +84,19 @@ async function start(games = 3): Promise<void> {
 }
 
 beforeEach(() => {
+  // Фиксируем ТОЛЬКО Date: таймеры и rAF настоящие (панель их использует).
+  // Без этого тест был миной: «Мой вечер» режет сессию по границе 04:00, и
+  // прогон в 04:05 выбрасывал игры «восемь минут назад» из вечера — сюита
+  // краснела раз в сутки по часам раннера (поймано 28.08.2026).
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 7, 27, 22, 0, 0));
   localStorage.clear();
   document.body.innerHTML = "";
 });
 afterEach(() => {
   sessionStatsFeature.disable();
   localStorage.clear();
+  vi.useRealTimers();
 });
 
 describe("«Мой вечер»: настройки вида", () => {
