@@ -66,6 +66,28 @@ export const SITE = {
   siteModalsWide: ".modal, .v--modal-overlay, .vm--overlay, .basemodal",
   /** Стадии игры и заголовок конца — область слежения за фазой. */
   phaseScope: ".stage, .substage, .ended__title",
+  /** Правый блок контролов — сюда садится кнопка «Обновить камеры». */
+  controlsRight: ".controls .right",
+  /** Иконка внутри кнопки сайта: по её src различаем кнопки без текста. */
+  buttonIconImg: "img.button__icon",
+  /** Корни меню сайта (настройки игры, дропдауны) — где ищем пункты. */
+  siteMenuRoots: '.base-menu, .game-room__settings, [role="menu"], .dropdown-menu',
+  /** Пункт меню сайта. */
+  siteMenuItem: '.base-menu__item, [role="menuitem"], .button, li',
+  /** Меню, внутри которого допустимы resume-слова (шире, для pause-hotkey). */
+  siteMenuWide:
+    '.game-room__settings, .base-menu, .base-menu__list, .base-menu__content, .dropdown-menu, .context-menu, [role="menu"], [class*="menu"]',
+  /** Меню, которое считаем «нашим» после открытия. */
+  siteMenuOwning:
+    '.game-room__settings, .base-menu, .dropdown-menu, .context-menu, [role="menu"]',
+  /** Область настроек/паузы: только здесь принимаем слово «продолжить». */
+  siteSettingsScope: '.game-room__settings, [class*="settings"], [class*="pause"]',
+  /** Ник и аватар на странице профиля. */
+  profileNickname: ".profileinfo__main-info-username",
+  profileAvatarImg: "img.profileinfo__main-info-avatar",
+  /** Список участников (лобби/итоги): строка и ник внутри неё. */
+  participantsItem: ".participants-item",
+  participantsName: ".participants-name",
   /** Номер матча на странице игры (role-marker). */
   gameIdBlock: ".game-info-block .game-id, .game-info-block__section.game-id",
   /** Правая колонка профиля и её вкладки — точка вставки наших карточек. */

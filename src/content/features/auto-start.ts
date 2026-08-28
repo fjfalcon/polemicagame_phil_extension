@@ -1160,7 +1160,7 @@ const NON_CAMERA_ICON_HASHES = [
 ];
 
 function iconSrcOf(el: HTMLElement): string {
-  return el.querySelector<HTMLImageElement>("img.button__icon")?.getAttribute("src") || "";
+  return el.querySelector<HTMLImageElement>(SITE.buttonIconImg)?.getAttribute("src") || "";
 }
 
 /**

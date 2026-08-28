@@ -46,10 +46,8 @@ const RESUME_EXACT = new Set([
 const GAME_CONTROLS_SELECTOR = SITE.gameControlsScope;
 const CLICKABLE_SELECTOR =
   'button, [role="button"], [role="menuitem"], li, a, div.button, .button, .button-comp, .base-menu__item';
-const MENU_SELECTOR =
-  '.game-room__settings, .base-menu, .base-menu__list, .base-menu__content, .dropdown-menu, .context-menu, [role="menu"], [class*="menu"]';
-const OWNING_MENU_SELECTOR =
-  '.game-room__settings, .base-menu, .dropdown-menu, .context-menu, [role="menu"]';
+const MENU_SELECTOR = SITE.siteMenuWide;
+const OWNING_MENU_SELECTOR = SITE.siteMenuOwning;
 
 interface OpenedMenu {
   opener: Element;
@@ -79,7 +77,7 @@ class PauseHotkey {
   }
 
   private iconHref(node: Element | null): string {
-    const img = node?.querySelector?.("img.button__icon") as HTMLImageElement | null;
+    const img = node?.querySelector?.(SITE.buttonIconImg) as HTMLImageElement | null;
     const use = node?.querySelector?.("use");
     return norm(
       img?.getAttribute?.("src") ||
@@ -134,7 +132,7 @@ class PauseHotkey {
 
   /** Resume-слова принимаем только в меню настроек игры или в меню, открытом нами. */
   private resumeAllowedFor(candidate: Element): boolean {
-    if (candidate.closest('.game-room__settings, [class*="settings"], [class*="pause"]')) {
+    if (candidate.closest(SITE.siteSettingsScope)) {
       return true;
     }
     // Игровые контролы: «Завершить»/«Продолжить игру» рендерятся там, и без

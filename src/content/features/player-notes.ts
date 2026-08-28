@@ -818,7 +818,7 @@ class PlayerNotesManager {
     const m = location.pathname.match(/^\/profile\/(\d+)/);
     if (!m) return;
     const id = m[1];
-    const nickEl = document.querySelector<HTMLElement>(".profileinfo__main-info-username");
+    const nickEl = document.querySelector<HTMLElement>(SITE.profileNickname);
     const nick = nickEl?.textContent?.trim() || "";
     if (!nickEl || !nick) return;
 
@@ -828,7 +828,7 @@ class PlayerNotesManager {
     paintNickEl(nickEl, this.colorForPlayer(id, nick), nick);
 
     // Рамка метки вокруг аватара.
-    const avatar = document.querySelector<HTMLElement>("img.profileinfo__main-info-avatar");
+    const avatar = document.querySelector<HTMLElement>(SITE.profileAvatarImg);
     const avatarBox = avatar?.parentElement instanceof HTMLElement ? avatar.parentElement : null;
     if (avatar && avatarBox) this.applyProfileTagRing(avatarBox, avatar, nick);
 
@@ -959,10 +959,10 @@ class PlayerNotesManager {
    * ника. Идемпотентность обеспечивает paintNickEl.
    */
   private applyParticipantColors(): void {
-    const items = document.querySelectorAll<HTMLAnchorElement>(".participants-item");
+    const items = document.querySelectorAll<HTMLAnchorElement>(SITE.participantsItem);
     if (items.length === 0) return;
     items.forEach((item) => {
-      const nameWrap = item.querySelector<HTMLElement>(".participants-name");
+      const nameWrap = item.querySelector<HTMLElement>(SITE.participantsName);
       if (!nameWrap) return;
       // Ник — в первом span контейнера (рядом лежат иконки twitch/подписки).
       const el = nameWrap.querySelector<HTMLElement>("span") || nameWrap;

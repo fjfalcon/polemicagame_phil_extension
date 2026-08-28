@@ -55,7 +55,7 @@ export function styleText(): string {
  * (тот же урок, что у перф-аудита 06.08.2026). Меню закрыто почти всегда, и
  * дешёвая проверка «а есть ли оно вообще» экономит весь обход.
  */
-const MENU_ROOTS = '.base-menu, .game-room__settings, [role="menu"], .dropdown-menu';
+const MENU_ROOTS = SITE.siteMenuRoots;
 
 /** Пункт «Пауза» в открытом меню настроек. null — меню закрыто. */
 export function findPauseItem(root: ParentNode = document): HTMLElement | null {
@@ -64,7 +64,7 @@ export function findPauseItem(root: ParentNode = document): HTMLElement | null {
   );
   if (menus.length === 0) return null;
   const items = menus.flatMap((menu) =>
-    Array.from(menu.querySelectorAll<HTMLElement>('.base-menu__item, [role="menuitem"], .button, li')),
+    Array.from(menu.querySelectorAll<HTMLElement>(SITE.siteMenuItem)),
   );
   return (
     items.find((item) => {

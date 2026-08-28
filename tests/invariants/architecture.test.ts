@@ -85,29 +85,56 @@ function findObject(relative: string, name: string): ts.ObjectLiteralExpression 
 
 describe("AGENTS §4 storage and data ownership", () => {
   test("§4.3: direct whole-map saveNotes calls stay in the coordinator or reviewed fallbacks", () => {
+    // Разбор ДЕРЕВА, а не текста. У этого правила уже дважды оказывалось, что
+    // регулярка видит не то: сначала она считала строку ИНТЕРФЕЙСА за
+    // писателя, потом не видела настоящего писателя через внедрённую
+    // зависимость (adversarial 28.08.2026). AST различает вызов и объявление
+    // по построению, и ему всё равно, как записан вызов.
+    //
+    // Прямой писатель ВСЕЙ карты — это два пути:
+    //   1) вызов функции, импортированной из @core/notes-store (под любым
+    //      именем: обычно `saveNotes as saveNotesToStore`);
+    //   2) вызов через ВНЕДРЁННУЮ зависимость — `deps.saveNotes(map)`.
+    // Метод модели (`this.model.saveNotes`, `port.model.saveNotes`) под
+    // правило не подпадает: он пишет ПОИМЁННО через координатора.
     const directCalls: string[] = [];
     for (const file of sourceFiles()) {
       if (file === "src/core/notes-store.ts") continue;
-      const source = read(file);
-      // Прямой писатель ВСЕЙ карты — это два конкретных пути: импорт
-      // saveNotes из @core/notes-store (обычно под именем saveNotesToStore) и
-      // вызов через внедрённую зависимость (deps.saveNotes) в фолбэке
-      // импорта. Прежняя регулярка не видела ни второго (лишний lookbehind
-      // резал `deps.`), ни разницы между вызовом и ОБЪЯВЛЕНИЕМ — квота
-      // держалась за строку интерфейса (adversarial 28.08.2026).
-      //
-      // Метод модели `saveNotes(keys)` под правило не подпадает: он пишет
-      // ПОИМЁННО через координатора, а не карту целиком.
-      for (const match of source.matchAll(
-        /(?<![.\w])(?:saveNotesToStore|deps\.saveNotes|saveNotes)\s*\(/g,
-      )) {
-        const line = source.split("\n")[lineOf(source, match.index) - 1];
-        if (/\bimport\b|\bas saveNotesToStore\b/.test(line)) continue;
-        // ОБЪЯВЛЕНИЕ метода/члена интерфейса — не запись (признак: аннотация
-        // возвращаемого типа на той же строке).
-        if (/^\s*(async\s+)?saveNotes\s*\([^)]*\)\s*:\s*Promise/.test(line)) continue;
-        directCalls.push(file);
+      const sf = parseTs(file);
+
+      // Локальные имена, под которыми импортирован saveNotes из хранилища.
+      const storeAliases = new Set<string>();
+      for (const st of sf.statements) {
+        if (
+          !ts.isImportDeclaration(st) ||
+          !ts.isStringLiteral(st.moduleSpecifier) ||
+          !st.moduleSpecifier.text.includes("notes-store")
+        ) {
+          continue;
+        }
+        const named = st.importClause?.namedBindings;
+        if (!named || !ts.isNamedImports(named)) continue;
+        for (const el of named.elements) {
+          if ((el.propertyName ?? el.name).text === "saveNotes") storeAliases.add(el.name.text);
+        }
       }
+
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          const direct = ts.isIdentifier(callee) && storeAliases.has(callee.text);
+          // Получатель — простой идентификатор (deps), а не цепочка
+          // (this.model / port.model): такой вызов идёт мимо владельца карты.
+          const injected =
+            ts.isPropertyAccessExpression(callee) &&
+            callee.name.text === "saveNotes" &&
+            ts.isIdentifier(callee.expression) &&
+            callee.expression.text !== "this";
+          if (direct || injected) directCalls.push(file);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
     }
 
     // Файл + КОЛИЧЕСТВО, а не file:line: пин на номера строк ломался от любой
@@ -336,33 +363,78 @@ describe("settings, release and manifest consistency", () => {
 
   test("селекторы сайта живут ТОЛЬКО в selectors.ts", () => {
     // Обещание selectors.ts: «при редизайне polemicagame.com правится ТОЛЬКО
-    // этот файл». Арх-ревью 28.08.2026 показало, что обещание стало
-    // пожеланием — сырые классы сайта расползлись по девяти файлам. Правило
-    // без стража живёт ровно до следующей спешки, поэтому оно исполняемое.
+    // этот файл». Правило исполняемое — но два раза оказывалось, что страж
+    // видит меньше, чем обещает: сначала мимо шли классы в КОНСТАНТАХ, потом
+    // (арх-ревью 28.08.2026) — дженерик-вызовы `querySelectorAll<HTMLElement>(".x")`,
+    // потому что `<HTMLElement>` стоит между именем метода и скобкой.
+    //
+    // Поэтому здесь БОЛЬШЕ НЕ РЕГУЛЯРКА, а разбор синтаксического дерева:
+    // `qs(".x")`, `qs<T>(".x")`, `el?.qs<T>(\n  ".x")` — для TypeScript это
+    // один и тот же CallExpression, и латать regex под каждую форму записи
+    // означало бы гоняться за синтаксисом вместо смысла.
     //
     // Разрешено: НАША собственная разметка (префиксы pn-/fp-/ss-/twitch-/
-    // polemica-, data-pn-*), теги, атрибуты и #app — это не знание о вёрстке
-    // сайта, а наше собственное.
-    const OURS =
-      /^[\s\S]*(pn-|polemica-|fp-|ss-|twitch-|obs-|scene-item|data-pn|#app|#tag-|#note-)/;
-    // Два источника: аргумент запроса И строковая КОНСТАНТА с классами сайта
-    // (`const X = ".modal, .v--modal-overlay"`). Прежняя регулярка видела
-    // только первый, и пять таких констант жили мимо правила при обещании
-    // «правится ТОЛЬКО selectors.ts» (adversarial 28.08.2026).
-    const CALL = /(?:querySelector|querySelectorAll|closest|matches)\(\s*"([^"]+)"/g;
-    const CONST_SEL = /^\s*(?:const|let|readonly)?\s*[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*"(\.[^"]+)"/gm;
+    // polemica-/obs-, data-pn-*, #app) — это не знание о вёрстке чужого сайта.
+    const QUERY_METHODS = new Set(["querySelector", "querySelectorAll", "closest", "matches"]);
+    const OURS = /(pn-|polemica-|fp-|ss-|twitch-|obs-|scene-item|data-pn|#app|#tag-|#note-|#pn)/;
+    /**
+     * НАША разметка с общими именами классов. Это не поблажка правилу:
+     * перечисленные узлы создаёт сам код расширения, и при редизайне сайта
+     * они не меняются. Список поимённый и короткий — новый пункт требует
+     * такого же объяснения.
+     */
+    const OWN_MARKUP: Record<string, string[]> = {
+      // Таблица разбора матча строится match-stats.ts (className "row"/"cell").
+      "src/content/features/match-stats.ts": [".row[data-phase]", ".cell:not(.title)"],
+      // Наш тултип намеренно повторяет имена классов сайта ради единого вида;
+      // запрос ограничен нашим же .enhanced-tooltip (см. комментарий в файле).
+      "src/content/features/tooltip.ts": [".player-name"],
+    };
     const offenders: string[] = [];
+
     for (const file of sourceFiles("src/**/*.ts")) {
       if (file === "src/core/selectors.ts") continue;
-      const source = read(file);
-      for (const m of [...source.matchAll(CALL), ...source.matchAll(CONST_SEL)]) {
-        const selector = m[1];
-        // Классы сайта — это литералы с точкой, которых нет в нашем префиксе.
-        if (!selector.includes(".")) continue;
-        if (OURS.test(selector)) continue;
-        offenders.push(`${file}:${lineOf(source, m.index ?? 0)} → ${selector}`);
-      }
+      // Попап — НАШ документ (src/static/popup.html), а не страница сайта.
+      if (file.startsWith("src/popup/")) continue;
+      const sf = parseTs(file);
+      const report = (node: ts.Node, selector: string): void => {
+        // Классы сайта — литералы с точкой, которых нет в нашем префиксе.
+        if (!selector.includes(".")) return;
+        if (OURS.test(selector)) return;
+        if (OWN_MARKUP[file]?.includes(selector)) return;
+        const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+        offenders.push(`${file}:${line + 1} → ${selector}`);
+      };
+      const visit = (node: ts.Node): void => {
+        // 1) Вызов запроса к DOM — в любой форме записи.
+        if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          const name = ts.isPropertyAccessExpression(callee)
+            ? callee.name.text
+            : ts.isIdentifier(callee)
+              ? callee.text
+              : "";
+          const arg = node.arguments[0];
+          if (QUERY_METHODS.has(name) && arg && ts.isStringLiteral(arg)) {
+            report(arg, arg.text);
+          }
+        }
+        // 2) Строковая КОНСТАНТА-селектор: `const SCOPE = ".player, .info"`.
+        //    Такие живут вдали от места использования, и при редизайне их не
+        //    находит ни поиск по querySelector, ни глаз.
+        if (
+          ts.isVariableDeclaration(node) &&
+          node.initializer &&
+          ts.isStringLiteral(node.initializer) &&
+          node.initializer.text.trimStart().startsWith(".")
+        ) {
+          report(node.initializer, node.initializer.text);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
     }
+
     expect(
       offenders,
       "селектор сайта вне selectors.ts: при редизайне его никто не найдёт — заведи ключ в SITE",

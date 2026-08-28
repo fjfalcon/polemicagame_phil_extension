@@ -89,7 +89,7 @@ export function tileLabel(tile: HTMLElement): string {
   const seat = tile.querySelector(SITE.playerNumber)?.textContent?.trim();
   if (seat && /^\d{1,2}$/.test(seat)) return `место ${seat}`;
   // Фолбэк — индекс по ЕДИНОМУ списку .player (не по двум разным).
-  const i = Array.from(document.querySelectorAll<HTMLElement>(".player")).indexOf(tile);
+  const i = Array.from(document.querySelectorAll<HTMLElement>(SITE.player)).indexOf(tile);
   return i >= 0 ? `плитка ${i + 1}` : "плитка ?";
 }
 
@@ -324,7 +324,7 @@ class CameraHealth {
    * из room/bundle/style.css (#464952, скругление 1rem).
    */
   private placeButton(button: HTMLButtonElement): void {
-    const host = document.querySelector<HTMLElement>(".controls .right");
+    const host = document.querySelector<HTMLElement>(SITE.controlsRight);
     if (host) {
       if (button.parentElement !== host) {
         button.className = "";
