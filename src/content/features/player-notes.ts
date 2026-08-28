@@ -57,7 +57,8 @@ import {
   MUTED_PLAYERS_KEY,
   TileMediaState,
 } from "./player-notes/tile-media-state";
-import { NoteKeys } from "./player-notes/note-keys";
+import { NotesModel } from "./player-notes/notes-model";
+import { normalizeTouched } from "./player-notes/normalize-touched";
 import {
   PlayerStatsStore,
   STATS_TTL_MS,
@@ -170,6 +171,8 @@ export function pendingIdLookups(
  * перекрывается» именно через эту фичу, и точка импорта — часть их смысла.
  */
 export { fetchActiveGames, resetActiveGamesCacheForTest };
+/** Нормализация затронутых записей уехала в ./player-notes/normalize-touched. */
+export { normalizeTouched };
 /** Разбор перевёрнутых камер уехал в ./player-notes/flipped-players. */
 export { parseFlippedPlayers };
 /** Стили уехали в ./player-notes/styles; cssAttr сторожат тесты по этому пути. */
@@ -274,10 +277,6 @@ class PlayerNotesManager {
    * Резолв «ник → ключ записи». Карту заметок и резолв id даёт менеджер:
    * слой ключей не знает ни про сеть, ни про DOM, ни про настройки.
    */
-  private readonly keys = new NoteKeys({
-    notes: () => this.notes,
-    lookupId: (lower) => this.stats.idOf(lower) ?? this.profileIdByNick.get(lower),
-  });
   /**
    * Статистика игроков: сеть, кэш и сборка цифр. Обратно фича получает ровно
    * один сигнал — «данные игрока приехали».
@@ -309,7 +308,7 @@ class PlayerNotesManager {
     onLoaded: (username) => {
       // userId резолвлен — самое время лениво перевезти заметку с ник-ключа
       // на вечный id-ключ (смена ника больше не теряет заметку).
-      const resolvedId = this.keys.userId(username);
+      const resolvedId = this.model.keys.userId(username);
       if (resolvedId !== undefined) {
         this.migrateNoteToId(username, resolvedId).catch((e) =>
           log.error("player-notes", "note migration failed", e),
@@ -330,9 +329,30 @@ class PlayerNotesManager {
   private passFailed = false;
   private active = true;
 
-  private notes: NotesMap = {};
-  /** Пользовательские цвета меток (палитра), хранятся в storage.sync. */
-  private customTags: string[] = [];
+  /**
+   * Данные заметок: карта, палитра, очередь записи и правила сохранения.
+   * Фича их только читает и заказывает перерисовку — владелец отдельный.
+   */
+  private readonly model = new NotesModel({
+    isActive: () => this.active,
+    onColorsChanged: () => this.refreshNickColors(),
+    onIndicatorsChanged: () => this.refreshNoteIndicators(),
+    onTagsChanged: () => this.refreshPlayerTags(),
+    onTooltipsChanged: () => this.updateAllTooltips(),
+    onPlayerTooltips: (username) => this.updatePlayerTooltips(username),
+    toast: (message, warn) => this.toast(message, warn),
+    lookupId: (lower) => this.stats.idOf(lower) ?? this.profileIdByNick.get(lower),
+  });
+
+  /** Карта заметок — только для чтения; пишет модель. */
+  private get notes(): NotesMap {
+    return this.model.notes;
+  }
+
+  /** Палитра пользовательских цветов — только для чтения. */
+  private get customTags(): string[] {
+    return this.model.customTags;
+  }
   /**
    * id игроков, известные ПОМИМО статистики (страница профиля: id из URL).
    * Отдельная карта, а не фейковая запись в статистике: та несёт mmr/winrate,
@@ -500,7 +520,7 @@ class PlayerNotesManager {
       // Палитра меток тоже общая — раньше её изменения из другой вкладки терялись.
       if (changes[TAGS_KEY]) {
         const next = changes[TAGS_KEY].newValue;
-        if (Array.isArray(next)) this.customTags = next as string[];
+        this.model.adoptExternalTags(next);
       }
       // Мьюты общие между вкладками: без этой ветки вкладка со старым Set
       // затирала бы чужие мьюты при первом же своём клике (пишется весь список).
@@ -508,10 +528,7 @@ class PlayerNotesManager {
         this.tileMedia.adoptExternalMuted(changes[MUTED_PLAYERS_KEY].newValue);
       }
       if (!changes[NOTES_KEY]) return;
-      this.notes = (changes[NOTES_KEY].newValue as NotesMap) || {};
-      // Пришла валидная карта из другого контекста — безопасная точка
-      // восстановления после сбоя чтения: блок записей можно снять.
-      this.notesReadOnly = false;
+      this.model.adoptExternalNotes(changes[NOTES_KEY].newValue);
       this.refreshNoteIndicators();
       this.refreshPlayerTags();
       this.refreshNickColors();
@@ -613,7 +630,7 @@ class PlayerNotesManager {
     this.profileIdByNick.clear();
     this.idResolveAttempted.clear();
     this.idResolveFailedAt = 0;
-    this.keys.reset();
+    this.model.keys.reset();
     this.colorIndexCache = null;
     // Мьют персистентный, но при выключенной фиче звук обязан вернуться:
     // расширение «ничего не делает», когда его выключили (§4 п.7).
@@ -664,142 +681,59 @@ class PlayerNotesManager {
    */
   private notesWriteQueue: Promise<unknown> = Promise.resolve();
 
-  private enqueueNotesWrite<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.notesWriteQueue.then(task, task);
-    this.notesWriteQueue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  }
 
-  private async loadNotes(): Promise<void> {
-    const { notes, customTags, loadFailed } = await loadNotesFromStore();
-    this.notes = notes;
-    this.customTags = customTags;
-    this.notesReadOnly = loadFailed === true;
-    if (this.notesReadOnly) {
-      log.warn("player-notes", "заметки не прочитались — запись заблокирована");
-      // Сказать СРАЗУ, а не когда человек нажмёт «Сохранить» и получит отказ:
-      // до этого момента он видит пустые заметки и думает, что они пропали
-      // (аудит наблюдаемости 02.08.2026, раздел «Ответ пользователю»).
-      showToast(
-        "Заметки не загрузились — данные НЕ удалены, но сохранение временно заблокировано",
-        { key: "notes-read-only", kind: "warn", durationMs: 8000 },
-      );
-    }
-    log.debug("player-notes", "notes loaded", Object.keys(this.notes).length);
-  }
 
-  private async saveCustomTags(): Promise<boolean> {
-    // Та же дыра «пишем непрочитанное», что у заметок: при упавшем loadNotes
-    // палитра в памяти пуста, и запись стёрла бы пользовательские цвета.
-    if (this.notesReadOnly) return false;
-    // Слияние со свежей палитрой с диска — по той же причине, что у мьютов:
-    // две вкладки писали массив целиком и теряли цвета друг друга.
-    try {
-      const cur = (await browser.storage.local.get({ [TAGS_KEY]: [] })) as Record<string, unknown>;
-      const disk = Array.isArray(cur[TAGS_KEY]) ? (cur[TAGS_KEY] as string[]) : [];
-      const merged = [
-        ...new Set([...disk.filter((t) => !this.removedTagsThisSession.has(t)), ...this.customTags]),
-      ];
-      this.customTags = merged;
-      return await saveCustomTagsToStore(merged);
-    } catch (e) {
-      log.warn("player-notes", "custom tags merge failed", e);
-      return await saveCustomTagsToStore(this.customTags);
-    }
-  }
 
-  /**
-   * Сохранить ЗАТРОНУТЫЕ ключи через координатор в background.
-   *
-   * Вызывающий уже мутировал this.notes (мгновенный UI) и передаёт список
-   * ключей, которые он менял. Раньше сюда уходила ВСЯ карта, и вторая
-   * вкладка, писавшая другого игрока в те же секунды, затирала правку
-   * (аудит lifecycle 01.08.2026, находка 2 — КРИТИЧНО). Теперь запись
-   * выполняет background: одна очередь на браузер, свежая карта читается
-   * непосредственно перед применением.
-   *
-   * Возвращает false, если запись не удалась — интерфейс обязан это показать.
-   */
-  private async saveNotes(touchedKeys: string[]): Promise<boolean> {
-    if (this.notesReadOnly) return false;
-    const ops: NoteOp[] = touchedKeys.map((key) => ({
-      key,
-      record: (this.notes[key] as unknown) ?? null,
-    }));
-    return await this.commitNoteOps(ops);
-  }
 
-  /**
-   * Отправка операций координатору с честным фолбэком.
-   *
-   * fallbackMap обязателен там, где результат собран НЕ в this.notes, а в
-   * отдельной карте (ленивая миграция читает свежую карту с диска): без него
-   * фолбэк записал бы устаревший снимок памяти — то есть ровно ту потерю
-   * чужих правок, от которой защищались (ревью пакета B, находка 1).
-   */
-  private async commitNoteOps(ops: NoteOp[], fallbackMap?: NotesMap): Promise<boolean> {
-    if (!ops.length) return true;
-    try {
-      const res = await sendRuntime<NotesResultMsg>({ type: "notes_apply_ops", ops });
-      if (res && typeof res.ok === "boolean") {
-        // Координатор возвращает свежую карту — подхватываем её целиком,
-        // чтобы память вкладки сразу видела и чужие правки.
-        if (res.ok && res.notes) this.notes = res.notes as NotesMap;
-        // «Записалось» и «записалось ЦЕЛИКОМ» — разные утверждения: галочка
-        // «Сохранено ✓» поверх обрезанного текста и была молчаливой потерей
-        // (ревью 27.08.2026).
-        if (res.ok && (typeof res.truncated !== "number" || typeof res.skipped !== "number")) {
-          // Контракт требует счётчики при успехе. Их отсутствие означает
-          // ответ чужой/старой версии — записать могли неполно, и молчать
-          // об этом нельзя (ревью 27.08.2026).
-          log.warn("player-notes", "координатор ответил успехом без счётчиков — полнота не подтверждена");
-        }
-        // Только при УСПЕХЕ: при отказе записи «сохранена не полностью»
-        // врало бы в другую сторону — будто часть текста уцелела
-        // (adversarial 27.08.2026).
-        if (res.ok) this.warnOnLossyWrite(res);
-        return res.ok;
-      }
-    } catch (e) {
-      log.debug("player-notes", "notes coordinator unavailable", e);
-    }
-    // Фолбэк: background не ответил (старая вкладка после обновления
-    // расширения, воркер недоступен). Пишем как раньше — не хуже прежнего
-    // поведения, зато правка пользователя не теряется молча.
-    log.warn("player-notes", "координатор недоступен — пишем карту напрямую");
-    const raw = fallbackMap ?? this.notes;
-    // Нормализуем ТОЛЬКО затронутые записи (ревью 27.08.2026): полная
-    // нормализация карты резала ЧУЖУЮ давнюю длинную заметку при сохранении
-    // совсем другой — правка одного игрока портила данные другого.
-    const { map, truncated, skipped } = normalizeTouched(
-      raw,
-      ops.map((o) => o.key),
-    );
-    const ok = await saveNotesToStore(map);
-    if (ok) {
-      this.notes = map;
-      this.warnOnLossyWrite({ truncated, skipped });
-    }
-    return ok;
-  }
 
-  /** Сказать вслух, если запись прошла НЕ целиком (обрезка/выброс). */
-  private warnOnLossyWrite(res: { truncated?: number; skipped?: number }): void {
-    const cut = res.truncated ?? 0;
-    const lost = res.skipped ?? 0;
-    if (cut === 0 && lost === 0) return;
-    const parts = [
-      cut > 0 ? `обрезано по длине: ${cut}` : "",
-      lost > 0 ? `не сохранено записей: ${lost}` : "",
-    ].filter(Boolean);
-    log.warn("player-notes", "запись заметок прошла не целиком —", parts.join(", "));
-    showToast(`Заметка сохранена не полностью (${parts.join(", ")})`);
-  }
 
   /** userId игрока, если статистика его уже резолвила (иначе undefined). */
+  // ─────── Заметки: делегаты к ./player-notes/notes-model ───────
+  //
+  // Данные, очередь записи и правила сохранения живут в модели. Здесь —
+  // тонкие делегаты: мест вызова десятки, и переписывать их все значило бы
+  // рисковать поведением ради косметики.
+
+  private enqueueNotesWrite<T>(task: () => Promise<T>): Promise<T> {
+    return this.model.enqueue(task);
+  }
+
+  private loadNotes(): Promise<void> {
+    return this.model.load();
+  }
+
+  private saveNotes(touchedKeys: string[]): Promise<boolean> {
+    return this.model.saveNotes(touchedKeys);
+  }
+
+  private saveCustomTags(): Promise<boolean> {
+    return this.model.saveCustomTags();
+  }
+
+  private removeCustomTag(css: string): void {
+    this.model.removeCustomTag(css);
+  }
+
+  private setNickColor(key: string, color: string, createNick?: string): Promise<boolean> {
+    return this.model.setNickColor(key, color, createNick);
+  }
+
+  private setNoteTextFor(key: string, text: string, createNick?: string): Promise<boolean> {
+    return this.model.setNoteText(key, text, createNick);
+  }
+
+  private deleteNoteEntry(key: string): Promise<boolean> {
+    return this.model.deleteEntry(key);
+  }
+
+  private migrateNoteToId(username: string, userId: number | string): Promise<void> {
+    return this.model.migrateToId(username, userId);
+  }
+
+  private playerEntries(): ReturnType<NotesModel["playerEntries"]> {
+    return this.model.playerEntries();
+  }
+
   // ─────── Резолв ключа заметки (./player-notes/note-keys) ───────
   //
   // Сам слой живёт отдельным модулем и проверяется без DOM: ошибка здесь
@@ -807,139 +741,46 @@ class PlayerNotesManager {
   // делегаты, чтобы места вызова читались как раньше.
 
   private noteUserId(username: string): number | string | undefined {
-    return this.keys.userId(username);
+    return this.model.keys.userId(username);
   }
 
   private noteKeyFor(username: string): string {
-    return this.keys.keyFor(username);
+    return this.model.keys.keyFor(username);
   }
 
   private getNote(username: string): NoteRecord | string | undefined {
-    return this.keys.get(username);
+    return this.model.keys.get(username);
   }
 
   private getNoteText(username: string): string {
-    return this.keys.text(username);
+    return this.model.keys.text(username);
   }
 
   private getFormerNicks(username: string): string[] {
-    return this.keys.formerNicks(username);
+    return this.model.keys.formerNicks(username);
   }
 
   private getNoteTag(username: string): string {
-    return this.keys.tag(username);
+    return this.model.keys.tag(username);
   }
 
   /** Сохранённый цвет ника (без учёта настройки — для диалогов). */
   private getRawNickColor(username: string): string {
-    return this.keys.rawNickColor(username);
+    return this.model.keys.rawNickColor(username);
   }
 
   /** Цвет ника для отрисовки: пустая строка, если фича выключена. */
   private getNickColor(username: string): string {
     if (this.settings.nick_colors_enabled === false) return "";
-    return this.keys.rawNickColor(username);
+    return this.model.keys.rawNickColor(username);
   }
 
   /** Все легаси-ключи-ники этого игрока (точный + отличающиеся регистром). */
   private nickKeysFor(username: string): string[] {
-    return this.keys.nickKeys(username);
+    return this.model.keys.nickKeys(username);
   }
 
-  /**
-   * Ленивая миграция ник → id: вызывается, когда статистика резолвила userId.
-   * «Vasya» и «vasya» сливаются в одну запись (побеждает более свежая),
-   * ник сохраняется внутри записи для экспорта и отображения.
-   */
-  private migrateNoteToId(username: string, userId: number | string): Promise<void> {
-    if (this.nickKeysFor(username).length === 0) return Promise.resolve();
-    return this.enqueueNotesWrite(() => this.doMigrateNoteToId(username, userId));
-  }
 
-  private async doMigrateNoteToId(username: string, userId: number | string): Promise<void> {
-    const key = idKey(userId);
-
-    // Миграция — АВТОМАТИЧЕСКИЙ писатель всей карты (срабатывает без действий
-    // пользователя). Работаем со СВЕЖЕЙ картой с диска, а не со снапшотом
-    // памяти: иначе вкладка со старой памятью затирала бы заметку, только что
-    // сохранённую в другой вкладке (окно RMW сжимается с «минут» до мс).
-    const { notes: fresh, loadFailed } = await loadNotesFromStore();
-    if (loadFailed || !this.active) return;
-
-    const lower = username.toLowerCase();
-    const freshNickKeys = Object.keys(fresh).filter(
-      (k) => !isIdKey(k) && k.toLowerCase() === lower,
-    );
-    if (freshNickKeys.length === 0) return;
-
-    const ts = (n: NoteRecord | string | undefined) =>
-      n && typeof n !== "string" && typeof n.timestamp === "number" ? n.timestamp : 0;
-    const toRecord = (n: NoteRecord | string): NoteRecord =>
-      typeof n === "string" ? { text: n, timestamp: 0 } : n;
-
-    // toRecord, а не typeof-проверка: строковая (легаси) запись под u:-ключом
-    // игнорировалась, ник-запись побеждала «по умолчанию» и затирала её текст
-    // без участия пользователя. Такие записи есть у реальных пользователей —
-    // прежние версии миграции клали строку под id-ключ (аудит безопасности
-    // 01.08.2026, находка 12; поймано ревью применения).
-    let best: NoteRecord | undefined =
-      fresh[key] !== undefined ? toRecord(fresh[key]) : undefined;
-    // Текст легаси-СТРОКИ под id-ключом: у неё ts=0, поэтому любая ник-запись
-    // с настоящим временем побеждает её по времени. Такой текст нельзя терять
-    // молча — ниже он дописывается в победителя наравне с ничьёй.
-    const idLegacyText = typeof fresh[key] === "string" ? (fresh[key] as string) : "";
-    const losers: NoteRecord[] = [];
-    for (const nk of freshNickKeys) {
-      const record = toRecord(fresh[nk]);
-      if (!best) {
-        best = record;
-      } else if (ts(record) > ts(best)) {
-        losers.push(best);
-        best = record;
-      } else {
-        losers.push(record);
-      }
-    }
-    if (!best) return;
-
-    // Ничья по времени (обе легаси, ts=0) с РАЗНЫМ текстом — не уничтожаем
-    // проигравший текст молча, а дописываем его в запись.
-    const winner: NoteRecord = { ...best };
-    for (const loser of losers) {
-      if (
-        loser.text &&
-        loser.text !== winner.text &&
-        (ts(loser) === ts(winner) || loser.text === idLegacyText)
-      ) {
-        winner.text = winner.text ? `${winner.text}\n[слито: ${loser.text}]` : loser.text;
-      }
-      // Цвет и метка наследуются БЕЗУСЛОВНО (непустое побеждает пустое):
-      // свежая запись без цвета почти всегда означает «заметку сохранили,
-      // пока цвет жил в другой записи этого же игрока», а не «цвет сняли».
-      // Раньше слияние молча теряло цвет навсегда (жалоба 31.07.2026:
-      // «~50 из 200 раскрашенных ников стали белыми»).
-      if (!winner.tag && loser.tag) winner.tag = loser.tag;
-      if (!winner.nickColor && loser.nickColor) winner.nickColor = loser.nickColor;
-    }
-
-    fresh[key] = { ...winner, ...withNickHistory(winner, username) };
-    for (const nk of freshNickKeys) delete fresh[nk];
-
-    const migrationOps: NoteOp[] = [
-      { key, record: fresh[key] as unknown },
-      ...freshNickKeys.map((nk) => ({ key: nk, record: null })),
-    ];
-    // fresh как карта фолбэка: она собрана из СВЕЖЕГО чтения диска, в
-    // отличие от this.notes. Память обновит сам commitNoteOps — картой от
-    // координатора или fresh (при фолбэке).
-    if (await this.commitNoteOps(migrationOps, fresh)) {
-      log.debug("player-notes", "note migrated to id key", username, key);
-      this.refreshNoteIndicators();
-      this.refreshPlayerTags();
-      this.updatePlayerTooltips(username);
-    }
-    // При неудаче записи память не трогаем вовсе — this.notes как была.
-  }
 
   /** Подсветить плитку игрока меткой (цвет или градиент) через overlay-рамку. */
   private applyPlayerTag(container: HTMLElement, username: string): void {
@@ -1244,7 +1085,7 @@ class PlayerNotesManager {
         if (!this.active) return;
         if (resolved) {
           // Индексы построены на старом составе — иначе цвет по id не найдётся.
-          this.keys.reset();
+          this.model.keys.reset();
           this.colorIndexCache = null;
           this.refreshNickColors();
           this.refreshNoteIndicators();
@@ -2313,49 +2154,6 @@ class PlayerNotesManager {
 
   // ─────────── Менеджер цветов ников ───────────
 
-  /**
-   * Записать цвет ника в запись заметки (или снять его). Пустой цвет у записи
-   * без текста и метки удаляет запись целиком — не копим пустышки.
-   *
-   * @param createNick передан — записи можно НЕ существовать: она создаётся
-   *   пустой с этим ником (ручное добавление игрока в менеджере).
-   */
-  private setNickColor(key: string, color: string, createNick?: string): Promise<boolean> {
-    return this.enqueueNotesWrite(async (): Promise<boolean> => {
-      const prev = this.notes[key];
-      if (prev === undefined) {
-        // Без createNick несуществующий ключ — гонка с удалением в другой
-        // вкладке: молча выходим, воскрешать запись нельзя.
-        if (!color || createNick === undefined) return true;
-        if (!isSafeNoteKey(key)) return false;
-        this.notes[key] = {
-          text: "",
-          timestamp: Date.now(),
-          version: VERSION,
-          nickColor: color,
-          // Ник храним только у id-ключей (у ник-ключей он и есть ключ).
-          ...(isIdKey(key) ? withNickHistory(this.notes[key], createNick) : {}),
-        };
-      } else if (typeof prev === "string") {
-        // Легаси-строка: повышаем до записи, текст сохраняем.
-        if (!color) return true;
-        this.notes[key] = { text: prev, timestamp: Date.now(), version: VERSION, nickColor: color };
-      } else {
-        const next: NoteRecord = { ...prev, timestamp: Date.now(), nickColor: color || undefined };
-        if (!color && !next.text && !next.tag) delete this.notes[key];
-        else this.notes[key] = next;
-      }
-      if (!(await this.saveNotes([key]))) {
-        // Откат памяти под состояние диска.
-        if (prev === undefined) delete this.notes[key];
-        else this.notes[key] = prev;
-        return false;
-      }
-      this.refreshNickColors();
-      this.refreshNoteIndicators();
-      return true;
-    });
-  }
 
   /**
    * Резолв ручного ввода «ник или id» в ключ записи.
@@ -2439,101 +2237,9 @@ class PlayerNotesManager {
     return window.confirm(`Удалить свой цвет из палитры?${tail}`);
   }
 
-  /** Убрать свой цвет из палитры (сама палитра — это customTags). */
-  private removeCustomTag(css: string): void {
-    this.customTags = this.customTags.filter((c) => c !== css);
-    this.removedTagsThisSession.add(css);
-    void this.saveCustomTags().then((ok) => {
-      if (!ok) this.toast("Не удалось сохранить палитру — цвет вернётся после перезагрузки", true);
-    });
-  }
 
-  /**
-   * Записать текст заметки по ключу (правка из менеджера). Пустой текст у
-   * записи без цвета и метки удаляет её целиком — не копим пустышки.
-   */
-  private setNoteTextFor(key: string, text: string, createNick?: string): Promise<boolean> {
-    return this.enqueueNotesWrite(async (): Promise<boolean> => {
-      const prev = this.notes[key];
-      if (prev === undefined) {
-        // Записи нет: создаём только при явном намерении (добавление игрока
-        // через форму). Иначе это гонка с удалением в другой вкладке —
-        // воскрешать запись нельзя.
-        if (!text || createNick === undefined) return true;
-        if (!isSafeNoteKey(key)) return false;
-        this.notes[key] = {
-          text,
-          timestamp: Date.now(),
-          version: VERSION,
-          ...(isIdKey(key) ? { nick: createNick } : {}),
-        };
-        if (!(await this.saveNotes([key]))) {
-          delete this.notes[key];
-          return false;
-        }
-        this.refreshNoteIndicators();
-        this.updateAllTooltips();
-        return true;
-      }
-      const base: NoteRecord =
-        typeof prev === "string" ? { text: prev, timestamp: Date.now(), version: VERSION } : prev;
-      const next: NoteRecord = { ...base, text, timestamp: Date.now(), version: VERSION };
-      if (!text && !next.tag && !next.nickColor) delete this.notes[key];
-      else this.notes[key] = next;
 
-      if (!(await this.saveNotes([key]))) {
-        this.notes[key] = prev; // откат памяти под состояние диска
-        return false;
-      }
-      this.refreshNoteIndicators();
-      this.updateAllTooltips();
-      return true;
-    });
-  }
 
-  /** Удалить запись игрока целиком (и заметку, и цвет, и метку). */
-  private deleteNoteEntry(key: string): Promise<boolean> {
-    return this.enqueueNotesWrite(async (): Promise<boolean> => {
-      const prev = this.notes[key];
-      if (prev === undefined) return true;
-      delete this.notes[key];
-      if (!(await this.saveNotes([key]))) {
-        this.notes[key] = prev;
-        return false;
-      }
-      this.refreshNickColors();
-      this.refreshNoteIndicators();
-      this.refreshPlayerTags();
-      this.updateAllTooltips();
-      return true;
-    });
-  }
-
-  /**
-   * Все известные игроки: и с цветом ника, и просто с заметкой.
-   * Раньше список показывал ТОЛЬКО цветных — заметки правились лишь на
-   * плитке в игре, то есть до нужного игрока надо было ещё дожить.
-   */
-  private playerEntries(): Array<{
-    key: string;
-    nick: string;
-    id: string;
-    color: string;
-    text: string;
-  }> {
-    return Object.entries(this.notes)
-      .filter(([, rec]) => (typeof rec === "string" ? !!rec : !!(rec.nickColor || rec.text)))
-      .map(([key, rec]) => ({
-        key,
-        nick:
-          (typeof rec !== "string" && rec.nick) ||
-          (isIdKey(key) ? `игрок ${key.slice(ID_KEY_PREFIX.length)}` : key),
-        id: isIdKey(key) ? key.slice(ID_KEY_PREFIX.length) : "",
-        color: typeof rec === "string" ? "" : rec.nickColor || "",
-        text: typeof rec === "string" ? rec : rec.text || "",
-      }))
-      .sort((a, b) => a.nick.localeCompare(b.nick, "ru"));
-  }
 
   /**
    * Диалог «Цвета ников»: все сохранённые цвета одним списком — ник, id,
@@ -3451,34 +3157,6 @@ let manager: PlayerNotesManager | null = null;
 /** Вызывается единым URL-роутером content/index.ts. */
 export function syncPlayerNotesRoute(isMatch: boolean): void {
   manager?.syncMatchPageRoute(isMatch);
-}
-
-/**
- * Нормализация ТОЛЬКО затронутых записей для аварийной прямой записи
- * (ревью 27.08.2026). Экспорт — тестовый шов: тест обязан гонять ЭТУ
- * функцию, а не свою копию алгоритма.
- */
-export function normalizeTouched(
-  raw: NotesMap,
-  keys: string[],
-): { map: NotesMap; truncated: number; skipped: number } {
-  const map: NotesMap = { ...raw };
-  let truncated = 0;
-  let skipped = 0;
-  for (const key of new Set(keys)) {
-    const note = map[key];
-    if (note === undefined) continue;
-    const safe = normalizeNoteRecord(note, MAX_OWN_NOTE_TEXT);
-    if (!safe) {
-      delete map[key];
-      skipped++;
-      continue;
-    }
-    const original = typeof note === "string" ? note : (note as { text?: unknown })?.text;
-    if (typeof original === "string" && original.length > safe.text.length) truncated++;
-    map[key] = safe;
-  }
-  return { map, truncated, skipped };
 }
 
 export const playerNotesFeature: Feature = {

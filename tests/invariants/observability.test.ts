@@ -174,7 +174,9 @@ describe("честный ответ пользователю (раздел «О�
   test.each([
     ["метка ролей: только чтение", "src/content/features/role-marker.ts", /showToast\(/],
     ["подмена роли не сработала", "src/content/features/role-faker.ts", /showToast\(/],
-    ["заметки не загрузились", "src/content/features/player-notes.ts", /showToast\(/],
+    // Данные заметок переехали в модель (арх-ревью 28.08.2026) — вместе с
+    // разговором про непрочитанное хранилище.
+    ["заметки не загрузились", "src/content/features/player-notes/notes-model.ts", /showToast\(/],
   ])("%s — человеку говорят вслух", (_name, file, pattern) => {
     // Лог отвечает на вопрос «что случилось» ПОТОМ; но в этих трёх случаях
     // человек прямо сейчас видит успех, которого не было.

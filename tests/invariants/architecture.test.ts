@@ -92,6 +92,12 @@ describe("AGENTS §4 storage and data ownership", () => {
       for (const match of source.matchAll(/(?<![.\w])(saveNotes|saveNotesToStore)\s*\(/g)) {
         const line = source.split("\n")[lineOf(source, match.index) - 1];
         if (/\b(private|public|protected)\b/.test(line)) continue;
+        // ОБЪЯВЛЕНИЕ, а не вызов: публичный метод модели заметок и член
+        // интерфейса в import-fallback выглядят как вызов для регулярки, но
+        // записи не делают. Признак — аннотация возвращаемого типа
+        // (арх-ревью 28.08.2026: до этого инвариант считал строку
+        // интерфейса за «прямого писателя» и держал под неё квоту).
+        if (/^\s*(async\s+)?saveNotes\s*\([^)]*\)\s*:\s*Promise/.test(line)) continue;
         directCalls.push(file);
       }
     }
@@ -107,11 +113,11 @@ describe("AGENTS §4 storage and data ownership", () => {
     const allowed = {
       "src/background/notes-coordinator.ts": 2,
       // Reviewed compatibility fallback for a stale live content realm after update.
-      "src/content/features/player-notes.ts": 1,
-      // Reviewed popup import fallback when the background coordinator has no receiver.
-      // Фолбэк импорта вынесен в тестируемый модуль (9.36.0) — тот же
-      // reviewed-путь, та же единственная запись.
-      "src/popup/import-fallback.ts": 1,
+      // Данные заметок живут в модели (арх-ревью 28.08.2026) — фолбэк уехал с ними.
+      "src/content/features/player-notes/notes-model.ts": 1,
+      // Фолбэк импорта пишет карту ЧЕРЕЗ ВНЕДРЁННУЮ зависимость
+      // (deps.saveNotes) — прямым писателем он не является и под этот
+      // счётчик не попадает; его путь закрыт своими тестами.
     };
     expect(counted, "§4.3: new whole-map writer bypasses the single background queue").toEqual(allowed);
   });
@@ -304,14 +310,14 @@ describe("settings, release and manifest consistency", () => {
 
   test("player-notes не растёт обратно: новая подсистема — новый модуль", () => {
     // Арх-ревью 28.08.2026: файл дорос до 4326 строк и держал сеть, кэши,
-    // резолв ключей, статистику, стили и весь UI сразу. Шесть слоёв
-    // вынесены (4326 → 3498); потолок стоит
+    // резолв ключей, статистику, стили и весь UI сразу. Семь слоёв
+    // вынесены (4326 → 3176); потолок стоит
     // не ради красивой цифры, а чтобы следующая подсистема заводилась
     // отдельным модулем, а не «ещё одной тысячей строк здесь».
     //
     // Потолок можно ОПУСКАТЬ свободно. Поднимать — только осознанно, вместе
     // с объяснением, почему подсистема неотделима.
-    const CAP = 3520;
+    const CAP = 3200;
     const lines = read("src/content/features/player-notes.ts").split("\n").length;
     expect(
       lines,
