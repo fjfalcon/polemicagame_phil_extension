@@ -12,6 +12,7 @@
  * График — инлайновый SVG (никакого canvas/скриптов в мире страницы).
  */
 import { onDomChange } from "@core/dom";
+import { SITE } from "@core/selectors";
 import { log } from "@core/log";
 import { getOwnHistory, type GameRow } from "@core/crossover";
 import { getOwnUserId } from "@core/own-user";
@@ -176,13 +177,13 @@ function apply(): void {
     removeBlock();
     return;
   }
-  const host = document.querySelector(".profile__right");
+  const host = document.querySelector(SITE.profileRight);
   if (!host) return;
   const existing = host.querySelector<HTMLElement>(`.${CHART_CLASS}`);
   if (existing && existing.dataset.pnFor === routeId) return;
   removeBlock();
   const block = buildBlock(routeId);
-  const tabs = host.querySelector(".profile__right-tabs");
+  const tabs = host.querySelector(SITE.profileRightTabs);
   if (tabs) host.insertBefore(block, tabs);
   else host.appendChild(block);
   void fillBlock(routeId, block);

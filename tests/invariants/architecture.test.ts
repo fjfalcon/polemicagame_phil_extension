@@ -302,6 +302,52 @@ describe("settings, release and manifest consistency", () => {
     expect(defaults, "§4.12: a setting without a default changes upgrade behavior unpredictably").toEqual(settings);
   });
 
+  test("player-notes не растёт обратно: новая подсистема — новый модуль", () => {
+    // Арх-ревью 28.08.2026: файл дорос до 4326 строк и держал сеть, кэши,
+    // резолв ключей, стили и весь UI сразу. Три слоя вынесены; потолок стоит
+    // не ради красивой цифры, а чтобы следующая подсистема заводилась
+    // отдельным модулем, а не «ещё одной тысячей строк здесь».
+    //
+    // Потолок можно ОПУСКАТЬ свободно. Поднимать — только осознанно, вместе
+    // с объяснением, почему подсистема неотделима.
+    const CAP = 4150;
+    const lines = read("src/content/features/player-notes.ts").split("\n").length;
+    expect(
+      lines,
+      `player-notes.ts ${lines} строк при потолке ${CAP}: выдели подсистему в ./player-notes/*`,
+    ).toBeLessThanOrEqual(CAP);
+  });
+
+  test("селекторы сайта живут ТОЛЬКО в selectors.ts", () => {
+    // Обещание selectors.ts: «при редизайне polemicagame.com правится ТОЛЬКО
+    // этот файл». Арх-ревью 28.08.2026 показало, что обещание стало
+    // пожеланием — сырые классы сайта расползлись по девяти файлам. Правило
+    // без стража живёт ровно до следующей спешки, поэтому оно исполняемое.
+    //
+    // Разрешено: НАША собственная разметка (префиксы pn-/fp-/ss-/twitch-/
+    // polemica-, data-pn-*), теги, атрибуты и #app — это не знание о вёрстке
+    // сайта, а наше собственное.
+    const OURS =
+      /^[\s\S]*(pn-|polemica-|fp-|ss-|twitch-|obs-|scene-item|data-pn|#app|#tag-|#note-)/;
+    const CALL = /(?:querySelector|querySelectorAll|closest|matches)\(\s*"([^"]+)"/g;
+    const offenders: string[] = [];
+    for (const file of sourceFiles("src/**/*.ts")) {
+      if (file === "src/core/selectors.ts") continue;
+      const source = read(file);
+      for (const m of source.matchAll(CALL)) {
+        const selector = m[1];
+        // Классы сайта — это литералы с точкой, которых нет в нашем префиксе.
+        if (!selector.includes(".")) continue;
+        if (OURS.test(selector)) continue;
+        offenders.push(`${file}:${lineOf(source, m.index ?? 0)} → ${selector}`);
+      }
+    }
+    expect(
+      offenders,
+      "селектор сайта вне selectors.ts: при редизайне его никто не найдёт — заведи ключ в SITE",
+    ).toEqual([]);
+  });
+
   test("AGENTS не врёт про минификацию бандла", () => {
     // Внешнее арх-ревью 28.08.2026 поймало расхождение: AGENTS обещал «без
     // минификации», а tsup минифицирует с 01.08.2026. Для человека это

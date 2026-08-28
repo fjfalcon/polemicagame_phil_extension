@@ -37,6 +37,32 @@ export const SITE = {
   playerVideoWrapper: ".player__video-wrapper",
   playerVideo: ".player__video, .player__video-wrapper",
   playerVideoEl: "video.player__video",
+  /** Плитка своего игрока и своя роль — гейты «не трогаем себя». */
+  myPlayerTile: ".my-player",
+  myRoleMark: ".my-role",
+  /** Плашка ника целиком: и с классом info, и без него (compact-nicks). */
+  playerInfoAny: ".player__info.info, .player__info",
+  infoName: ".info__name",
+  /** Зона клика по видео игрока (переворот камеры). */
+  videoClickZone: ".player__video-wrapper, .player__video, .video-control",
+  /** Тултип САЙТА с текстом роли (role-faker подменяет его содержимое). */
+  siteTooltipText: ".tooltip .content span",
+  /** Плитка без ховера — признак «пауза» в контролах (pause-hotkey). */
+  withoutHover: ".without-hover",
+  /** Кнопка-иконка настроек игры в шапке комнаты (pause-hotkey ищет по ней). */
+  settingsIconButton:
+    ".button.preset-1.small.desktop-version, button.preset-1.small.desktop-version, div.button.preset-1.small.desktop-version",
+  /** Широкий невод кликабельных узлов — по нему ищут кнопки по ТЕКСТУ. */
+  clickableCandidates: 'button, [role="button"], .button, .button-comp, li, a, div',
+  /** Номер матча на странице игры (role-marker). */
+  gameIdBlock: ".game-info-block .game-id, .game-info-block__section.game-id",
+  /** Правая колонка профиля и её вкладки — точка вставки наших карточек. */
+  profileRight: ".profile__right",
+  profileRightTabs: ".profile__right-tabs",
+  /** Загрузчик «игра стартует» на карточке поиска (queue-requeue). */
+  gameStartingLoader: ".p-play__profile-game-loader",
+  /** Модалки сайта поверх поиска — их нельзя перекрывать своими действиями. */
+  siteModals: ".modal-break-search, .v--modal-overlay, .vm--overlay, .modal",
   /** МЁРТВЫЙ по текущей разметке (аудит 01.08.2026): у меню сайта классы
    *  только `active`/`in-streamer-mode`. Потребитель (role-faker) при
    *  отсутствии узла просто ничего не делает — оставлен как безопасный

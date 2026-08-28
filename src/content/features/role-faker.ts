@@ -130,7 +130,7 @@ class RoleFaker {
 
   private fixMenuPositions() {
     document.querySelectorAll<HTMLElement>(SITE.playerMenuWithRole).forEach((menu) => {
-      if (menu.closest(".my-role") || menu.closest(".my-player")) return;
+      if (menu.closest(SITE.myRoleMark) || menu.closest(SITE.myPlayerTile)) return;
       if (!this.originalStyles.has(menu)) {
         this.originalStyles.set(menu, { right: menu.style.right, position: menu.style.position });
       }
@@ -148,7 +148,7 @@ class RoleFaker {
 
   private hideOtherRoles() {
     document.querySelectorAll<HTMLElement>(SITE.anyRole).forEach((el) => {
-      if (el.closest(".my-role") || el.closest(".my-player")) return;
+      if (el.closest(SITE.myRoleMark) || el.closest(SITE.myPlayerTile)) return;
       if (!this.originalRoles.has(el)) {
         this.originalRoles.set(el, { display: el.style.display, visibility: el.style.visibility });
       }
@@ -161,11 +161,11 @@ class RoleFaker {
       this.offDom = onDomChange(() => {
         if (!this.isFaked) return;
         document.querySelectorAll<HTMLElement>(SITE.anyRole).forEach((el) => {
-          if (el.closest(".my-role") || el.closest(".my-player")) return;
+          if (el.closest(SITE.myRoleMark) || el.closest(SITE.myPlayerTile)) return;
           if (el.style.display !== "none") el.style.display = "none";
         });
         document.querySelectorAll<HTMLElement>(SITE.playerMenuWithRole).forEach((menu) => {
-          if (menu.closest(".my-role") || menu.closest(".my-player")) return;
+          if (menu.closest(SITE.myRoleMark) || menu.closest(SITE.myPlayerTile)) return;
           if (menu.style.right !== "0.5rem") menu.style.right = "0.5rem";
         });
       });
@@ -193,7 +193,7 @@ class RoleFaker {
         use.setAttribute("href", href);
         use.setAttribute("xlink:href", href);
       }
-      const tip = myRole.querySelector(".tooltip .content span");
+      const tip = myRole.querySelector(SITE.siteTooltipText);
       if (tip && myRole.hasAttribute("data-original-role-name")) {
         tip.textContent = `Ваша роль - ${myRole.getAttribute("data-original-role-name")}`;
       }
@@ -218,7 +218,7 @@ class RoleFaker {
         el.setAttribute("data-original-sprite-base", base || this.resolveSpriteBase());
         el.setAttribute("data-original-role", role || "civilian");
       }
-      const tip = el.querySelector(".tooltip .content span");
+      const tip = el.querySelector(SITE.siteTooltipText);
       if (tip) {
         el.setAttribute("data-original-role-name", (tip.textContent || "").replace("Ваша роль - ", ""));
       }
@@ -232,7 +232,7 @@ class RoleFaker {
       use.setAttribute("href", href);
       use.setAttribute("xlink:href", href);
     }
-    const tip = el.querySelector(".tooltip .content span");
+    const tip = el.querySelector(SITE.siteTooltipText);
     if (tip) tip.textContent = `Ваша роль - ${role.name}`;
     return true;
   }

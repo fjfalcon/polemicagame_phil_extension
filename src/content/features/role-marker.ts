@@ -78,7 +78,7 @@ function resolveGameKey(): string | null {
   if (mUrl) return `g:${mUrl[1]}`;
   // 2) видимый номер игры в шапке комнаты (.game-info-block .game-id)
   const infoText = document
-    .querySelector(".game-info-block .game-id, .game-info-block__section.game-id")
+    .querySelector(SITE.gameIdBlock)
     ?.textContent?.match(/\d+/)?.[0];
   if (infoText) return `g:${infoText}`;
   // 2) data-game-id

@@ -241,13 +241,11 @@ class PauseHotkey {
       out.push(c);
     };
     for (const s of direct) push(document.querySelector(s));
-    Array.from(document.querySelectorAll('button, [role="button"], .button, .button-comp, li, a, div'))
+    Array.from(document.querySelectorAll(SITE.clickableCandidates))
       .filter((n) => this.matchesSettings(n) || this.matchesSettingsIcon(n))
       .forEach(push);
     Array.from(
-      document.querySelectorAll(
-        ".button.preset-1.small.desktop-version, button.preset-1.small.desktop-version, div.button.preset-1.small.desktop-version",
-      ),
+      document.querySelectorAll(SITE.settingsIconButton),
     )
       .filter((n) => this.matchesSettingsIcon(n))
       .forEach(push);
@@ -298,7 +296,7 @@ class PauseHotkey {
         // «продолжить игруподтвердить» и точный матч не срабатывал
         // (ревью аудита устойчивости: без этого фикс работал только у
         // судьи, а обычный игрок так и не мог снять паузу).
-        const label = candidate.querySelector(".without-hover")?.textContent;
+        const label = candidate.querySelector(SITE.withoutHover)?.textContent;
         const values = [
           norm(label ?? candidate.textContent),
           norm(candidate.getAttribute?.("aria-label")),

@@ -18,6 +18,7 @@
  * фича «пересечения», просто в двух местах.
  */
 import { onDomChange } from "@core/dom";
+import { SITE } from "@core/selectors";
 import { log } from "@core/log";
 import {
   completeHistory,
@@ -128,7 +129,7 @@ function apply(): void {
     removeBlock();
     return;
   }
-  const host = document.querySelector(".profile__right");
+  const host = document.querySelector(SITE.profileRight);
   if (!host) return; // Vue ещё рисует — следующая мутация вернёт нас сюда
   const existing = host.querySelector<HTMLElement>(`.${BLOCK_CLASS}`);
   if (existing && existing.dataset.pnFor === routeId) return; // уже актуальна
@@ -136,7 +137,7 @@ function apply(): void {
   document.querySelectorAll(`.${BLOCK_CLASS}`).forEach((n) => n.remove());
   const block = buildBlock(routeId);
   // Между «инфо» и вкладками; вкладок нет — в конец колонки.
-  const tabs = host.querySelector(".profile__right-tabs");
+  const tabs = host.querySelector(SITE.profileRightTabs);
   if (tabs) host.insertBefore(block, tabs);
   else host.appendChild(block);
   void fillBlock(routeId, block);

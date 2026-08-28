@@ -159,7 +159,10 @@ describe("перф-аудит 26.08.2026: исполняемые бюджеты 
     expect(ws).toContain("export const MAX_CHUNKS = 100;");
     const pn = src("src/content/features/player-notes.ts");
     expect(pn).toContain("const WARM_PAGE_LIMIT = 200;");
-    expect(pn).toContain("const ACTIVE_GAMES_TTL_MS = 15_000;");
+    // Переехал в @core/polemica-api вместе с сетью и кэшами (арх-ревью
+    // 28.08.2026): пин следует за константой, а не за файлом.
+    const api = src("src/core/polemica-api.ts");
+    expect(api).toContain("export const ACTIVE_GAMES_TTL_MS = 15_000;");
     const ss = src("src/content/panels/session-stats-panel.ts");
     expect(ss).toContain("const REFRESH_MS = 3 * 60_000;");
     expect(ss).toContain("const SESSION_PAGE_LIMIT = 200;");

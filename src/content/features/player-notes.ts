@@ -40,6 +40,20 @@ import { onDomChange, paintNickEl } from "@core/dom";
 import { onMessage, sendRuntime } from "@core/messaging";
 import { toggleFlipForPlayer, isPlayerFlipped, unflipAll } from "../camera-flip";
 import { getMatchId } from "../match-data";
+import {
+  ACTIVE_GAMES_TTL_MS,
+  fetchActiveGames,
+  findRatingPlayer,
+  resetActiveGamesCacheForTest,
+  type RatingPlayer,
+} from "@core/polemica-api";
+import { NoteKeys } from "./player-notes/note-keys";
+import {
+  BUTTON_CIRCLE_CSS,
+  BUTTON_PLAIN_CSS,
+  cssAttr,
+  TOOLTIP_CSS,
+} from "./player-notes/styles";
 import { createRoleSvg } from "../role-sprite";
 import { formatCrossover } from "../crossover-view";
 import { redactNick } from "@shared/redact";
@@ -94,11 +108,6 @@ interface PlayerStatsEntry {
     mafia: RoleWinrate;
     godfather: RoleWinrate;
   };
-}
-
-interface RatingPlayer {
-  username?: string;
-  user_id: number | string;
 }
 
 interface LastGameEntry {
@@ -199,82 +208,6 @@ export function parseFlippedPlayers(raw: string | null): Set<string> {
 }
 
 /**
- * Один общий запрос списка активных игр на всех игроков. Раньше in-flight
- * дедуп ключевался ником: вход в игру с 10 игроками давал 10 ПАРАЛЛЕЛЬНЫХ
- * fetch полного /api/games ещё до первого наведения мыши.
- */
-let activeGamesPromise: Promise<any[]> | null = null;
-let activeGamesFetchedAt = 0;
-const ACTIVE_GAMES_TTL_MS = 15_000;
-let ratingListCache: RatingPlayer[] | null = null;
-let ratingListFetchedAt = 0;
-let ratingListInFlight: Promise<RatingPlayer[]> | null = null;
-
-/** Тестовый шов perf-бюджета «/api/games never-overlap» (PERF26-8). */
-export function resetActiveGamesCacheForTest(): void {
-  activeGamesPromise = null;
-  activeGamesFetchedAt = 0;
-}
-
-export function fetchActiveGames(): Promise<any[]> {
-  const now = Date.now();
-  // Нерешённый запрос не перекрывается НИКОГДА (бюджет «never overlap»,
-  // перф-аудит 06.08; дыра PERF26-8): TTL заводится только с момента
-  // РАЗВЯЗКИ промиса, а не старта — долгий запрос не порождает второй.
-  if (activeGamesPromise && (activeGamesFetchedAt === 0 || now - activeGamesFetchedAt < ACTIVE_GAMES_TTL_MS)) {
-    return activeGamesPromise;
-  }
-  activeGamesFetchedAt = 0; // 0 = «в полёте»: TTL стартует по завершении
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
-  const p: Promise<any[]> = fetch("https://game.polemicagame.com/api/games", {
-    signal: controller.signal,
-  })
-    .then(async (response) => {
-      if (!response.ok) throw new Error(`active games API error: ${response.status}`);
-      const data: unknown = await response.json();
-      if (!Array.isArray(data)) throw new Error("active games API returned invalid data");
-      if (activeGamesPromise === p) activeGamesFetchedAt = Date.now(); // TTL — от развязки
-      return data;
-    })
-    .catch((e) => {
-      // Identity-гейт: поздний reject СТАРОГО запроса не должен стирать
-      // маркер нового (PERF26-8: открывал путь третьему параллельному).
-      if (activeGamesPromise === p) activeGamesPromise = null; // ошибку не кэшируем
-      throw e;
-    })
-    .finally(() => clearTimeout(timeout));
-  activeGamesPromise = p;
-  return p;
-}
-
-function fetchRatingList(): Promise<RatingPlayer[]> {
-  if (ratingListCache && Date.now() - ratingListFetchedAt < STATS_TTL_MS) {
-    return Promise.resolve(ratingListCache);
-  }
-  if (ratingListInFlight) return ratingListInFlight;
-
-  // Множественное число и /default/: сайт переехал, старый singular-URL
-  // отдаёт 404 — фолбэк резолва игрока по рейтингу был мёртв (аудит
-  // устойчивости 01.08.2026, находка 2). Форма ответа прежняя (проверено
-  // живым запросом: массив с user_id/username/mmr/total_games).
-  const request = fetch("https://polemicagame.com/ratings/default/get-list?limit=1000")
-    .then(async (response) => {
-      if (!response.ok) throw new Error(`rating API error: ${response.status}`);
-      const data: unknown = await response.json();
-      if (!Array.isArray(data)) throw new Error("rating API returned invalid data");
-      ratingListCache = data as RatingPlayer[];
-      ratingListFetchedAt = Date.now();
-      return ratingListCache;
-    })
-    .finally(() => {
-      if (ratingListInFlight === request) ratingListInFlight = null;
-    });
-  ratingListInFlight = request;
-  return request;
-}
-
-/**
  * Кому из игроков за столом ещё нужен резолв id.
  *
  * Отдельной чистой функцией, потому что это ГЕЙТ ЧАСТОТЫ: проход по плиткам
@@ -300,16 +233,6 @@ export function pendingIdLookups(
   return out;
 }
 
-async function findRatingPlayer(username: string): Promise<RatingPlayer | undefined> {
-  const key = username.toLowerCase();
-  return (await fetchRatingList()).find(
-    (player) =>
-      player.username?.toLowerCase() === key &&
-      player.user_id !== undefined &&
-      player.user_id !== null,
-  );
-}
-
 function unavailablePlayerStats(): PlayerStatsEntry {
   return {
     ratingUnavailable: true,
@@ -332,6 +255,15 @@ function unavailablePlayerStats(): PlayerStatsEntry {
     },
   };
 }
+
+/**
+ * Сеть и её кэши переехали в @core/polemica-api (арх-ревью 28.08.2026).
+ * Ре-экспорт оставлен намеренно: перф-бюджеты сторожат «/api/games никогда не
+ * перекрывается» именно через эту фичу, и точка импорта — часть их смысла.
+ */
+export { fetchActiveGames, resetActiveGamesCacheForTest };
+/** Стили уехали в ./player-notes/styles; cssAttr сторожат тесты по этому пути. */
+export { cssAttr };
 
 // ───────────────────────── Менеджер фичи ─────────────────────────
 
@@ -428,6 +360,14 @@ export function isNightNow(): boolean {
 
 class PlayerNotesManager {
   private settings: Settings;
+  /**
+   * Резолв «ник → ключ записи». Карту заметок и резолв id даёт менеджер:
+   * слой ключей не знает ни про сеть, ни про DOM, ни про настройки.
+   */
+  private readonly keys = new NoteKeys({
+    notes: () => this.notes,
+    lookupId: (lower) => this.playerStats.get(lower)?.id ?? this.profileIdByNick.get(lower),
+  });
   /**
    * Полный проход по плиткам сейчас падает (латч, а не счётчик строк).
    * Проход идёт раз в 2 секунды: без латча устойчивая поломка давала бы
@@ -695,7 +635,7 @@ class PlayerNotesManager {
         // клики по настройкам (в т.ч. синтетические клики F8-паузы).
         // Камеру покрывают video-селекторы.
         const isWebcamArea =
-          target?.closest?.(".player__video-wrapper, .player__video, .video-control") ?? null;
+          target?.closest?.(SITE.videoClickZone) ?? null;
         if (isWebcamArea) {
           e.stopImmediatePropagation();
           e.stopPropagation();
@@ -774,7 +714,7 @@ class PlayerNotesManager {
     this.profileIdByNick.clear();
     this.idResolveAttempted.clear();
     this.idResolveFailedAt = 0;
-    this.nickIndexCache = null;
+    this.keys.reset();
     this.colorIndexCache = null;
     this.hiddenVideos.clear();
     // Мьют персистентный, но при выключенной фиче звук обязан вернуться:
@@ -1005,105 +945,50 @@ class PlayerNotesManager {
   }
 
   /** userId игрока, если статистика его уже резолвила (иначе undefined). */
+  // ─────── Резолв ключа заметки (./player-notes/note-keys) ───────
+  //
+  // Сам слой живёт отдельным модулем и проверяется без DOM: ошибка здесь
+  // показывает игроку ЧУЖУЮ заметку (блокер 8.1.29). Здесь — только тонкие
+  // делегаты, чтобы места вызова читались как раньше.
+
   private noteUserId(username: string): number | string | undefined {
-    const lower = username.toLowerCase();
-    const id = this.playerStats.get(lower)?.id ?? this.profileIdByNick.get(lower);
-    // БЕЛЫЙ список вместо чёрного: принимаем только положительное целое.
-    // Чёрный список («???», "") пропустил бы плейсхолдеры заглушек — так
-    // "—" из unavailablePlayerStats чуть не отправил заметки ВСЕХ
-    // недоступных игроков в один общий ключ u:— (чужая заметка в тултипе
-    // соседа + взаимная перезапись). Блокер ревью 8.1.29.
-    if (typeof id === "number") return Number.isInteger(id) && id > 0 ? id : undefined;
-    if (typeof id === "string" && /^\d+$/.test(id) && id !== "0") return id;
-    return undefined;
+    return this.keys.userId(username);
   }
 
-  /**
-   * Ключ заметки игрока: `u:<id>`, если id известен, иначе ник (легаси).
-   * Заметки по id переживают смену ника и не путают тёзок.
-   */
   private noteKeyFor(username: string): string {
-    const id = this.noteUserId(username);
-    if (id !== undefined) {
-      const key = idKey(id);
-      // Для ЧТЕНИЯ id-ключ приоритетен, но если записи под ним ещё нет,
-      // а под ником есть — читаем ник (миграция могла не успеть).
-      if (this.notes[key] !== undefined || this.notes[username] === undefined) return key;
-      return username;
-    }
-    if (this.notes[username] !== undefined) return username;
-    // id не резолвлен (статистика ещё грузится или профиль скрыт), записи под
-    // ником нет — ищем id-запись по её полю nick. Без этого игроки, раскрашенные
-    // через менеджер (запись сразу на id-ключе), стояли белыми до резолва id,
-    // а со скрытым профилем — вечно.
-    // Компромисс: rec.nick — исторический; если ник освободили и занял другой
-    // игрок, до резолва id совпадение отдаст чужую запись (та же слабая
-    // идентичность, что у легаси-ник-ключей; резолв id её вытесняет).
-    return this.idKeyByNick().get(username.toLowerCase()) ?? username;
-  }
-
-  /** Кэш «lowercase-ник → id-ключ записи»; TTL, а не инвалидация по каждому
-   *  из десятка мест мутации this.notes: секунда устаревания не видна глазу,
-   *  а пропущенная инвалидация — вечный баг. */
-  private nickIndexCache: { at: number; map: Map<string, string> } | null = null;
-
-  private idKeyByNick(): Map<string, string> {
-    const now = Date.now();
-    if (this.nickIndexCache && now - this.nickIndexCache.at < 1000) {
-      return this.nickIndexCache.map;
-    }
-    const map = new Map<string, string>();
-    for (const [k, v] of Object.entries(this.notes)) {
-      if (isIdKey(k) && v && typeof v !== "string" && v.nick) {
-        map.set(v.nick.toLowerCase(), k);
-      }
-    }
-    this.nickIndexCache = { at: now, map };
-    return map;
+    return this.keys.keyFor(username);
   }
 
   private getNote(username: string): NoteRecord | string | undefined {
-    return this.notes[this.noteKeyFor(username)];
+    return this.keys.get(username);
   }
 
   private getNoteText(username: string): string {
-    const note = this.getNote(username);
-    if (!note) return "";
-    return typeof note === "string" ? note : note.text || "";
+    return this.keys.text(username);
   }
 
-  /**
-   * Прежние ники игрока. Есть только у записей с вечным ключом `u:<id>` —
-   * у ник-ключа прошлого имени взяться неоткуда, ключ им и является.
-   */
   private getFormerNicks(username: string): string[] {
-    const note = this.getNote(username);
-    if (!note || typeof note === "string") return [];
-    const current = username.toLowerCase();
-    return (note.nicks ?? []).filter((n) => n.toLowerCase() !== current);
+    return this.keys.formerNicks(username);
   }
 
   private getNoteTag(username: string): string {
-    const note = this.getNote(username);
-    return note && typeof note !== "string" ? note.tag || "" : "";
+    return this.keys.tag(username);
   }
 
   /** Сохранённый цвет ника (без учёта настройки — для диалогов). */
   private getRawNickColor(username: string): string {
-    const note = this.getNote(username);
-    return note && typeof note !== "string" ? note.nickColor || "" : "";
+    return this.keys.rawNickColor(username);
   }
 
   /** Цвет ника для отрисовки: пустая строка, если фича выключена. */
   private getNickColor(username: string): string {
     if (this.settings.nick_colors_enabled === false) return "";
-    return this.getRawNickColor(username);
+    return this.keys.rawNickColor(username);
   }
 
   /** Все легаси-ключи-ники этого игрока (точный + отличающиеся регистром). */
   private nickKeysFor(username: string): string[] {
-    const lower = username.toLowerCase();
-    return Object.keys(this.notes).filter((k) => !isIdKey(k) && k.toLowerCase() === lower);
+    return this.keys.nickKeys(username);
   }
 
   /**
@@ -1504,7 +1389,7 @@ class PlayerNotesManager {
         if (!this.active) return;
         if (resolved) {
           // Индексы построены на старом составе — иначе цвет по id не найдётся.
-          this.nickIndexCache = null;
+          this.keys.reset();
           this.colorIndexCache = null;
           this.refreshNickColors();
           this.refreshNoteIndicators();
@@ -4199,77 +4084,6 @@ class PlayerNotesManager {
   }
 
   // (loadSavedAvatar удалён — см. комментарий у onMessage в enable().)
-}
-
-// ───────────────────────── CSS-константы ─────────────────────────
-
-const BUTTON_CIRCLE_CSS = `
-  position: relative; /* якорь тултипа: без него absolute-тултип цеплялся к случайному предку */
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  opacity: 1 !important;
-  visibility: visible !important;
-`;
-
-const BUTTON_PLAIN_CSS = `
-  background: none;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  transition: all 0.2s ease;
-  opacity: 1 !important;
-  visibility: visible !important;
-`;
-
-const TOOLTIP_CSS = `
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  transform: translateY(10px);
-  background: rgba(11, 27, 57, 0.9);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(79, 129, 245, 0.3);
-  padding: 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  visibility: hidden;
-  opacity: 0;
-  /* ТОЛЬКО opacity: со значением "all" тултип, уезжая в портал (showTooltip),
-     анимировал ещё и left/top — от левого края экрана к своей позиции: он
-     «влетал» через пол-страницы (регрессия 8.1.55). */
-  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  pointer-events: none;
-  white-space: normal;
-  min-width: 120px;
-  z-index: 1001;
-  line-height: 1.3;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  margin-bottom: 5px;
-  color: white;
-`;
-
-/**
- * Значение атрибута для селектора БЕЗ кавычек: `[data-username=<escaped>]`.
- *
- * Ручная замена кавычек не покрывала управляющие символы (LF/CR/FF): ник с
- * ними делал селектор невалидным, и querySelectorAll бросал исключение —
- * обновление кнопок/тултипов срывалось (аудит безопасности 01.08.2026, №14).
- * CSS.escape экранирует по спецификации именно идентификатор, поэтому
- * подставлять результат нужно без обрамляющих кавычек.
- */
-export function cssAttr(value: string): string {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
-  // Фолбэк (движков без CSS.escape среди наших минимумов нет): экранируем
-  // всё, что не [A-Za-z0-9_-] и не кириллица, по правилу CSS «\<hex> ».
-  return value.replace(/[^\wЀ-ӿ-]/g, (c) => `\\${c.codePointAt(0)!.toString(16)} `);
 }
 
 // ───────────────────────── Экспорт фичи ─────────────────────────

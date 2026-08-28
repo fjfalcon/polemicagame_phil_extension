@@ -65,7 +65,7 @@ const MAX_CLICK_ATTEMPTS = 3;
 /** Тики идут каждые ~250мс — без паузы 3 попытки улетели бы за секунду. */
 const MIN_CLICK_INTERVAL_MS = 1200;
 /** «Игра запускается» — стартующее лобби, а не развал (ветка processing). */
-const GAME_STARTING_SELECTOR = ".p-play__profile-game-loader";
+const GAME_STARTING_SELECTOR = SITE.gameStartingLoader;
 /**
  * Сайтовые модалки страницы поиска. Если после нашего клика сервер ответил
  * illegalState=game_search (рассинхрон: сервер ещё держит игрока в поиске),
@@ -75,7 +75,7 @@ const GAME_STARTING_SELECTOR = ".p-play__profile-game-loader";
  * (vue-js-modal); generic `.modal` оставлен как страховка на другие модалки —
  * скрытые узлы отсеивает проверка видимости в siteModalOpen().
  */
-const SITE_MODAL_SELECTOR = ".modal-break-search, .v--modal-overlay, .vm--overlay, .modal";
+const SITE_MODAL_SELECTOR = SITE.siteModals;
 
 // ── этап 2: комната ──
 

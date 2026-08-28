@@ -3,6 +3,7 @@
  * Заменяет прежний chrome.scripting.executeScript из popup (главный блокер Firefox).
  */
 import { onMessage } from "@core/messaging";
+import { SITE } from "@core/selectors";
 
 export interface NickInfo {
   number: number;
@@ -15,13 +16,13 @@ export interface NickLengths {
 }
 
 export function collectNicknameLengths(): NickLengths {
-  const nodes = Array.from(document.querySelectorAll(".player__info.info, .player__info"));
+  const nodes = Array.from(document.querySelectorAll(SITE.playerInfoAny));
   const players: NickInfo[] = [];
   for (const node of nodes) {
-    const nameEl = node.querySelector(".info__name");
+    const nameEl = node.querySelector(SITE.infoName);
     const name = (nameEl?.textContent || "").trim();
     if (!name) continue;
-    const numberEl = node.querySelector(".player-number");
+    const numberEl = node.querySelector(SITE.playerNumber);
     const parsed = Number.parseInt((numberEl?.textContent || "").trim(), 10);
     const number = Number.isFinite(parsed) ? parsed : players.length + 1;
     players.push({ number, name, length: Array.from(name).length });
