@@ -494,7 +494,12 @@ describe("settings, release and manifest consistency", () => {
     //
     // Потолок можно ОПУСКАТЬ свободно. Поднимать — только осознанно, вместе
     // с объяснением, почему подсистема неотделима.
-    const CAP = 2340;
+    //
+    // 2340 → 2356 (9.56.0): сворачивание ряда кнопок вынесено модулем
+    // (collapse-toggle.ts), в файле осталась только проводка — контекст из
+    // трёх лямбд к настройкам/теме/перерисовке. Проводка неотделима: это
+    // и есть связь модуля с фичей.
+    const CAP = 2356;
     const lines = read("src/content/features/player-notes.ts").split("\n").length;
     expect(
       lines,
@@ -955,6 +960,12 @@ describe("§4.7 lifecycle heuristic", () => {
       reason:
         "button handlers are removed with owned nodes; toast removal is a harmless one-shot; " +
         "+2 (9.13.0) — hover-обработчики кнопки пересечений живут на её же узле, а таймер намерения гасится в mouseleave",
+    },
+    "src/content/features/player-notes/collapse-toggle.ts": {
+      listeners: 1,
+      timers: 0,
+      reason:
+        "клик тумблера «⋯» живёт на своём узле и умирает с ним: ряд сносится через OWN_BUTTON_SELECTOR",
     },
     "src/content/features/postgame-search.ts": {
       listeners: 2,

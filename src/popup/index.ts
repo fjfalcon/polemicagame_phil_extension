@@ -1416,6 +1416,7 @@ document.addEventListener("DOMContentLoaded", () => {
     set("btn_last_games_enabled", items.btn_last_games_enabled);
     set("btn_crossover_enabled", items.btn_crossover_enabled);
     set("btn_hide_video_enabled", items.btn_hide_video_enabled);
+    set("tile_buttons_collapsed", items.tile_buttons_collapsed);
     const lgc = $<HTMLSelectElement>("last_games_count");
     // Нормализация: мусор в storage иначе оставил бы селект пустым.
     if (lgc) lgc.value = readLastGamesCount(items.last_games_count);
@@ -1548,6 +1549,7 @@ document.addEventListener("DOMContentLoaded", () => {
       btn_last_games_enabled: cb("btn_last_games_enabled", true),
       btn_crossover_enabled: cb("btn_crossover_enabled", true),
       btn_hide_video_enabled: cb("btn_hide_video_enabled", true),
+      tile_buttons_collapsed: cb("tile_buttons_collapsed", false),
       last_games_count: readLastGamesCount($<HTMLSelectElement>("last_games_count")?.value),
       last_games_first_killed: cb("last_games_first_killed", true),
       note_indicator_enabled: cb("note_indicator_enabled", true),
@@ -1737,6 +1739,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "btn_last_games_enabled",
     "btn_crossover_enabled",
     "btn_hide_video_enabled",
+    "tile_buttons_collapsed",
     "last_games_count",
     "last_games_first_killed",
     "note_indicator_enabled",

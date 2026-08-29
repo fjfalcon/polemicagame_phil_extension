@@ -19,6 +19,7 @@
  * читаются из ctx.settings внутри; update(ctx) переотрисовывает тултипы и тему.
  */
 import { browser } from "@core/env";
+import { setSettings } from "@core/settings";
 import { log } from "@core/log";
 import {
   completeHistory,
@@ -53,6 +54,7 @@ import {
   type LastGameEntry,
 } from "./player-notes/history-store";
 import { parseFlippedPlayers } from "./player-notes/flipped-players";
+import { syncCollapseState } from "./player-notes/collapse-toggle";
 import {
   HIDDEN_PLAYERS_KEY,
   MUTED_PLAYERS_KEY,
@@ -687,6 +689,19 @@ class PlayerNotesManager {
     refreshIndicators: () => this.active && this.refreshNoteIndicators(),
     refreshTags: () => this.active && this.refreshPlayerTags(),
     refreshPlayer: (username) => this.active && this.updatePlayerTooltips(username),
+  };
+
+  /** Контекст тумблера «⋯» (модуль collapse-toggle; правда — в settings). */
+  private readonly collapseCtx = {
+    isCollapsed: () => this.settings.tile_buttons_collapsed === true,
+    onToggle: (next: boolean) => {
+      // Оптимистично в своей вкладке: официальный путь (настройка → update)
+      // дойдёт и сюда с паузой; повторное применение идемпотентно.
+      this.settings = { ...this.settings, tile_buttons_collapsed: next };
+      this.processExistingElements();
+      void setSettings({ tile_buttons_collapsed: next });
+    },
+    themeButton: (b: HTMLElement) => this.applyButtonTheme(b),
   };
 
   private showNoteModal(username: string): void {
@@ -2207,6 +2222,7 @@ class PlayerNotesManager {
       this.ensureRotateButton(iconsGroup, container, username);
       this.ensureMuteButton(iconsGroup, container, username);
     }
+    syncCollapseState(iconsGroup, this.collapseCtx);
     const hideButton = iconsGroup.querySelector<HTMLElement>(`.${OWN.hideVideoButton}`);
     if (hideButton) this.syncHideVideoButton(hideButton, username);
     // Пересоздание video-элемента сайтом сбрасывает volume и переворот.

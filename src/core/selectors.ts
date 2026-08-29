@@ -551,6 +551,8 @@ export const OWN = {
   /** Кнопка «пересечения» — префикс обязателен: голые имена уже кусались. */
   crossoverButton: "pn-crossover-button",
   hideVideoButton: "hide-video-button",
+  /** Тумблер сворачивания ряда кнопок плитки («⋯»). Префикс обязателен. */
+  collapseButton: "pn-collapse-button",
   rotateButton: "rotate-button",
   muteButton: "mute-button",
   roleHideStyle: "polemica-role-hide",
@@ -604,7 +606,7 @@ export const SITE_CLASS = {
 /** Все классы наших элементов, которые надо удалять при выключении фичи. */
 export const OWN_BUTTON_SELECTOR =
   ".stats-button, .note-button, .last-games-button, .pn-crossover-button, " +
-  ".hide-video-button, .rotate-button, .mute-button";
+  ".hide-video-button, .rotate-button, .mute-button, .pn-collapse-button";
 
 /** Матч маркера фазы в тексте этапа (для classifyPhaseText и спецслучаев). */
 export function hasPhaseMarker(text: string, markers: readonly string[]): boolean {

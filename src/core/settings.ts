@@ -51,6 +51,9 @@ export const DEFAULT_SETTINGS: Settings = {
   btn_last_games_enabled: true,
   btn_crossover_enabled: true,
   btn_hide_video_enabled: true,
+  // Свёрнутый ряд кнопок плитки: по просьбе владельца 29.08.2026 — кнопок
+  // стало много, «чтоб не мешалось». Развёрнут по умолчанию: прежний вид.
+  tile_buttons_collapsed: false,
   // Восемь игр вместо прежних зашитых четырёх (просьба владельца 13.08.2026):
   // список приходит одним запросом, и его длина серверу ничего не стоит.
   last_games_count: DEFAULT_LAST_GAMES_COUNT,

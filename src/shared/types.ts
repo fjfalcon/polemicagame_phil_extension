@@ -58,6 +58,8 @@ export interface Settings {
   /** Кнопка «пересечения»: сколько игр сыграно с этим игроком и кем он был. */
   btn_crossover_enabled: boolean;
   btn_hide_video_enabled: boolean;
+  /** Весь ряд кнопок на плитке свёрнут за «⋯» (тумблер есть и в самом ряду). */
+  tile_buttons_collapsed: boolean;
   /** Сколько последних игр показывать в окне истории: "4" или "8". */
   last_games_count: string;
   /** Отмечать в этом окне игры, где игрок был первым убитым («ПУ»). */
