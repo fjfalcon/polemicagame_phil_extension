@@ -215,7 +215,13 @@ describe("подсматривание ролей: возврат скрытия
 
     (holdCall![1] as () => void)();
     vi.mocked(log.info).mockClear();
-    (roleKeyCall![1] as (e?: KeyboardEvent) => void)();
+    // Событие с шпионом (№10, adversarial): прежний вызов без события не
+    // проверял, что нативный D сайта тоже глушится — грепа обходилась
+    // stopPropagation'ом СОСЕДНЕЙ ветки.
+    const peekEvt = new KeyboardEvent("keydown", { code: "KeyD", cancelable: true });
+    const peekStop = vi.spyOn(peekEvt, "stopPropagation");
+    (roleKeyCall![1] as (e?: KeyboardEvent) => void)(peekEvt);
+    expect(peekStop, "нативный D сайта не должен переключить #stop под V").toHaveBeenCalled();
     expect(
       vi.mocked(log.info).mock.calls.some((args) =>
         args.some((a) => String(a).includes("не действует, пока удерживается")),
@@ -349,12 +355,14 @@ describe("клавиша скрытия уступает подмене роли
       expect(document.getElementById("polemica-role-hide"), "роли скрыты CSS").not.toBeNull();
       const e = new KeyboardEvent("keydown", { code: "KeyD", cancelable: true });
       const stop = vi.spyOn(e, "stopPropagation");
+      const prevent = vi.spyOn(e, "preventDefault");
       (roleKeyCall![1] as (e?: KeyboardEvent) => void)(e);
       expect(
         document.getElementById("polemica-role-hide"),
         "CSS на месте: настоящие роли стола не уехали в эфир под фальшивой своей",
       ).not.toBeNull();
       expect(stop, "нативный D сайта тоже не сработает").toHaveBeenCalled();
+      expect(prevent, "и default тоже глушится (мутация снимала его молча)").toHaveBeenCalled();
     } finally {
       fakerSeam.faked = false;
       autoStartFeature.disable();

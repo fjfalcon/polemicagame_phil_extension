@@ -88,18 +88,58 @@ describe("латч против живого узла (аудит скрытия
     );
   });
 
-  test("№1: пересозданный узел лечится и подписчиком, и страховочным опросом", () => {
-    const heals = source.match(/!pinHolds\(lastAppliedRoleVisibility\)/g) ?? [];
-    expect(heals.length, "две линии самолечения пина").toBeGreaterThanOrEqual(2);
+  test("находка A: право лечить не зависит от латча — желаемое выводится из фазы", () => {
+    // Прежняя схема гейтила heal на истинность латча; любой путь неудачи
+    // гасил латч навсегда при бюджете ретраев ~1,25 с — F5/SPA-возврат
+    // оставляли роль в эфире до смены фазы.
+    const start = source.indexOf("function healRolePin");
+    expect(start, "healRolePin существует").toBeGreaterThan(-1);
+    const body = source.slice(start, source.indexOf("function scheduleRoleVisibility", start));
+    expect(body).toMatch(/desiredRoleVisibility\(\)/);
+    expect(body, "без целей heal молчит — ретраи в пустоту сжигали бюджет").toMatch(
+      /getRoleVisibilityTargets\(\)\.length === 0/,
+    );
+    // Точная форма гейта: мутация «!want || !латч» проходила мимо прежнего
+    // негативного регэкспа (ловил только «латч &&»).
+    expect(body, "гейт — ровно отсутствие желаемого, латч не участвует").toMatch(
+      /if \(!want\) return;/,
+    );
+    expect(body).not.toMatch(/if \(!want \|\|/);
+  });
+
+  test("находка A: heal зовут обе линии — подписчик и страховочный опрос", () => {
+    // C точкой с запятой: голый /healRolePin\(\)/ матчил и ОПРЕДЕЛЕНИЕ
+    // функции — снятый вызов подписчика проходил зелёным (поймано мутацией).
+    const calls = source.match(/healRolePin\(\);/g) ?? [];
+    expect(calls.length, "подписчик (roleNodeAdded) + 2с-интервал").toBeGreaterThanOrEqual(2);
+  });
+
+  test("находка C: ранний break не съедает roleNodeAdded", () => {
+    const start = source.indexOf("unsubDom = onDomChange((mutations) => {");
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, source.indexOf("if (shouldCheckTime) requestTimeOfDayCheck", start));
+    expect(body, "выход из цикла только когда найдено ОБА").toMatch(
+      /if \(shouldCheckTime && roleNodeAdded\) break;/,
+    );
   });
 
   test("№2: persisted-латч НЕ доверяется до применения", () => {
     const start = source.indexOf("currentTimeOfDay = stored.currentTimeOfDay;");
+    expect(start, "якорь restore-пути жив").toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf("const applied = applyRoleVisibility", start));
     expect(body, "латч обнуляется: он описывает мёртвый DOM прошлой загрузки").toMatch(
       /lastAppliedRoleVisibility = null/,
     );
     expect(body).not.toMatch(/stored\.lastAppliedRoleVisibility/);
+  });
+
+  test("находка E: мёртвое persisted-поле латча больше не пишется", () => {
+    const start = source.indexOf("const state: AutoSceneState = {");
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, source.indexOf("};", start));
+    expect(body, "restore игнорирует — запись была бы приманкой").not.toMatch(
+      /lastAppliedRoleVisibility,/,
+    );
   });
 
   test("teardown отдаёт пины владельцу-модулю", () => {

@@ -798,6 +798,30 @@ document.addEventListener("DOMContentLoaded", () => {
             if (typeof value === "string" && value.length > 200) continue;
             settingsPatch[key] = value;
           }
+          // Дубли хоткеев (F-4, adversarial 29.08.2026): роутер клавиш
+          // держит ОДИН обработчик на код и молча вытесняет прежний — файл с
+          // reset=скрытие снимал бы защитный D без единого клика по кнопке
+          // захвата. UI-отказ попапа импорт обходил. Правило: первый ключ по
+          // порядку списка остаётся, последующие дубли не импортируются
+          // (останется текущее/дефолтное значение).
+          {
+            const HOTKEYS = [
+              "pause_hotkey_code",
+              "hotkey_role_fake",
+              "hotkey_role_reset",
+              "hotkey_role_hide",
+              "hotkey_role_peek",
+              "outcry_hotkey_code",
+              "obs_clip_hotkey_code",
+            ];
+            const seen = new Set<string>();
+            for (const k of HOTKEYS) {
+              const v = settingsPatch[k];
+              if (typeof v !== "string") continue;
+              if (seen.has(v)) delete settingsPatch[k];
+              else seen.add(v);
+            }
+          }
           // Флаги, включающие ДЕЙСТВИЯ за игрока и сетевые подключения, не
           // должны приезжать из чужого файла молча.
           const risky = OPERATIONAL_KEYS.filter((k) => settingsPatch[k] === true);
@@ -1209,6 +1233,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // (арх-аудит швов 29.08.2026, SEAM-07). Новый захват снимает прежний
   // и возвращает его кнопке прежнюю подпись.
   let cancelKeyCapture: (() => void) | null = null;
+  /** Таймер возврата подписи после отказа: гасится новым захватом (F-3). */
+  let captureLabelTimer: ReturnType<typeof setTimeout> | null = null;
   // Все текущие назначения — для отказа в дубле: роутер клавиш держит ОДИН
   // обработчик на код, и второе назначение молча вытесняло первое; при
   // совпадении с клавишей скрытия роли вытеснялась защита (аудит скрытия
@@ -1221,6 +1247,13 @@ document.addEventListener("DOMContentLoaded", () => {
     render: () => void,
   ): void => {
     cancelKeyCapture?.();
+    // Отложенный render прежнего отказа перетирал бы «Нажми клавишу…»
+    // ЖИВОГО захвата — пользователь считал захват законченным, а первый же
+    // кейстрок молча переназначал хоткей (adversarial 29.08.2026, F-3).
+    if (captureLabelTimer) {
+      clearTimeout(captureLabelTimer);
+      captureLabelTimer = null;
+    }
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -1228,7 +1261,10 @@ document.addEventListener("DOMContentLoaded", () => {
       if (e.code !== get() && hotkeyGetters.some((g) => g() === e.code)) {
         finish();
         btn.textContent = "Занята другим действием";
-        setTimeout(render, 1400);
+        captureLabelTimer = setTimeout(() => {
+          captureLabelTimer = null;
+          render();
+        }, 1400);
         return;
       }
       finish();

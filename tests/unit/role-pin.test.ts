@@ -80,6 +80,52 @@ describe("пин своей роли", () => {
     expect(pinHolds("hidden")).toBe(false);
   });
 
+  test("находка B: «показ» не доверяет отравленному снимку — чужой hidden не пинится как показ", () => {
+    // Орфанный inline-пин старой версии расширения (без нашего маркера)
+    // остался на узле; ночной пин «показать» из снимка запинил бы
+    // hidden !important — роль скрыта от игрока всю ночь при довольном
+    // pinHolds("visible").
+    const el = mountRole();
+    el.style.setProperty("visibility", "hidden", "important");
+    el.style.setProperty("opacity", "0", "important");
+    pinOwnRole("visible");
+    expect(el.style.getPropertyValue("visibility"), "роль реально показана").toBe("visible");
+    expect(el.style.getPropertyValue("opacity")).toBe("1");
+    expect(pinHolds("visible")).toBe(true);
+  });
+
+  test("находка D: Vue переписал style-атрибут, маркер выжил — pinHolds честно говорит «нет»", () => {
+    const el = mountRole();
+    pinOwnRole("hidden");
+    el.setAttribute("style", "color: red"); // сайт перезаписал стили целиком
+    expect(el.hasAttribute("data-pn-role-pin"), "маркер пережил (Vue data-* не трогает)").toBe(true);
+    expect(pinHolds("hidden"), "стилей пина больше нет — держаться нечему").toBe(false);
+  });
+
+  test("находка F-2: стёртый style при «visible»-пине не маскируется маркером", () => {
+    // «!== hidden» удовлетворялось пустой строкой: ночной пин показа со
+    // стёртым Vue style-атрибутом считался живым, пока CSS авто-скрытия
+    // прятал роль от игрока всю ночь.
+    const el = mountRole();
+    pinOwnRole("visible");
+    expect(pinHolds("visible")).toBe(true);
+    el.setAttribute("style", "color: red");
+    expect(pinHolds("visible"), "стилей показа больше нет — heal обязан узнать").toBe(false);
+  });
+
+  test("находка A3: restoreLiftedPins на 0 целей — пин потерян, но pinHolds это видит", () => {
+    const el = mountRole();
+    pinOwnRole("hidden");
+    liftPins();
+    el.remove(); // целей нет в момент отпускания
+    restoreLiftedPins();
+    expect(pinHolds("hidden"), "heal-путь владельца увидит пропажу").toBe(false);
+    // Узел вернулся — повторный пин восстанавливает состояние.
+    mountRole();
+    expect(pinOwnRole("hidden")).toBe(true);
+    expect(pinHolds("hidden")).toBe(true);
+  });
+
   test("повторный lift без пина — false; restore после перепина владельцем — не мешает", () => {
     expect(liftPins(), "пина нет — поднимать нечего").toBe(false);
     mountRole();

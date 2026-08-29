@@ -18,6 +18,7 @@
 import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { keyboard } from "@core/keyboard";
 import { log } from "@core/log";
+import { showToast } from "@core/toast";
 import { isPinnedElement, liftPins, restoreLiftedPins } from "../role-pin";
 import { isRoleFaked } from "./role-faker";
 import { SITE, TEXT, OWN, classifyPhaseText, endedScreenVisible, SITE_CLASS } from "@core/selectors";
@@ -1349,7 +1350,13 @@ function handleRoleKey(e?: KeyboardEvent) {
   if (isRoleFaked()) {
     e?.stopPropagation();
     e?.preventDefault();
+    // Тост обязателен (F-5, прецедент RF-1): «нажал — на экране ничего» —
+    // человек не обязан лезть в лог, чтобы узнать про E.
     log.info(SCOPE, "клавиша скрытия роли не действует, пока активна подмена (E — сбросить)");
+    showToast("Скрытие не действует: активна подмена роли. E — сбросить", {
+      key: "role-hide-vs-fake",
+      kind: "warn",
+    });
     return;
   }
 

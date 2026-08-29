@@ -84,10 +84,15 @@ function applyToElement(el: HTMLElement, target: PinTarget): void {
   const snap = snapshots.get(el)!;
   if (target === "visible") {
     // Показ — тоже пином (inline !important): stylesheet-!important
-    // авто-скрытия иначе перебивал бы ночной показ.
-    setImportant(el, "visibility", snap.visibility || "visible");
-    setImportant(el, "opacity", snap.opacity || "1");
-    el.style.pointerEvents = snap.pointerEvents;
+    // авто-скрытия иначе перебивал бы ночной показ. Пишем КАНОНИЧНЫЕ
+    // значения, а не снимок: снимок мог нести чужой hidden (находка B —
+    // орфанный пин старой версии после обновления), а не-каноничное
+    // значение («inherit») зацикливало бы строгую проверку pinHolds
+    // (находка F-2). Исходные стили честно вернёт releasePins — снимок
+    // существует для восстановления, не для показа.
+    setImportant(el, "visibility", "visible");
+    setImportant(el, "opacity", "1");
+    el.style.pointerEvents = snap.pointerEvents === "none" ? "" : snap.pointerEvents;
   } else {
     setImportant(el, "visibility", "hidden");
     setImportant(el, "opacity", "0");
@@ -129,8 +134,16 @@ export function pinOwnRole(target: PinTarget): boolean {
 export function pinHolds(target: PinTarget): boolean {
   if (pinTarget !== target) return false;
   if (lifted) return true;
+  // Маркер И фактический стиль (adversarial 29.08.2026, находки D и F-2):
+  // Vue может переписать style-атрибут, не тронув data-* — маркер пережил
+  // бы пин. Проверка СТРОГАЯ в обе стороны: «!== hidden» удовлетворялась
+  // пустой строкой, и ночной «visible»-пин со стёртым style считался живым,
+  // пока CSS авто-скрытия прятал роль от игрока всю ночь.
   return getRoleVisibilityTargets().some(
-    (el) => el.isConnected && el.getAttribute(PIN_ATTR) === target,
+    (el) =>
+      el.isConnected &&
+      el.getAttribute(PIN_ATTR) === target &&
+      el.style.visibility === (target === "hidden" ? "hidden" : "visible"),
   );
 }
 
@@ -148,6 +161,16 @@ export function releasePins(): void {
 /**
  * Поднять пин на время подсматривания. true — пин был и снят; вернуть его
  * обязан restoreLiftedPins() при отпускании. Снимки и цель переживают подъём.
+ *
+ * Владелец МОЖЕТ перепинить прямо под поднятым пином (подтверждение дня во
+ * время удержания): подсматривание при этом гаснет. Это осознанный fail-safe
+ * (adversarial 29.08.2026, находка F): день обязан прятать роль, и «клавиша
+ * победила фазу» была бы ошибкой в сторону эфира.
+ *
+ * Пин не трогает display — display:none под пином подъём НЕ снимет (F-7).
+ * Сегодня display:none на роль никто, кроме stopPeek, не пишет (круг
+ * замкнут), но любой будущий писатель display взведёт эту композицию —
+ * помни при добавлении.
  */
 export function liftPins(): boolean {
   if (pinTarget === null || lifted) return false;

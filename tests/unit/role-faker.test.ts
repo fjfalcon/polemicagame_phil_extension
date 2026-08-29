@@ -142,6 +142,38 @@ describe("подмена переживает Vue-перерисовки (ауд
     expect(isRoleFaked()).toBe(true);
   });
 
+  test("F-1: ПЕРЕИСПОЛЬЗОВАННЫЙ узел с переписанным href перекрашивается обратно", () => {
+    // Vue патчит vnode: переписывает use[href], data-* не трогает — маркер
+    // выживал, и настоящая роль проступала при живой подмене (adversarial
+    // 29.08.2026, F-1). #stop при этом перебивать нельзя.
+    const { own } = mountTable();
+    enable();
+    pressF();
+    const fakedHref = own.querySelector("use")!.getAttribute("href")!;
+    // Сайт переписал href на настоящую роль (узел ТОТ ЖЕ, data-* на месте).
+    own.querySelector("use")!.setAttribute("href", "/sprite.svg#sheriff");
+    fireDom();
+    expect(own.querySelector("use")!.getAttribute("href"), "фальшивка возвращена").toBe(fakedHref);
+    // Нативное скрытие игрока фальшивка не перебивает.
+    own.querySelector("use")!.setAttribute("href", "/sprite.svg#stop");
+    fireDom();
+    expect(own.querySelector("use")!.getAttribute("href"), "#stop уважается").toBe(
+      "/sprite.svg#stop",
+    );
+  });
+
+  test("F-6: узел без <use> — честный отказ подмены, а не вечный тик наблюдателя", () => {
+    mountTable();
+    const wrap = document.querySelector(".my-role") as HTMLElement;
+    wrap.innerHTML = "";
+    const bare = document.createElement("div");
+    bare.className = "player__role role my-role";
+    wrap.appendChild(bare); // полусобранная разметка: без <use>
+    enable();
+    pressF();
+    expect(isRoleFaked(), "подмены нет — блокировать D нечем").toBe(false);
+  });
+
   test("№8: чужой узел, созданный ВО ВРЕМЯ подмены, скрыт и возвращается по E", () => {
     mountTable();
     enable();

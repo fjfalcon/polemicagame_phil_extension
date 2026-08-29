@@ -52,7 +52,8 @@ type ConnStatus = "default" | "connected" | "error";
 interface AutoSceneState {
   sessionId: string | null;
   currentTimeOfDay: TimeOfDay | null;
-  lastAppliedRoleVisibility: string | null;
+  /** Легаси-поле старых записей: читать и писать запрещено (находка E). */
+  lastAppliedRoleVisibility?: string | null;
   timestamp: number;
 }
 
@@ -425,10 +426,13 @@ async function savePersistedAutoState(): Promise<void> {
     }
     if (!obsSessionId) return;
 
+    // lastAppliedRoleVisibility сюда НЕ пишется (adversarial 29.08.2026,
+    // находка E): restore его принципиально игнорирует — латч описывает
+    // живой DOM, а не прошлую загрузку. Мёртвое поле в storage — приманка
+    // для будущего «а давайте восстановим».
     const state: AutoSceneState = {
       sessionId: obsSessionId,
       currentTimeOfDay,
-      lastAppliedRoleVisibility,
       timestamp: Date.now(),
     };
     await browser.storage.local.set({ obs_auto_scene_state: state });
@@ -527,6 +531,33 @@ function applyRoleVisibility(isRoleVisible: boolean): boolean {
 function setImportant(el: HTMLElement, prop: string, value: string): void {
   if (value) el.style.setProperty(prop, value, "important");
   else el.style.removeProperty(prop);
+}
+
+/**
+ * Желаемая видимость роли — ВЫВОДИТСЯ из фазы, а не хранится. Adversarial
+ * 29.08.2026 (находка A): самолечение гейтилось на латч, а любой путь
+ * неудачи гасил латч в null — при бюджете ретраев ~1,25 с (день) F5 или
+ * SPA-возврат оставляли систему дремать до смены фазы, роль в эфире.
+ * Латч остаётся оптимизацией «уже применено», но право лечить от него
+ * не зависит.
+ */
+function desiredRoleVisibility(): "visible" | "hidden" | null {
+  if (!autoModeEnabled || !currentTimeOfDay) return null;
+  return currentTimeOfDay === "night" ? "visible" : "hidden";
+}
+
+/**
+ * Перенакласть пин, если желаемое состояние не держится на живом узле.
+ * Зовётся подписчиком (добавлен узел роли) и страховочным 2с-опросом.
+ * Без целей на странице молчит: ретраи в пустоту сжигали бюджет (наход. A).
+ */
+function healRolePin(): void {
+  const want = desiredRoleVisibility();
+  if (!want) return;
+  if (pinHolds(want)) return;
+  if (getRoleVisibilityTargets().length === 0) return; // узлов ещё/уже нет
+  lastAppliedRoleVisibility = null; // латч мёртв вместе с прежним узлом
+  scheduleRoleVisibility(currentTimeOfDay as TimeOfDay);
 }
 
 function scheduleRoleVisibility(timeOfDay: TimeOfDay, attempt = 0): void {
@@ -1126,13 +1157,17 @@ function startDOMMonitoring(): void {
   unsubDom = onDomChange((mutations) => {
     let shouldCheckTime = false;
     let roleNodeAdded = false;
+    // Break только когда найдено ОБА: ранний выход по phaseScope съедал
+    // roleNodeAdded ровно в главном сценарии — Vue пересобирает плитки на
+    // смене фазы, и фазовая мутация почти всегда идёт в том же батче раньше
+    // (adversarial 29.08.2026, находка C).
 
     for (const mutation of mutations) {
+      if (shouldCheckTime && roleNodeAdded) break;
       const t = mutation.target;
       const el = t instanceof Element ? t : t.parentElement;
-      if (el?.closest(PHASE_SCOPE)) {
+      if (!shouldCheckTime && el?.closest(PHASE_SCOPE)) {
         shouldCheckTime = true;
-        break;
       }
       if (mutation.type === "childList") {
         for (const n of mutation.addedNodes) {
@@ -1151,19 +1186,10 @@ function startDOMMonitoring(): void {
       }
     }
 
-    // Пересозданный узел роли — перенакласть пин НЕМЕДЛЕННО, не дожидаясь
-    // 2с-опроса (аудит №1): страховочный интервал остаётся второй линией.
-    if (
-      roleNodeAdded &&
-      autoModeEnabled &&
-      currentTimeOfDay &&
-      lastAppliedRoleVisibility &&
-      !pinHolds(lastAppliedRoleVisibility)
-    ) {
-      const phase = currentTimeOfDay;
-      lastAppliedRoleVisibility = null;
-      scheduleRoleVisibility(phase);
-    }
+    // Пересозданный узел роли — перенакласть пин, не дожидаясь 2с-опроса
+    // (аудит №1): страховочный интервал остаётся второй линией. Желаемое
+    // состояние выводится из фазы — латч здесь ничего не решает (наход. A).
+    if (roleNodeAdded) healRolePin();
 
     if (shouldCheckTime) requestTimeOfDayCheck();
   });
@@ -1173,16 +1199,7 @@ function startDOMMonitoring(): void {
   // самолечение пина (аудит №1): пересозданный Vue узел теряет пин, латч
   // сверяется с живым DOM и перенакладывает в пределах пары секунд.
   timeOfDayFallbackTimer = setInterval(() => {
-    if (
-      autoModeEnabled &&
-      currentTimeOfDay &&
-      lastAppliedRoleVisibility &&
-      !pinHolds(lastAppliedRoleVisibility)
-    ) {
-      const phase = currentTimeOfDay;
-      lastAppliedRoleVisibility = null; // латч мёртв вместе с узлом
-      scheduleRoleVisibility(phase);
-    }
+    healRolePin();
     requestTimeOfDayCheck();
   }, 2000);
 

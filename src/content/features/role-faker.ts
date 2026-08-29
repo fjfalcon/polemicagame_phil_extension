@@ -180,9 +180,14 @@ class RoleFaker {
         // №3: Vue пересоздал узел СВОЕЙ роли — data-original-* умерли вместе
         // с ним, новый узел показывает настоящую роль при живом isFaked и
         // заблокированном D. Перенакладываем ту же фальшивую роль (без
-        // сдвига по кругу).
+        // сдвига по кругу). ПЕРЕИСПОЛЬЗОВАННЫЙ узел — отдельно (F-1): Vue
+        // патчит href, не трогая data-*, маркер выживает — дрейф ловим
+        // сравнением href с текущей фальшивкой.
         const own = document.querySelector<HTMLElement>(SITE.myRole);
-        if (own && !own.hasAttribute("data-original-role")) this.reapplyFake();
+        if (own) {
+          if (!own.hasAttribute("data-original-role")) this.reapplyFake();
+          else this.ensureFakePainted(own);
+        }
         document.querySelectorAll<HTMLElement>(SITE.playerMenuWithRole).forEach((menu) => {
           if (menu.closest(SITE.myRoleMark) || menu.closest(SITE.myPlayerTile)) return;
           if (menu.style.right !== "0.5rem") menu.style.right = "0.5rem";
@@ -220,6 +225,29 @@ class RoleFaker {
     this.setFaked(false);
   }
 
+  /**
+   * Дрейф переиспользованного узла (F-1): сайт переписал href (цикл
+   * «скрыть/показать роли» в его меню), настоящая роль проступила при живой
+   * подмене. Перекрашиваем обратно — кроме нативного «#stop»: скрытие,
+   * выбранное игроком, фальшивка не имеет права перебивать (спрятанная роль
+   * в эфир не утекает). Записи идемпотентны: пишем только при расхождении.
+   */
+  private ensureFakePainted(el: HTMLElement): void {
+    const use = el.querySelector("use");
+    if (!use) return;
+    const href = use.getAttribute("href") || use.getAttribute("xlink:href") || "";
+    if (href.includes("#stop")) return;
+    const role = this.roles[this.currentRoleIndex];
+    if (href.endsWith(`#${role.icon}`)) return;
+    const base = el.getAttribute("data-original-sprite-base") || this.resolveSpriteBase();
+    const fake = `${base}#${role.icon}`;
+    use.setAttribute("href", fake);
+    use.setAttribute("xlink:href", fake);
+    const tip = el.querySelector(SITE.siteTooltipText);
+    const text = `Ваша роль - ${role.name}`;
+    if (tip && tip.textContent !== text) tip.textContent = text;
+  }
+
   /** Перенаклад текущей подмены на пересозданный узел (без сдвига по кругу). */
   private reapplyFake(): void {
     this.currentRoleIndex = (this.currentRoleIndex + this.roles.length - 1) % this.roles.length;
@@ -235,6 +263,14 @@ class RoleFaker {
     const el = document.querySelector<HTMLElement>(SITE.myRole);
     if (!el) {
       log.debug("role-faker", "my role element not found");
+      return false;
+    }
+    // Без <use> подменять нечего: прежний «true» на полусобранной разметке
+    // не ставил data-original-role, и reapplyFake крутился на каждом проходе
+    // наблюдателя, а безусловная запись тултипа пересоздавала текстовый узел
+    // — вечный 4Гц-тик (adversarial 29.08.2026, F-6).
+    if (!el.querySelector("use")) {
+      log.debug("role-faker", "my role has no <use> — nothing to fake");
       return false;
     }
     // Ниже: контейнер роли есть, но внутри нечего менять (сайт пересобрал
@@ -262,7 +298,8 @@ class RoleFaker {
       use.setAttribute("xlink:href", href);
     }
     const tip = el.querySelector(SITE.siteTooltipText);
-    if (tip) tip.textContent = `Ваша роль - ${role.name}`;
+    const text = `Ваша роль - ${role.name}`;
+    if (tip && tip.textContent !== text) tip.textContent = text;
     return true;
   }
 
