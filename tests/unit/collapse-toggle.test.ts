@@ -1,12 +1,21 @@
 // @vitest-environment jsdom
 /**
- * Сворачивание ряда кнопок плитки за «⋯» (9.56.0, просьба владельца).
+ * Сворачивание ряда кнопок плитки за «⋯» (9.56.x, просьба владельца).
  *
- * Правда о состоянии — настройка (ctx.isCollapsed), модуль только приводит
- * DOM к ней. Ключевое обещание — идемпотентность (§4.1): sync зовётся из
- * подписчика onDomChange на каждом проходе, и повторный вызов при том же
- * состоянии не имеет права трогать DOM (иначе цикл обратной связи).
+ * Правда о состоянии — настройка (ctx.isCollapsed); модуль пишет ТОЛЬКО
+ * атрибут data-pn-collapsed, а прячет кнопки правило в notes.css. Так, а не
+ * inline: notes.css даёт кнопкам поимённо display:flex !important, и inline
+ * style.display="none" ему ПРОИГРЫВАЕТ — на живом сайте сворачивалась одна
+ * кнопка из семи, единственная не упомянутая в CSS-списке. jsdom-тест был
+ * слеп (обвязка не загружает notes.css) — поэтому здесь пара «атрибут в
+ * модуле ↔ правило в CSS» сторожится явно, по обоим концам.
+ *
+ * Ключевое обещание — идемпотентность (§4.1): sync зовётся из подписчика
+ * onDomChange на каждом проходе; повторный вызов не пишет в DOM. Проверка
+ * шпионами точек записи, НЕ MutationObserver: jsdom глотает запись атрибута
+ * в то же значение, и такой тест зелёный даже при снятых гейтах.
  */
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("@core/selectors", async (orig) => (await orig()) as object);
@@ -16,6 +25,7 @@ import { syncCollapseState } from "@content/features/player-notes/collapse-toggl
 
 function makeGroup(buttons = 3): HTMLElement {
   const group = document.createElement("div");
+  group.className = "player-icons";
   for (let i = 0; i < buttons; i++) group.appendChild(document.createElement("button"));
   document.body.appendChild(group);
   return group;
@@ -34,28 +44,42 @@ beforeEach(() => {
 });
 
 describe("сворачивание ряда кнопок («⋯»)", () => {
-  test("свёрнуто: все кнопки спрятаны, тумблер видим и показывает «⋯»", () => {
+  test("свёрнуто: атрибут на группе, тумблер показывает «⋯»", () => {
     const state = { collapsed: true, toggled: [] as boolean[] };
     const group = makeGroup();
     syncCollapseState(group, ctxOf(state));
+    expect(group.getAttribute("data-pn-collapsed")).toBe("true");
     const toggle = group.querySelector<HTMLElement>(`.${OWN.collapseButton}`)!;
-    expect(toggle.style.display).not.toBe("none");
-    for (const b of group.children) {
-      if (b !== toggle) expect((b as HTMLElement).style.display).toBe("none");
-    }
-    expect(group.dataset.pnCollapsed).toBe("true");
     expect(toggle.querySelectorAll("circle"), "иконка «⋯»").toHaveLength(3);
   });
 
-  test("развёрнуто: кнопки возвращаются, тумблер показывает шеврон", () => {
+  test("развёрнуто: атрибут снят по значению, тумблер — шеврон", () => {
     const state = { collapsed: true, toggled: [] as boolean[] };
     const group = makeGroup();
     syncCollapseState(group, ctxOf(state));
     state.collapsed = false;
     syncCollapseState(group, ctxOf(state));
-    for (const b of group.children) expect((b as HTMLElement).style.display).not.toBe("none");
+    expect(group.getAttribute("data-pn-collapsed")).toBe("false");
     const toggle = group.querySelector<HTMLElement>(`.${OWN.collapseButton}`)!;
     expect(toggle.querySelector("path"), "иконка-шеврон").not.toBeNull();
+  });
+
+  test("пара «модуль ↔ CSS»: правило notes.css прячет ровно то, что помечает модуль", () => {
+    // Жалоба 29.08.2026 случилась из-за разрыва этой пары. Сторожим оба
+    // конца: атрибут и класс тумблера в правиле — те же, что пишет модуль,
+    // display:none — с important (иначе проигрывает поимённому flex).
+    const css = readFileSync("src/static/notes.css", "utf8");
+    const rule = css.match(
+      /\.player-icons\[data-pn-collapsed="true"\]\s*>\s*:not\(\.([\w-]+)\)\s*\{([^}]+)\}/,
+    );
+    expect(rule, "правило сворачивания существует в notes.css").not.toBeNull();
+    expect(rule![1], "исключение правила — класс тумблера из OWN").toBe(OWN.collapseButton);
+    expect(rule![2]).toMatch(/display:\s*none\s*!important/);
+    // Атрибут, который пишет модуль, — тот же, что в правиле.
+    const state = { collapsed: true, toggled: [] as boolean[] };
+    const group = makeGroup();
+    syncCollapseState(group, ctxOf(state));
+    expect(group.getAttribute("data-pn-collapsed")).toBe("true");
   });
 
   test("клик переворачивает НАСТРОЙКУ, а не DOM напрямую", () => {
@@ -71,47 +95,25 @@ describe("сворачивание ряда кнопок («⋯»)", () => {
   });
 
   test("§4.1: повторный sync при том же состоянии не пишет в DOM вообще", () => {
-    // НЕ MutationObserver: jsdom глотает запись атрибута в то же значение,
-    // и такой тест зелёный даже при снятых гейтах (проверено мутацией).
-    // Сторожим сами точки записи: setAttribute (dataset), appendChild
-    // (перестановка тумблера) и сеттер style.display каждого ребёнка.
     const state = { collapsed: true, toggled: [] as boolean[] };
     const group = makeGroup();
     syncCollapseState(group, ctxOf(state));
-
-    let displayWrites = 0;
-    for (const child of Array.from(group.children) as HTMLElement[]) {
-      const style = child.style;
-      const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(style), "display")!;
-      Object.defineProperty(style, "display", {
-        get: () => desc.get!.call(style) as string,
-        set: (v: string) => {
-          displayWrites++;
-          desc.set!.call(style, v);
-        },
-      });
-    }
     const setAttr = vi.spyOn(Element.prototype, "setAttribute");
     const append = vi.spyOn(Node.prototype, "appendChild");
-
     syncCollapseState(group, ctxOf(state));
     syncCollapseState(group, ctxOf(state));
-
     expect(setAttr, "атрибуты не переписываются").not.toHaveBeenCalled();
     expect(append, "тумблер не переставляется").not.toHaveBeenCalled();
-    expect(displayWrites, "display не переписывается").toBe(0);
     setAttr.mockRestore();
     append.mockRestore();
   });
 
-  test("тумблер держится в конце ряда: дописанная сайтом/нами кнопка не оттесняет его", () => {
+  test("тумблер держится в конце ряда: дописанная кнопка не оттесняет его", () => {
     const state = { collapsed: true, toggled: [] as boolean[] };
     const group = makeGroup();
     syncCollapseState(group, ctxOf(state));
-    const late = document.createElement("button"); // ensureRotate/Mute append
-    group.appendChild(late);
+    group.appendChild(document.createElement("button")); // ensureRotate/Mute
     syncCollapseState(group, ctxOf(state));
     expect(group.lastElementChild!.className).toBe(OWN.collapseButton);
-    expect(late.style.display, "поздняя кнопка тоже свёрнута").toBe("none");
   });
 });

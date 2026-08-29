@@ -828,3 +828,47 @@ describe("тумблер точки «есть заметка»", () => {
     expect(document.querySelector(".pn-note-dot"), "выключение сняло точку").toBeNull();
   });
 });
+
+describe("сворачивание ряда: ВСЕ кнопки, а не пара (жалоба владельца 29.08.2026)", () => {
+  test("свёрнуто: на плитке с видео скрыт весь ряд, включая rotate/mute/hide", async () => {
+    playerNotesFeature.disable();
+    seam.subs = [];
+    await playerNotesFeature.enable({
+      settings: {
+        statistics_enabled: true,
+        tile_buttons_collapsed: true,
+        camera_rotate_enabled: true,
+        player_mute_enabled: true,
+        btn_crossover_enabled: true,
+      } as never,
+    });
+    document.body.innerHTML = `
+      <div class="players">
+        <div class="player" id="p1">
+          <video class="video"></video>
+          <div class="player__botleftmenu">
+            <div class="player__info info">
+              <div class="player-number player-0">1</div>
+              <span class="info__name">fj</span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    const tile = document.querySelector("#p1") as HTMLElement;
+    fire([rec({ target: document.body, added: [tile] })]);
+    // Второй проход: ensure-кнопки (rotate/mute) дозаезжают и обязаны тоже
+    // подчиниться свёрнутости в том же едином пути синхронизации.
+    fire([rec({ target: document.body, added: [tile] })]);
+
+    const group = document.querySelector(".player-icons") as HTMLElement;
+    expect(group, "ряд существует").not.toBeNull();
+    // Прячет кнопки CSS-правило notes.css по этому атрибуту (inline display
+    // проигрывал поимённым display:flex !important — жалоба 29.08.2026);
+    // пара «атрибут ↔ правило» сторожится в collapse-toggle.test.ts.
+    expect(group.getAttribute("data-pn-collapsed")).toBe("true");
+    expect(
+      group.querySelector(".pn-collapse-button"),
+      "тумблер «⋯» есть и в свёрнутом ряду",
+    ).not.toBeNull();
+  });
+});

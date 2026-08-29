@@ -10,6 +10,12 @@
  *
  * DOM-запись строго идемпотентна (§4.1): вызывается из подписчика onDomChange
  * на каждом проходе.
+ *
+ * Прячет кнопки НЕ этот модуль, а правило в notes.css по атрибуту
+ * data-pn-collapsed: notes.css даёт кнопкам поимённо display:flex !important,
+ * и inline style.display="none" ему проигрывает — на живом сайте
+ * сворачивалась одна кнопка из семи (жалоба владельца 29.08.2026, jsdom-тест
+ * был слеп: обвязка не загружает notes.css). Модуль пишет только атрибут.
  */
 import { OWN } from "@core/selectors";
 import { BUTTON_PLAIN_CSS } from "./styles";
@@ -59,11 +65,6 @@ export function syncCollapseState(iconsGroup: HTMLElement, ctx: CollapseToggleCt
   // Element.prototype.setAttribute, и шпион идемпотентности его не видит
   // (dataset-мутация прошла зелёной — поймано при разработке теста).
   if (iconsGroup.dataset.pnCollapsed !== want) iconsGroup.setAttribute("data-pn-collapsed", want);
-  for (const child of Array.from(iconsGroup.children) as HTMLElement[]) {
-    if (child === toggle) continue;
-    const disp = collapsed ? "none" : "";
-    if (child.style.display !== disp) child.style.display = disp;
-  }
   if (toggle.dataset.pnState !== want) {
     toggle.setAttribute("data-pn-state", want);
     toggle.title = collapsed ? "Показать кнопки" : "Свернуть кнопки";
