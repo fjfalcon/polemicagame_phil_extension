@@ -70,5 +70,10 @@ export function syncCollapseState(iconsGroup: HTMLElement, ctx: CollapseToggleCt
     toggle.title = collapsed ? "Показать кнопки" : "Свернуть кнопки";
     // Свёрнуто — «⋯» (за ним спрятан ряд); развёрнуто — шеврон «‹».
     toggle.innerHTML = collapsed ? SVG_COLLAPSED : SVG_OPEN;
+    // Перекрасить ПОСЛЕ смены глифа: innerHTML приносит SVG с зашитым синим,
+    // а тема красит только уже существующие узлы — без этого вызова кнопка
+    // мигала «то синяя, то белая» (жалоба владельца 29.08.2026): тема её
+    // красила проходом по всем кнопкам, очередной клик возвращал синий.
+    ctx.themeButton(toggle);
   }
 }

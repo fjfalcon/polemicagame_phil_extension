@@ -82,6 +82,26 @@ describe("сворачивание ряда кнопок («⋯»)", () => {
     expect(group.getAttribute("data-pn-collapsed")).toBe("true");
   });
 
+  test("смена глифа перекрашивает кнопку заново — иначе «то синяя, то белая»", () => {
+    // innerHTML приносит SVG с зашитым синим; тема красит только живые узлы.
+    // Жалоба 29.08.2026: тема перекрашивала тумблер проходом по всем кнопкам,
+    // а очередная смена состояния возвращала зашитый цвет.
+    const state = { collapsed: false, toggled: [] as boolean[] };
+    const paint = (b: HTMLElement) =>
+      b.querySelectorAll<SVGElement>("svg").forEach((el) => (el.style.color = "red"));
+    const ctx = {
+      isCollapsed: () => state.collapsed,
+      onToggle: () => undefined,
+      themeButton: paint,
+    };
+    const group = makeGroup();
+    syncCollapseState(group, ctx);
+    state.collapsed = true;
+    syncCollapseState(group, ctx); // смена глифа: innerHTML переписан
+    const svg = group.querySelector<SVGElement>(`.${OWN.collapseButton} svg`)!;
+    expect(svg.style.color, "тема применена к НОВОМУ svg").toBe("red");
+  });
+
   test("клик переворачивает НАСТРОЙКУ, а не DOM напрямую", () => {
     const state = { collapsed: false, toggled: [] as boolean[] };
     const group = makeGroup();
