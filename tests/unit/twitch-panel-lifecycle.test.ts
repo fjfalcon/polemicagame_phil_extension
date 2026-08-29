@@ -81,6 +81,7 @@ vi.mock("@core/FloatingPanel", () => ({
 
 import type { FeatureContext } from "@core/feature";
 import { parseChatHistory, serializeChatHistory, twitchPanelFeature } from "@content/panels/twitch-panel";
+import { sendRuntime } from "@core/messaging";
 
 type Handler = ((e: unknown) => void) | null;
 
@@ -442,5 +443,58 @@ describe("история чата поверх перезагрузки (про�
     const raw = sessionStorage.getItem(KEY);
     expect(parseChatHistory(raw, "other")).toEqual([]);
     expect(parseChatHistory(raw, "streamer")).toEqual([]);
+  });
+});
+
+describe("SEAM-05: статус и бюджет не переживают отключение (арх-аудит швов 29.08.2026)", () => {
+  const IRC_366 = ":tmi.twitch.tv 366 bot #streamer :End of /NAMES list";
+
+  function lastStatus(): { connected?: boolean } | undefined {
+    const calls = vi
+      .mocked(sendRuntime)
+      .mock.calls.filter((c) => (c[0] as { type?: string })?.type === "twitch_status");
+    return calls.at(-1)?.[0] as { connected?: boolean } | undefined;
+  }
+
+  test("после disconnect() get_status честно отвечает «не подключено»", () => {
+    enableFeature();
+    const ws = lastSocket();
+    ws.emitOpen();
+    ws.onmessage?.({ data: IRC_366 });
+
+    h.msgHandler?.({ type: "twitch_get_status" });
+    expect(lastStatus()?.connected, "вход в канал подтверждён").toBe(true);
+
+    // disconnect() отвязывает onclose ДО close(): сброс готовности в onclose
+    // не сработает никогда — готовность обязан снять сам disconnect().
+    h.msgHandler?.({ type: "twitch_disconnect" });
+    h.msgHandler?.({ type: "twitch_get_status" });
+    expect(lastStatus()?.connected, "сокета нет — «Подключено» ложь").toBe(false);
+  });
+
+  test("исчерпанный бюджет переподключений не переживает выключение фичи", () => {
+    enableFeature();
+    lastSocket().emitOpen();
+    // Исчерпать бюджет: каждая неудача планирует следующую попытку.
+    for (let i = 0; i < 11; i++) {
+      lastSocket().emitClose();
+      vi.advanceTimersByTime(60_000);
+    }
+    const spent = FakeWebSocket.instances.length;
+    lastSocket().emitClose();
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWebSocket.instances.length, "бюджет исчерпан — попыток больше нет").toBe(spent);
+
+    // Цикл выключить/включить: новая сессия обязана получить свежий бюджет.
+    twitchPanelFeature.disable();
+    enableFeature();
+    const fresh = FakeWebSocket.instances.length;
+    expect(fresh, "включение открывает новый сокет").toBeGreaterThan(spent);
+    lastSocket().emitClose();
+    vi.advanceTimersByTime(60_000);
+    expect(
+      FakeWebSocket.instances.length,
+      "первая неудача новой сессии планирует переподключение, а не умирает об старый счётчик",
+    ).toBeGreaterThan(fresh);
   });
 });

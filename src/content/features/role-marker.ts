@@ -82,10 +82,10 @@ function resolveGameKey(): string | null {
     ?.textContent?.match(/\d+/)?.[0];
   if (infoText) return `g:${infoText}`;
   // 2) data-game-id
-  const byAttr = document.querySelector("[data-game-id]")?.getAttribute("data-game-id");
+  const byAttr = document.querySelector(SITE.gameIdAttr)?.getAttribute("data-game-id");
   if (byAttr && /^\d+$/.test(byAttr)) return `g:${byAttr}`;
   // 3) встроенные данные игры (как у match-parser)
-  const raw = document.querySelector("[data-game]")?.getAttribute("data-game");
+  const raw = document.querySelector(SITE.gameDataAttrLegacy)?.getAttribute("data-game");
   if (raw) {
     try {
       const id = JSON.parse(raw)?.id;

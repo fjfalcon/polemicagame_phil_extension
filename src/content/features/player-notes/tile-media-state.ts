@@ -76,7 +76,9 @@ export class TileMediaState {
       const res = await browser.storage.local.get({ [MUTED_PLAYERS_KEY]: [] });
       const list = res[MUTED_PLAYERS_KEY];
       if (Array.isArray(list)) {
-        for (const u of list) if (typeof u === "string" && u) this.muted.add(u);
+        // lowercase на входе: свои записи и так в нижнем регистре, но импорт
+        // бэкапа мог занести "MixedNick" — lookup его не нашёл бы (SEAM-08).
+        for (const u of list) if (typeof u === "string" && u) this.muted.add(u.toLowerCase());
       }
     } catch (e) {
       log.warn("player-notes", "muted players load failed", e);
@@ -86,7 +88,9 @@ export class TileMediaState {
   /** Список пришёл из другой вкладки (storage.onChanged). */
   adoptExternalMuted(next: unknown): void {
     if (!Array.isArray(next)) return;
-    this.muted = new Set(next.filter((u): u is string => typeof u === "string" && u !== ""));
+    this.muted = new Set(
+      next.filter((u): u is string => typeof u === "string" && u !== "").map((u) => u.toLowerCase()),
+    );
     this.ctx.onExternalMediaChange();
   }
 
@@ -175,7 +179,7 @@ export class TileMediaState {
       const res = await browser.storage.local.get({ [HIDDEN_PLAYERS_KEY]: [] });
       const list = res[HIDDEN_PLAYERS_KEY];
       if (Array.isArray(list)) {
-        for (const u of list) if (typeof u === "string" && u) this.hidden.add(u);
+        for (const u of list) if (typeof u === "string" && u) this.hidden.add(u.toLowerCase());
       }
     } catch (e) {
       log.warn("player-notes", "hidden players load failed", e);
@@ -185,7 +189,9 @@ export class TileMediaState {
   /** Список пришёл из другой вкладки (storage.onChanged). */
   adoptExternalHidden(next: unknown): void {
     if (!Array.isArray(next)) return;
-    this.hidden = new Set(next.filter((u): u is string => typeof u === "string" && u !== ""));
+    this.hidden = new Set(
+      next.filter((u): u is string => typeof u === "string" && u !== "").map((u) => u.toLowerCase()),
+    );
     this.ctx.onExternalMediaChange();
   }
 

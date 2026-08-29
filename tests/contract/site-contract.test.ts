@@ -93,14 +93,43 @@ describe("live Polemica bundle contracts", () => {
       "penaltyDots",
       "penaltyDot",
       "bestMoveDot",
+      // Тултип штрафов тоже строим МЫ (tooltip.ts) — искать его в живых
+      // бандлах сайта было ложной проверкой (арх-аудит швов 29.08.2026).
+      "penaltyTooltip",
+      // Атрибутные легаси-селекторы: классов в них нет, в бандлах их искать
+      // нечем — проверка ниже по классам их и так пропускает, ключи здесь
+      // для явности решения.
+      "gameIdAttr",
+      "gameDataAttrLegacy",
     ]);
     expect([...expectedAbsentKeys].sort()).toEqual([
       "bestMoveDot",
+      "gameDataAttrLegacy",
+      "gameIdAttr",
       "penaltyDot",
       "penaltyDots",
+      "penaltyTooltip",
       "playerMenuWithRole",
       "roleSymbols",
       "substageActive",
+    ]);
+
+    // Умершие АЛЬТЕРНАТИВЫ составных селекторов: разобраны 29.08.2026
+    // (арх-аудит швов). Сайт ушёл с этой разметки, но альтернатива в коде
+    // безвредна и оставлена на случай отката/AB-теста сайта. Отсутствие
+    // одной альтернативы не значит поломку селектора: живая часть каждой
+    // пары проверяется ниже как обычно. Новая пропажа, НЕ входящая в этот
+    // список, — сигнал редизайна и валит тест как раньше.
+    const reviewedDeadAlternatives = new Set([
+      "videoClickZone: .video-control",
+      "siteModals: .vm--overlay",
+      "siteModalsWide: .vm--overlay",
+      "siteMenuItem: .base-menu__item",
+      "menuClickable: .base-menu__item",
+      "siteMenuWide: .base-menu__list",
+      "siteMenuWide: .base-menu__content",
+      "siteMenuWide: .context-menu",
+      "siteMenuOwning: .context-menu",
     ]);
 
     const missingClasses: string[] = [];
@@ -108,7 +137,10 @@ describe("live Polemica bundle contracts", () => {
       if (expectedAbsentKeys.has(key)) continue;
       const selectors = Array.isArray(selector) ? selector : [selector];
       for (const className of new Set(selectors.flatMap(classesFromSelector))) {
-        if (!allBundles.includes(className)) missingClasses.push(`${key}: .${className}`);
+        if (allBundles.includes(className)) continue;
+        const entry = `${key}: .${className}`;
+        if (reviewedDeadAlternatives.has(entry)) continue;
+        missingClasses.push(entry);
       }
     }
     expect(

@@ -332,7 +332,7 @@ function unlinkPlayerNames(root: ParentNode = document): void {
 function removeEnhancements(): void {
   document
     .querySelectorAll(
-      `${SITE.statsRowPhase}, ${SITE.bestMoveDot}, ${SITE.bestMoveTooltip}, ${SITE.penaltyDots}, .pn-timeline`,
+      `${SITE.statsRowPhase}, ${SITE.bestMoveDot}, ${SITE.penaltyDots}, .pn-timeline`,
     )
     .forEach((element) => element.remove());
 }
@@ -928,46 +928,6 @@ function addBestMoveStyles(): void {
       transition: transform 0.2s ease;
     }
     .best-move-dot:hover { transform: scale(1.2); }
-    .best-move-tooltip {
-      display: none;
-      position: absolute;
-      background: linear-gradient(180deg, rgba(30, 31, 34, 0.98) 0%, rgba(22, 23, 26, 0.98) 100%);
-      color: white;
-      padding: 10px 14px;
-      border-radius: 10px;
-      font-size: 13px;
-      line-height: 1.5;
-      white-space: pre-line;
-      z-index: 1000;
-      pointer-events: none;
-      top: -10px;
-      right: 25px;
-      min-width: 160px;
-      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      backdrop-filter: blur(10px);
-      transform-origin: right center;
-      animation: tooltipAppear 0.2s ease;
-    }
-    .best-move-tooltip::before {
-      content: '';
-      position: absolute;
-      right: -6px;
-      top: 12px;
-      width: 10px;
-      height: 10px;
-      background: inherit;
-      transform: rotate(45deg);
-      border-right: 1px solid rgba(255, 255, 255, 0.1);
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
-      z-index: -1;
-    }
-    .best-move-tooltip::after {
-      content: '';
-      display: block;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      margin-bottom: 8px;
-    }
     .tooltip-content { display: flex; flex-direction: column; gap: 6px; }
     .tooltip-content::before {
       content: 'Лучший ход';
@@ -997,7 +957,6 @@ function addBestMoveStyles(): void {
     .civs .number { background: rgba(248, 113, 113, 0.14); color: #f87171; }
     .sheriff .number { background: rgba(250, 204, 21, 0.14); color: #facc15; }
     .vice .number { background: rgba(147, 51, 234, 0.2); color: #9333ea; }
-    .best-move-dot:hover + .best-move-tooltip { display: block; }
     .cell { position: relative !important; }
   `,
     "pn-best-move-styles",

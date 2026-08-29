@@ -880,17 +880,20 @@ document.addEventListener("DOMContentLoaded", () => {
           const tags = Array.isArray(data?.customTags)
             ? (data.customTags as unknown[]).filter(isSafeTag)
             : [];
+          // lowercase обязателен: рантайм ищет ники в нижнем регистре, и
+          // "MixedNick" из чужого/правленого бэкапа не срабатывал бы никогда
+          // (арх-аудит швов 29.08.2026, SEAM-08).
           const muted = Array.isArray(data?.mutedPlayers)
-            ? (data.mutedPlayers as unknown[]).filter(
-                (m): m is string => typeof m === "string" && m.length > 0 && m.length <= 200,
-              )
+            ? (data.mutedPlayers as unknown[])
+                .filter((m): m is string => typeof m === "string" && m.length > 0 && m.length <= 200)
+                .map((m) => m.toLowerCase())
             : [];
           // Скрытые камеры персистентны с 9.54.0 — в бэкапе та же судьба,
           // что у мьютов: без них «импорт вернёт всё как было» врало бы.
           const hiddenCams = Array.isArray(data?.hiddenPlayers)
-            ? (data.hiddenPlayers as unknown[]).filter(
-                (m): m is string => typeof m === "string" && m.length > 0 && m.length <= 200,
-              )
+            ? (data.hiddenPlayers as unknown[])
+                .filter((m): m is string => typeof m === "string" && m.length > 0 && m.length <= 200)
+                .map((m) => m.toLowerCase())
             : [];
           const hasMarks =
             !!data?.roleMarks && typeof data.roleMarks === "object" && !Array.isArray(data.roleMarks);
@@ -1182,20 +1185,44 @@ document.addEventListener("DOMContentLoaded", () => {
   const renderPauseKey = () => {
     if (pauseCaptureBtn) pauseCaptureBtn.textContent = formatKeyCode(pauseHotkeyCode);
   };
+  // Захват клавиши в попапе ОДИН на все кнопки: каждый клик по capture-
+  // кнопке вешал НЕЗАВИСИМЫЙ listener на window, stopPropagation соседний
+  // listener на том же объекте не останавливает — две нажатые кнопки
+  // получали один keydown и назначали одну клавишу двум действиям
+  // (арх-аудит швов 29.08.2026, SEAM-07). Новый захват снимает прежний
+  // и возвращает его кнопке прежнюю подпись.
+  let cancelKeyCapture: (() => void) | null = null;
+  const beginKeyCapture = (
+    btn: HTMLElement,
+    apply: (code: string) => void,
+    render: () => void,
+  ): void => {
+    cancelKeyCapture?.();
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isModifierCode(e.code)) return; // ждём не-модификатор
+      finish();
+      apply(e.code);
+      render();
+      saveSettings();
+    };
+    const finish = () => {
+      window.removeEventListener("keydown", onKey, true);
+      cancelKeyCapture = null;
+    };
+    cancelKeyCapture = () => {
+      finish();
+      render(); // прерванный захват: вернуть подпись клавиши вместо «Нажми…»
+    };
+    btn.textContent = "Нажми клавишу…";
+    window.addEventListener("keydown", onKey, true);
+  };
+
   if (pauseCaptureBtn) {
-    pauseCaptureBtn.addEventListener("click", () => {
-      pauseCaptureBtn.textContent = "Нажми клавишу…";
-      const onKey = (e: KeyboardEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (isModifierCode(e.code)) return; // ждём не-модификатор
-        window.removeEventListener("keydown", onKey, true);
-        pauseHotkeyCode = e.code;
-        renderPauseKey();
-        saveSettings();
-      };
-      window.addEventListener("keydown", onKey, true);
-    });
+    pauseCaptureBtn.addEventListener("click", () =>
+      beginKeyCapture(pauseCaptureBtn, (code) => (pauseHotkeyCode = code), renderPauseKey),
+    );
   }
 
   // ───────────────────────── Захват клавиш ролей (F/E/D) ─────────────────────────
@@ -1216,19 +1243,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const render = () => (btn.textContent = formatKeyCode(get()));
     render();
     roleKeyRenders.push(render);
-    btn.addEventListener("click", () => {
-      btn.textContent = "Нажми…";
-      const onKey = (e: KeyboardEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (isModifierCode(e.code)) return;
-        window.removeEventListener("keydown", onKey, true);
-        set(e.code);
-        render();
-        saveSettings();
-      };
-      window.addEventListener("keydown", onKey, true);
-    });
+    btn.addEventListener("click", () => beginKeyCapture(btn, set, render));
   };
   setupRoleKey("hotkey_role_fake", () => roleFakeCode, (c) => (roleFakeCode = c));
   setupRoleKey("hotkey_role_reset", () => roleResetCode, (c) => (roleResetCode = c));

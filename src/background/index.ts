@@ -8,6 +8,7 @@ import { log } from "@core/log";
 import { installErrorCapture } from "@core/errors";
 import { handleInstalled } from "./onboarding";
 import { onMessage, sendToTab } from "@core/messaging";
+import { isGameRoomPath } from "@shared/routes";
 import { getSettings, getSetting, onSettingsChanged } from "@core/settings";
 import {
   applyNoteOps,
@@ -108,6 +109,27 @@ function enqueueRecord<T>(task: () => Promise<T> | T): Promise<T> {
  * adversarial 26.08.2026, OBS-5). Не ответившая вкладка комнатой не
  * считается: осиротевший content-скрипт запись не остановит никогда.
  */
+/**
+ * У молчания вкладки ДВА смысла, и до 29.08.2026 они склеивались: «вкладки
+ * нет» (закрыта, discarded — запись пора останавливать) и «вкладка есть, но
+ * осиротела»: автообновление расширения посреди игры убивает канал старого
+ * content-скрипта, ответить он не может ФИЗИЧЕСКИ до F5 (арх-аудит швов
+ * 29.08.2026, SEAM-01/02: watchdog останавливал запись посреди живого
+ * матча, а машина перезахода получала право на «Покинуть игру»).
+ * Разводим по косвенным признакам: живая (не discarded) вкладка, чей URL —
+ * игровая комната, считается комнатой и без ответа. URL здесь вторичен
+ * (правду о вкладке знает только она, §4.10) и решает только при молчании:
+ * ответившая вкладка авторитетна как раньше.
+ */
+function silentTabLooksLikeRoom(tab: { discarded?: boolean; url?: string }): boolean {
+  if (tab.discarded === true) return false;
+  try {
+    return isGameRoomPath(new URL(tab.url ?? "").pathname);
+  } catch {
+    return false; // нет url (нет host-permission) — судить не по чему
+  }
+}
+
 async function countRoomTabs(excludeTabId?: number): Promise<number> {
   const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/*" });
   // Таймаут на вкладку (adversarial 27.08.2026, №6): sendToTab ловит отказ,
@@ -118,10 +140,11 @@ async function countRoomTabs(excludeTabId?: number): Promise<number> {
       sendToTab<{ inRoom?: boolean }>(id, { type: "obs_room_probe" }),
       new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500)),
     ]);
-  const answers = await Promise.all(
-    tabs.filter((t) => t.id != null && t.id !== excludeTabId).map((t) => ask(t.id as number)),
-  );
-  return answers.filter((a) => a?.inRoom === true).length;
+  const asked = tabs.filter((t) => t.id != null && t.id !== excludeTabId);
+  const answers = await Promise.all(asked.map((t) => ask(t.id as number)));
+  return answers.filter(
+    (a, i) => a?.inRoom === true || (a === undefined && silentTabLooksLikeRoom(asked[i])),
+  ).length;
 }
 
 /**
@@ -718,18 +741,26 @@ onMessage((msg: ExtMessage, sender) => {
  * Ошибки доставки (выгруженная/осиротевшая вкладка) sendToTab гасит в
  * undefined — это честное «не знаю», и оно НЕ считается живым матчем:
  * сторож дополнительный, отказ канала не должен блокировать явное действие
- * игрока (fail-open согласован ревью 07.08.2026).
+ * игрока (fail-open согласован ревью 07.08.2026). ИСКЛЮЧЕНИЕ (SEAM-02,
+ * 29.08.2026): молчащая живая вкладка на URL игровой комнаты считается
+ * живым матчем — после автообновления расширения старый content-скрипт
+ * молчит физически, и fail-open разрешал автоклик «Покинуть игру» по
+ * заведомо существующей игровой вкладке. Fail-open остаётся для честного
+ * «не знаю»; сузили только случай, где URL прямо говорит «комната».
  */
 async function probeLiveMatchTabs(excludeTabId: number | undefined): Promise<{ live: boolean }> {
   // Паттерн шире /game (ловит и /game-search): лишние вкладки честно ответят
   // live:false — фильтр по маршруту делает сам контент-скрипт.
   const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/game*" });
+  const asked = tabs.filter((t) => t.id != null && t.id !== excludeTabId);
   const answers = await Promise.all(
-    tabs
-      .filter((t) => t.id != null && t.id !== excludeTabId)
-      .map((t) => sendToTab<{ live?: boolean }>(t.id as number, { type: "postgame_live_probe" })),
+    asked.map((t) => sendToTab<{ live?: boolean }>(t.id as number, { type: "postgame_live_probe" })),
   );
-  return { live: answers.some((a) => a?.live === true) };
+  return {
+    live: answers.some(
+      (a, i) => a?.live === true || (a === undefined && silentTabLooksLikeRoom(asked[i])),
+    ),
+  };
 }
 
 /**

@@ -313,13 +313,15 @@ class PlayerNotesManager {
    * Данные заметок: карта, палитра, очередь записи и правила сохранения.
    * Фича их только читает и заказывает перерисовку — владелец отдельный.
    */
+  // Перерисовки гейтятся на this.active: хвост await сохранения после
+  // disable() воскрешал UI (SEAM-03). Запись на диск должна дожить.
   private readonly model = new NotesModel({
     isActive: () => this.active,
-    onColorsChanged: () => this.refreshNickColors(),
-    onIndicatorsChanged: () => this.refreshNoteIndicators(),
-    onTagsChanged: () => this.refreshPlayerTags(),
-    onTooltipsChanged: () => this.updateAllTooltips(),
-    onPlayerTooltips: (username) => this.updatePlayerTooltips(username),
+    onColorsChanged: () => this.active && this.refreshNickColors(),
+    onIndicatorsChanged: () => this.active && this.refreshNoteIndicators(),
+    onTagsChanged: () => this.active && this.refreshPlayerTags(),
+    onTooltipsChanged: () => this.active && this.updateAllTooltips(),
+    onPlayerTooltips: (username) => this.active && this.updatePlayerTooltips(username),
     toast: (message, warn) => this.toast(message, warn),
     lookupId: (lower) => this.stats.idOf(lower) ?? this.profileIdByNick.get(lower),
   });
@@ -680,10 +682,11 @@ class PlayerNotesManager {
     closeOpenModal: () => this.closeOpenModal?.(),
     resolvePlayerInput: (input) => this.resolvePlayerInput(input),
     confirmRemoveCustomTag: (css) => this.confirmRemoveCustomTag(css),
-    refreshColors: () => this.refreshNickColors(),
-    refreshIndicators: () => this.refreshNoteIndicators(),
-    refreshTags: () => this.refreshPlayerTags(),
-    refreshPlayer: (username) => this.updatePlayerTooltips(username),
+    // Тот же гейт, что у модели (SEAM-03): хвост save() модалки.
+    refreshColors: () => this.active && this.refreshNickColors(),
+    refreshIndicators: () => this.active && this.refreshNoteIndicators(),
+    refreshTags: () => this.active && this.refreshPlayerTags(),
+    refreshPlayer: (username) => this.active && this.updatePlayerTooltips(username),
   };
 
   private showNoteModal(username: string): void {

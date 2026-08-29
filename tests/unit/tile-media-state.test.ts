@@ -113,6 +113,21 @@ describe("мьют: общий для вкладок список", () => {
     expect(repaints).toBe(1);
   });
 
+  test("SEAM-08: MixedNick из импортированного бэкапа находится lookup'ом", async () => {
+    // Рантайм ищет lowercase; свои записи такими и пишутся, но импорт бэкапа
+    // мог занести смешанный регистр — мьют «есть в списке», но не работал
+    // (арх-аудит швов 29.08.2026).
+    store.disk[MUTED_PLAYERS_KEY] = ["MixedNick"];
+    store.disk[HIDDEN_PLAYERS_KEY] = ["ДругойНик"];
+    const s = make();
+    await s.loadMuted();
+    await s.loadHidden();
+    expect(s.isMuted("mixednick")).toBe(true);
+    expect(s.isHidden("другойник")).toBe(true);
+    s.adoptExternalMuted(["ЕщёНик"]);
+    expect(s.isMuted("ещёник"), "и из чужой вкладки — тоже").toBe(true);
+  });
+
   test("мусор вместо списка игнорируется молча", () => {
     const s = make();
     s.toggleMute("Аня");

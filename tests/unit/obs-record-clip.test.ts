@@ -17,7 +17,9 @@ const wiring = vi.hoisted(() => ({
   onMessage: [] as ((msg: unknown, sender: unknown) => unknown)[],
   onAlarm: [] as ((a: { name: string; scheduledTime: number }) => void)[],
   /** Вкладки сайта и их ответ на probe «ты в комнате?». */
-  siteTabs: [] as { id: number; inRoom: boolean }[],
+  // silent: вкладка НЕ отвечает на probe (осиротела после обновления /
+  // выгружена); url и discarded — то, что фон видит из tabs.query.
+  siteTabs: [] as { id: number; inRoom?: boolean; live?: boolean; silent?: boolean; url?: string; discarded?: boolean }[],
 }));
 
 vi.mock("@core/env", () => ({
@@ -64,7 +66,9 @@ vi.mock("@core/env", () => ({
     tabs: {
       onRemoved: { addListener: vi.fn() },
       query: vi.fn(async (q: { url?: string }) =>
-        q.url === "*://*.polemicagame.com/*" ? wiring.siteTabs.map((t) => ({ id: t.id })) : [],
+        q.url === "*://*.polemicagame.com/*" || q.url === "*://*.polemicagame.com/game*"
+          ? wiring.siteTabs.map((t) => ({ id: t.id, url: t.url, discarded: t.discarded }))
+          : [],
       ),
       sendMessage: vi.fn(async () => undefined),
       update: vi.fn(async () => undefined),
@@ -81,9 +85,11 @@ vi.mock("@core/messaging", () => ({
     return () => undefined;
   }),
   sendToTab: vi.fn(async (tabId: number, msg: { type?: string }) => {
-    if (msg?.type !== "obs_room_probe") return undefined;
     const tab = wiring.siteTabs.find((t) => t.id === tabId);
-    return tab ? { inRoom: tab.inRoom } : undefined;
+    if (!tab || tab.silent) return undefined; // канала нет: молчание, не «false»
+    if (msg?.type === "obs_room_probe") return { inRoom: tab.inRoom === true };
+    if (msg?.type === "postgame_live_probe") return { live: tab.live === true };
+    return undefined;
   }),
   sendRuntime: vi.fn(async () => undefined),
   broadcastToGameTabs: vi.fn(async () => undefined),
@@ -296,10 +302,35 @@ describe("автозапись игр", () => {
     expect(store.data.obs_auto_record_started, "флаг не потерян").toBe(true);
   });
 
-  test("молчащая (усыплённая) вкладка комнатой не считается — запись не сиротеет", async () => {
+  test("усыплённая (discarded) вкладка комнатой не считается — запись не сиротеет", async () => {
     const obs = await bootConnected();
     await command("record_start", undefined, 5);
-    wiring.siteTabs = [{ id: 9, inRoom: false }]; // discarded: probe без ответа «в комнате»
+    // До 29.08.2026 этот тест НАЗЫВАЛ вкладку молчащей, но мок отвечал
+    // {inRoom:false} — настоящая тишина канала не моделировалась (арх-аудит
+    // швов, SEAM-01). Теперь вкладка честно молчит И discarded.
+    wiring.siteTabs = [
+      { id: 9, silent: true, discarded: true, url: "https://polemicagame.com/game/1" },
+    ];
+    const stop = await command("record_stop", undefined, 5);
+    expect(stop.data?.stopped).toBe(true);
+    expect(obs.recording).toBe(false);
+  });
+
+  test("SEAM-01: осиротевшая после обновления вкладка (молчит, URL комнаты) держит запись", async () => {
+    const obs = await bootConnected();
+    await command("record_start", undefined, 5);
+    // Автообновление посреди игры: старый content-скрипт ответить НЕ может,
+    // но вкладка жива и стоит на игровой комнате — запись не останавливаем.
+    wiring.siteTabs = [{ id: 9, silent: true, url: "https://polemicagame.com/game/777" }];
+    const stop = await command("record_stop", undefined, 5);
+    expect(stop.data?.ignored).toBe("other_room_tabs");
+    expect(obs.recording, "запись пережила автообновление расширения").toBe(true);
+  });
+
+  test("молчащая вкладка ВНЕ комнаты (URL профиля) комнатой не считается", async () => {
+    const obs = await bootConnected();
+    await command("record_start", undefined, 5);
+    wiring.siteTabs = [{ id: 9, silent: true, url: "https://polemicagame.com/profile/5" }];
     const stop = await command("record_stop", undefined, 5);
     expect(stop.data?.stopped).toBe(true);
     expect(obs.recording).toBe(false);
@@ -438,5 +469,48 @@ describe("клипы (Replay Buffer)", () => {
     const res = await command("replay_save");
     expect(res.success).toBe(true);
     expect(obs.requests).toContain("SaveReplayBuffer");
+  });
+});
+
+describe("сторож живого матча (background, SEAM-02)", () => {
+  async function liveQuery(tabId = 5): Promise<{ live: boolean }> {
+    for (const fn of wiring.onMessage) {
+      const res = fn({ type: "postgame_live_query" }, { tab: { id: tabId } });
+      if (res !== undefined) return (await res) as { live: boolean };
+    }
+    throw new Error("обработчик postgame_live_query не найден");
+  }
+
+  test("ответившая живая вкладка блокирует, отсутствие вкладок — pass", async () => {
+    await bootConnected();
+    wiring.siteTabs = [{ id: 9, live: true, url: "https://polemicagame.com/game/1" }];
+    expect((await liveQuery()).live).toBe(true);
+    wiring.siteTabs = [];
+    expect((await liveQuery()).live).toBe(false);
+  });
+
+  test("SEAM-02: осиротевшая вкладка на URL комнаты считается живым матчем", async () => {
+    await bootConnected();
+    // Автообновление: старый content-скрипт молчит, но вкладка жива и стоит
+    // на игровой комнате — автоклик «Покинуть игру» должен быть запрещён.
+    wiring.siteTabs = [{ id: 9, silent: true, url: "https://polemicagame.com/game/42" }];
+    expect((await liveQuery()).live).toBe(true);
+  });
+
+  test("fail-open сохранён: молчание БЕЗ признаков комнаты не блокирует", async () => {
+    await bootConnected();
+    wiring.siteTabs = [
+      // страница поиска: не комната
+      { id: 9, silent: true, url: "https://polemicagame.com/game-search" },
+      // усыплённая комната: вкладки фактически нет
+      { id: 11, silent: true, discarded: true, url: "https://polemicagame.com/game/3" },
+    ];
+    expect((await liveQuery()).live).toBe(false);
+  });
+
+  test("вкладка отправителя исключается из опроса", async () => {
+    await bootConnected();
+    wiring.siteTabs = [{ id: 5, silent: true, url: "https://polemicagame.com/game/9" }];
+    expect((await liveQuery(5)).live, "своё молчание — не чужой матч").toBe(false);
   });
 });

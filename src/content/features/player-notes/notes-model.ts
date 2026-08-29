@@ -273,13 +273,25 @@ export class NotesModel {
       // права быть чёрным ходом мимо проверок.
       const safeAdd = add.filter(isSafeTag);
       if (safeAdd.length === 0 && remove.length === 0) return rollback();
-      const next = [
-        ...new Set([...disk.filter((t) => isSafeTag(t) && !removeSet.has(t)), ...safeAdd]),
-      ].slice(0, MAX_CUSTOM_TAGS);
+      const keptDisk = disk.filter((t) => isSafeTag(t) && !removeSet.has(t));
+      const merged = [...new Set([...keptDisk, ...safeAdd])];
+      const next = merged.slice(0, MAX_CUSTOM_TAGS);
       const ok = await saveCustomTagsToStore(next);
       if (!ok) return rollback();
       this.tags = next;
       this.ctx.onTagsChanged();
+      // Потери — вслух, как у координатора: фолбэк молча резал переполнение
+      // и небезопасные легаси-цвета, отвечая «успех» (арх-аудит швов
+      // 29.08.2026, SEAM-06). slice режет ХВОСТ — то есть в первую очередь
+      // только что добавленный цвет.
+      const dropped = merged.length - next.length + (add.length - safeAdd.length);
+      if (dropped > 0) {
+        this.ctx.toast(`Палитра переполнена: ${dropped} цвет(ов) не сохранено`, true);
+      }
+      const purged = disk.length - disk.filter(isSafeTag).length;
+      if (purged > 0) {
+        log.warn("player-notes", "палитра (фолбэк): отброшено небезопасных легаси-цветов:", purged);
+      }
       return true;
     } catch (e) {
       log.warn("player-notes", "палитра: свежее состояние не прочиталось — запись отменена", e);

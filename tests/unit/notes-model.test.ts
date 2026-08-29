@@ -572,6 +572,22 @@ describe("палитра: мёртвый фон и откат памяти", () 
     expect(await m.addCustomTag("red;position:fixed;inset:0")).toBe(false);
     expect(h.savedTags, "фолбэк не чёрный ход мимо санитайзера").toBeUndefined();
   });
+
+  test("SEAM-06: переполненный фолбэк говорит о потере вслух, а не рапортует успех", async () => {
+    // Координатор о потерях сообщает (dropped) — фолбэк молча резал slice'ом
+    // и отвечал true (арх-аудит швов 29.08.2026). Причём slice режет хвост:
+    // терялся именно ТОЛЬКО ЧТО добавленный цвет.
+    h.coordinator = () => undefined;
+    h.diskTags = Array.from({ length: 100 }, (_, i) => `#${String(i).padStart(6, "0")}`);
+    const m = make();
+    await m.addCustomTag("#00ff00");
+    expect(h.savedTags, "записан ровно потолок").toHaveLength(100);
+    expect(h.savedTags, "новый цвет срезан переполнением").not.toContain("#00ff00");
+    expect(
+      signals.toasts.join(" "),
+      "потеря названа пользователю",
+    ).toContain("переполнена");
+  });
 });
 
 describe("фолбэк заметок при мёртвом фоне", () => {

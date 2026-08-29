@@ -1273,6 +1273,11 @@ function disconnect(): void {
     socket = null;
   }
   isConnected = false;
+  // ircReady сбрасывался ТОЛЬКО в onclose — а он отвязан четырьмя строками
+  // выше, до close(). Готовность переживала отключение, и следующий
+  // twitch_get_status рапортовал попапу «Подключено» без сокета (арх-аудит
+  // швов 29.08.2026, SEAM-05).
+  ircReady = false;
   if (hadConnection) sendTwitchStatus(false);
 }
 
@@ -1538,6 +1543,10 @@ export const twitchPanelFeature: TwitchFeature = {
     isConnected = false;
     gameUiVisible = false;
     channelName = "";
+    // Свежий бюджет переподключений на следующий enable: исчерпанные 10
+    // попыток переживали цикл выключить/включить, и «новая» сессия умирала
+    // с первой же неудачи (арх-аудит швов 29.08.2026, SEAM-05).
+    reconnectAttempts = 0;
   },
 
   requestClose() {

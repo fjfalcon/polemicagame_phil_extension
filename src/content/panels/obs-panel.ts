@@ -1026,6 +1026,7 @@ function evaluateTimeOfDay(): void {
       // подтверждения, взведённый в комнате, переживает SPA-переход и
       // подтверждал фазу по чужой странице (поймано тестом PERF-4).
       if (!isGameRoomPath(location.pathname)) return;
+      if (!autoModeEnabled) return;
       if (pendingTimeOfDay !== newTimeOfDay) return;
 
       const confirmedTimeOfDay = detectTimeOfDay();
@@ -1038,6 +1039,10 @@ function evaluateTimeOfDay(): void {
         nightSince = confirmedTimeOfDay === "night" ? Date.now() : null;
         longNightWarned = false;
         if (confirmedTimeOfDay === "day") await hideRoleBeforeDaySceneSwitch();
+        // Перепроверка ПОСЛЕ await: в его 30-мс окно автомод могли выключить,
+        // teardown уже вернул стили роли — хвост этого колбэка не имеет права
+        // прятать её заново (арх-аудит швов 29.08.2026, SEAM-04).
+        if (!autoModeEnabled) return;
         scheduleRoleVisibility(confirmedTimeOfDay);
         void savePersistedAutoState();
         await autoSwitchScene(confirmedTimeOfDay);
