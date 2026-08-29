@@ -712,6 +712,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const extra = (await browser.storage.local.get({
           [TAGS_KEY]: [],
           pn_muted_players: [],
+          pn_hidden_players: [],
           // Метки ролей — тоже устойчивый ввод пользователя (история до 50
           // игр); без них обещание «импорт вернёт всё как было» врало
           // (аудит lifecycle 01.08.2026, находка 17).
@@ -726,6 +727,7 @@ document.addEventListener("DOMContentLoaded", () => {
           notes,
           customTags: Array.isArray(extra[TAGS_KEY]) ? extra[TAGS_KEY] : [],
           mutedPlayers: Array.isArray(extra.pn_muted_players) ? extra.pn_muted_players : [],
+          hiddenPlayers: Array.isArray(extra.pn_hidden_players) ? extra.pn_hidden_players : [],
           roleMarks:
             extra.roleMarks && typeof extra.roleMarks === "object" ? extra.roleMarks : {},
         };
@@ -883,13 +885,22 @@ document.addEventListener("DOMContentLoaded", () => {
                 (m): m is string => typeof m === "string" && m.length > 0 && m.length <= 200,
               )
             : [];
+          // Скрытые камеры персистентны с 9.54.0 — в бэкапе та же судьба,
+          // что у мьютов: без них «импорт вернёт всё как было» врало бы.
+          const hiddenCams = Array.isArray(data?.hiddenPlayers)
+            ? (data.hiddenPlayers as unknown[]).filter(
+                (m): m is string => typeof m === "string" && m.length > 0 && m.length <= 200,
+              )
+            : [];
           const hasMarks =
             !!data?.roleMarks && typeof data.roleMarks === "object" && !Array.isArray(data.roleMarks);
-          if (!tags.length && !muted.length && !hasMarks) return { marksTruncated, failed: false };
+          if (!tags.length && !muted.length && !hiddenCams.length && !hasMarks)
+            return { marksTruncated, failed: false };
           try {
             const cur = (await browser.storage.local.get({
               [TAGS_KEY]: [],
               pn_muted_players: [],
+              pn_hidden_players: [],
               roleMarks: {},
             })) as Record<string, unknown>;
             const patch: Record<string, unknown> = {};
@@ -902,6 +913,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? (cur.pn_muted_players as string[])
                 : [];
               patch.pn_muted_players = [...new Set([...curMuted, ...muted])].slice(0, 1000);
+            }
+            if (hiddenCams.length) {
+              const curHidden = Array.isArray(cur.pn_hidden_players)
+                ? (cur.pn_hidden_players as string[])
+                : [];
+              patch.pn_hidden_players = [...new Set([...curHidden, ...hiddenCams])].slice(0, 1000);
             }
             // Метки ролей: слияние по играм, существующие записи в приоритете
             // (импорт не должен затирать метки текущей сессии).

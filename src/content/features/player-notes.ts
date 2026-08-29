@@ -54,6 +54,7 @@ import {
 } from "./player-notes/history-store";
 import { parseFlippedPlayers } from "./player-notes/flipped-players";
 import {
+  HIDDEN_PLAYERS_KEY,
   MUTED_PLAYERS_KEY,
   TileMediaState,
 } from "./player-notes/tile-media-state";
@@ -265,11 +266,11 @@ class PlayerNotesManager {
    */
   /**
    * Что игрок решил про чужие плитки: мьют (общий для вкладок, storage.local),
-   * переворот камеры (sessionStorage вкладки) и скрытие видео (память).
+   * переворот камеры (sessionStorage вкладки) и скрытие камеры (storage.local).
    */
   private readonly tileMedia = new TileMediaState({
     onPersistError: (message) => this.toast(message, true),
-    onExternalMuteChange: () => this.processExistingElements(),
+    onExternalMediaChange: () => this.processExistingElements(),
   });
   private readonly history = new HistoryStore({
     isActive: () => this.active,
@@ -405,6 +406,7 @@ class PlayerNotesManager {
   async enable(): Promise<void> {
     await this.loadNotes();
     await this.tileMedia.loadMuted();
+    await this.tileMedia.loadHidden();
     this.tileMedia.loadFlipped();
 
     this.syncMatchPageRoute(getMatchId() !== null);
@@ -500,6 +502,10 @@ class PlayerNotesManager {
       // затирала бы чужие мьюты при первом же своём клике (пишется весь список).
       if (changes[MUTED_PLAYERS_KEY]) {
         this.tileMedia.adoptExternalMuted(changes[MUTED_PLAYERS_KEY].newValue);
+      }
+      // Скрытия камер — та же схема, что мьюты (персистентны с 9.54.0).
+      if (changes[HIDDEN_PLAYERS_KEY]) {
+        this.tileMedia.adoptExternalHidden(changes[HIDDEN_PLAYERS_KEY].newValue);
       }
       if (!changes[NOTES_KEY]) return;
       this.model.adoptExternalNotes(changes[NOTES_KEY].newValue);
@@ -613,6 +619,12 @@ class PlayerNotesManager {
         if (v.volume === 0) v.volume = 1;
         delete v.dataset.pnMuted;
       });
+    // Скрытые камеры — по той же причине: display:none наш, сайт его не
+    // снимет. До 9.54.0 видео оставалось скрытым и после выключения фичи.
+    document.querySelectorAll<HTMLElement>('[data-polemica-hidden="true"]').forEach((v) => {
+      if (v.style.display === "none") v.style.display = "";
+      delete v.dataset.polemicaHidden;
+    });
     this.tileMedia.reset();
   }
 

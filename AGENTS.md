@@ -430,6 +430,7 @@ src/
 | local | obs_password | settings.ts (LOCAL_KEYS) |
 | local | roleMarks | role-marker (метки «мой read», ключи g:<id> / l:<состав>) |
 | local | pn_muted_players | player-notes/tile-media-state.ts: ники (lowercase) с локально выключенным звуком (8.1.41, глушение через video.volume=0 + маркер data-pn-muted). Пишется СЛИЯНИЕМ со свежим списком с диска — обе вкладки хранят список целиком |
+| local | pn_hidden_players | player-notes/tile-media-state.ts: ники (lowercase) со скрытой у нас камерой (9.54.0 — по просьбе владельца скрытие переживает игру, как мьют). Те же правила, что у мьютов: слияние со свежим диском, снятые в этой вкладке не воскресают |
 | local | pn_update_last_check, pn_update_latest, pn_update_dismissed, pn_session_reset | update-notify (8.1.44); pn_session_reset — ручной якорь «начать сессию заново» панели «Мой вечер» (9.30.0). obs_auto_record_started — флаг «запись в OBS начата нами» (9.32.0): автозапись останавливает только свою, ручную запись стримера не трогает. obs_clip_rb_set — длина буфера повторов, которую последним писало расширение (9.32.1): бут не перетирает значение, выставленное стримером. Переехали из localStorage страницы: тот принадлежит сайту (недоверенный) и не виден попапу с кнопкой ручной проверки |
 | local | polemica:logs:{content-<session>,bg,popup,ext} | log.ts (CAP 600/контекст; content-сессии старше 24ч чистятся) |
 | local | pn_own_user_id | own-user.ts — свой userId, прочитанный из ссылки профиля в шапке; нужен статистике пересечений (в комнате шапки нет) |

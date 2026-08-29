@@ -5,12 +5,13 @@
  * состоянием: четыре набора ников и ДВА разных хранилища с разными правилами
  * жизни, которые к тому же легко перепутать:
  *
- *  • мьют — storage.local, переживает перезагрузку и общий для вкладок,
- *    поэтому пишется СЛИЯНИЕМ (иначе вкладка со старым списком затирала бы
- *    мьюты соседней — аудит безопасности 01.08.2026, находка 8);
+ *  • мьют и скрытие камеры — storage.local, переживают перезагрузку и общие
+ *    для вкладок, поэтому пишутся СЛИЯНИЕМ (иначе вкладка со старым списком
+ *    затирала бы решения соседней — аудит безопасности 01.08.2026, находка 8).
+ *    Скрытие стало персистентным 29.08.2026 по просьбе владельца: «мьют
+ *    переживает игру — пусть и камера так же»;
  *  • переворот камеры — sessionStorage вкладки: это «на эту игру», а не
- *    навсегда;
- *  • скрытие видео — только память: между играми плитки другие.
+ *    навсегда.
  *
  * Модуль НЕ трогает DOM: он отвечает на вопрос «что игрок решил про этого
  * человека», а красит плитки и кнопки сама фича.
@@ -21,14 +22,16 @@ import { parseFlippedPlayers } from "./flipped-players";
 
 /** storage.local: массив ников (lowercase) с выключенным у нас звуком. */
 export const MUTED_PLAYERS_KEY = "pn_muted_players";
+/** storage.local: массив ников (lowercase) со скрытой у нас камерой. */
+export const HIDDEN_PLAYERS_KEY = "pn_hidden_players";
 /** sessionStorage: перевёрнутые камеры — на текущую вкладку, не навсегда. */
 export const FLIPPED_PLAYERS_KEY = "pn_flipped_players";
 
 export interface TileMediaContext {
   /** Сообщить пользователю о неудачной записи: мьют иначе молча слетал бы. */
   onPersistError(message: string): void;
-  /** Мьюты изменились в ДРУГОЙ вкладке — перекрасить плитки здесь. */
-  onExternalMuteChange(): void;
+  /** Мьюты или скрытия изменились в ДРУГОЙ вкладке — перекрасить плитки. */
+  onExternalMediaChange(): void;
 }
 
 export class TileMediaState {
@@ -41,8 +44,10 @@ export class TileMediaState {
   private unmutedHere = new Set<string>();
   /** Ники с перевёрнутой камерой (sessionStorage вкладки). */
   private flipped = new Set<string>();
-  /** Ники со скрытым видео — только в памяти. */
+  /** Ники со скрытой камерой (storage.local, как мьют). */
   private hidden = new Set<string>();
+  /** Снятые в ЭТОЙ вкладке скрытия — не воскресают при слиянии с диском. */
+  private unhiddenHere = new Set<string>();
 
   constructor(private readonly ctx: TileMediaContext) {}
 
@@ -82,26 +87,35 @@ export class TileMediaState {
   adoptExternalMuted(next: unknown): void {
     if (!Array.isArray(next)) return;
     this.muted = new Set(next.filter((u): u is string => typeof u === "string" && u !== ""));
-    this.ctx.onExternalMuteChange();
+    this.ctx.onExternalMediaChange();
   }
 
   private persistMuted(): void {
+    this.persistShared(MUTED_PLAYERS_KEY, this.muted, this.unmutedHere, "мьют — он слетит");
+  }
+
+  /**
+   * Слияние со свежим диском — общее правило мьюта и скрытия: обе вкладки
+   * хранят список целиком, «последний писатель побеждает» терял решения
+   * соседней вкладки (аудит безопасности 01.08.2026, находка 8). Снятые в
+   * ЭТОЙ вкладке записи не воскресают из дискового списка.
+   */
+  private persistShared(
+    key: string,
+    mem: ReadonlySet<string>,
+    removedHere: ReadonlySet<string>,
+    what: string,
+  ): void {
     void (async () => {
       try {
-        const cur = (await browser.storage.local.get({ [MUTED_PLAYERS_KEY]: [] })) as Record<
-          string,
-          unknown
-        >;
-        const disk = Array.isArray(cur[MUTED_PLAYERS_KEY])
-          ? (cur[MUTED_PLAYERS_KEY] as string[])
-          : [];
-        // Снятые в ЭТОЙ вкладке мьюты не должны воскресать из дискового списка.
-        const merged = new Set([...disk.filter((n) => !this.unmutedHere.has(n))]);
-        for (const n of this.muted) merged.add(n);
-        await browser.storage.local.set({ [MUTED_PLAYERS_KEY]: [...merged] });
+        const cur = (await browser.storage.local.get({ [key]: [] })) as Record<string, unknown>;
+        const disk = Array.isArray(cur[key]) ? (cur[key] as string[]) : [];
+        const merged = new Set([...disk.filter((n) => !removedHere.has(n))]);
+        for (const n of mem) merged.add(n);
+        await browser.storage.local.set({ [key]: [...merged] });
       } catch (e) {
-        log.warn("player-notes", "muted players save failed", e);
-        this.ctx.onPersistError("Не удалось сохранить мьют — он слетит после перезагрузки");
+        log.warn("player-notes", `${key} save failed`, e);
+        this.ctx.onPersistError(`Не удалось сохранить ${what} после перезагрузки`);
       }
     })();
   }
@@ -136,18 +150,43 @@ export class TileMediaState {
     }
   }
 
-  // ─────────── скрытие видео ───────────
+  // ─────────── скрытие камеры ───────────
 
   isHidden(username: string): boolean {
     return this.hidden.has(username.toLowerCase());
   }
 
-  /** Переключить скрытие видео. Возвращает новое состояние. */
+  /** Переключить скрытие камеры и сохранить. Возвращает новое состояние. */
   toggleHidden(username: string): boolean {
     const key = username.toLowerCase();
-    if (this.hidden.has(key)) this.hidden.delete(key);
-    else this.hidden.add(key);
+    if (this.hidden.has(key)) {
+      this.hidden.delete(key);
+      this.unhiddenHere.add(key);
+    } else {
+      this.hidden.add(key);
+      this.unhiddenHere.delete(key);
+    }
+    this.persistShared(HIDDEN_PLAYERS_KEY, this.hidden, this.unhiddenHere, "скрытие камеры — оно слетит");
     return this.hidden.has(key);
+  }
+
+  async loadHidden(): Promise<void> {
+    try {
+      const res = await browser.storage.local.get({ [HIDDEN_PLAYERS_KEY]: [] });
+      const list = res[HIDDEN_PLAYERS_KEY];
+      if (Array.isArray(list)) {
+        for (const u of list) if (typeof u === "string" && u) this.hidden.add(u);
+      }
+    } catch (e) {
+      log.warn("player-notes", "hidden players load failed", e);
+    }
+  }
+
+  /** Список пришёл из другой вкладки (storage.onChanged). */
+  adoptExternalHidden(next: unknown): void {
+    if (!Array.isArray(next)) return;
+    this.hidden = new Set(next.filter((u): u is string => typeof u === "string" && u !== ""));
+    this.ctx.onExternalMediaChange();
   }
 
   // ─────────── жизненный цикл ───────────
@@ -157,9 +196,11 @@ export class TileMediaState {
     this.muted.clear();
     this.unmutedHere.clear();
     this.hidden.clear();
+    this.unhiddenHere.clear();
   }
 
   clearUnmutedHere(): void {
     this.unmutedHere.clear();
+    this.unhiddenHere.clear();
   }
 }

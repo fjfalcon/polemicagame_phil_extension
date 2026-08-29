@@ -33,6 +33,7 @@ vi.mock("@core/log", () => ({
 
 import { browser } from "@core/env";
 import {
+  HIDDEN_PLAYERS_KEY,
   MUTED_PLAYERS_KEY,
   TileMediaState,
 } from "@content/features/player-notes/tile-media-state";
@@ -41,10 +42,10 @@ const flush = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 };
 
-function make(over: Partial<{ onPersistError: (m: string) => void; onExternalMuteChange: () => void }> = {}) {
+function make(over: Partial<{ onPersistError: (m: string) => void; onExternalMediaChange: () => void }> = {}) {
   return new TileMediaState({
     onPersistError: over.onPersistError ?? (() => undefined),
-    onExternalMuteChange: over.onExternalMuteChange ?? (() => undefined),
+    onExternalMediaChange: over.onExternalMediaChange ?? (() => undefined),
   });
 }
 
@@ -104,7 +105,7 @@ describe("мьют: общий для вкладок список", () => {
 
   test("список из другой вкладки заменяет свой и просит перекрасить плитки", () => {
     let repaints = 0;
-    const s = make({ onExternalMuteChange: () => repaints++ });
+    const s = make({ onExternalMediaChange: () => repaints++ });
     s.toggleMute("Аня");
     s.adoptExternalMuted(["боря", "", 42, null]);
     expect(s.isMuted("Боря")).toBe(true);
@@ -148,13 +149,61 @@ describe("переворот камеры: sessionStorage вкладки", () =>
   });
 });
 
-describe("скрытие видео: только память", () => {
+describe("скрытие камеры: общий для вкладок список (персистентно с 9.54.0)", () => {
   test("переключается и отвечает новым состоянием", () => {
     const s = make();
     expect(s.toggleHidden("аня")).toBe(true);
     expect(s.isHidden("Аня")).toBe(true);
     expect(s.toggleHidden("аня")).toBe(false);
     expect(s.isHidden("Аня")).toBe(false);
+  });
+
+  test("скрытие доезжает до диска и загружается обратно", async () => {
+    const s = make();
+    s.toggleHidden("Аня");
+    await flush();
+    expect(store.disk[HIDDEN_PLAYERS_KEY]).toEqual(["аня"]);
+    const s2 = make();
+    await s2.loadHidden();
+    expect(s2.isHidden("аня"), "новая вкладка видит скрытие").toBe(true);
+  });
+
+  test("чужое скрытие с диска НЕ теряется при своей записи", async () => {
+    store.disk[HIDDEN_PLAYERS_KEY] = ["сосед"];
+    const s = make();
+    s.toggleHidden("Аня");
+    await flush();
+    expect(new Set(store.disk[HIDDEN_PLAYERS_KEY] as string[])).toEqual(
+      new Set(["сосед", "аня"]),
+    );
+  });
+
+  test("снятое ЗДЕСЬ скрытие не воскресает из дискового списка", async () => {
+    store.disk[HIDDEN_PLAYERS_KEY] = ["аня"];
+    const s = make();
+    await s.loadHidden();
+    s.toggleHidden("аня"); // снять
+    await flush();
+    expect(store.disk[HIDDEN_PLAYERS_KEY]).toEqual([]);
+  });
+
+  test("список из другой вкладки заменяет свой и просит перекрасить плитки", () => {
+    let repaints = 0;
+    const s = make({ onExternalMediaChange: () => repaints++ });
+    s.toggleHidden("Аня");
+    s.adoptExternalHidden(["боря", "", 42, null]);
+    expect(s.isHidden("Боря")).toBe(true);
+    expect(s.isHidden("Аня"), "чужой список авторитетен").toBe(false);
+    expect(repaints).toBe(1);
+  });
+
+  test("отказ записи виден пользователю — иначе скрытие молча слетает после F5", async () => {
+    const said: string[] = [];
+    vi.mocked(browser.storage.local.set).mockRejectedValueOnce(new Error("quota"));
+    const s = make({ onPersistError: (m) => said.push(m) });
+    s.toggleHidden("Аня");
+    await flush();
+    expect(said.join(" ")).toContain("слетит");
   });
 
   test("reset забывает мьют и скрытие — фичу выключили", () => {
