@@ -689,7 +689,7 @@ function searchTick(): void {
       const gate = liveMatchGate(now);
       if (gate === "wait") return;
       if (gate === "live") {
-        giveUp("в другой вкладке идёт ваш матч — из игры не выходим");
+        giveUp("похоже, в другой вкладке идёт ваш матч — из игры не выходим");
         return;
       }
     }
@@ -749,7 +749,7 @@ function searchTick(): void {
       const gate = liveMatchGate(now);
       if (gate === "wait") return;
       if (gate === "live") {
-        giveUp("в другой вкладке идёт ваш матч — из игры не выходим");
+        giveUp("похоже, в другой вкладке идёт ваш матч — из игры не выходим");
         return;
       }
     }
@@ -810,7 +810,7 @@ function searchTick(): void {
     if (gate === "live") {
       // Живой матч подтверждён самой вкладкой — выход отменён насовсем:
       // «Продолжить игру / Покинуть игру» пусть решает человек.
-      giveUp("в другой вкладке идёт ваш матч — из игры не выходим");
+      giveUp("похоже, в другой вкладке идёт ваш матч — из игры не выходим");
       return;
     }
     const quitBtn = visibleEl(SITE.searchQuitButton);

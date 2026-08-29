@@ -114,7 +114,15 @@ export class TileMediaState {
       try {
         const cur = (await browser.storage.local.get({ [key]: [] })) as Record<string, unknown>;
         const disk = Array.isArray(cur[key]) ? (cur[key] as string[]) : [];
-        const merged = new Set([...disk.filter((n) => !removedHere.has(n))]);
+        // Дисковые строки — к lowercase ДО сравнения: память и removedHere
+        // в нижнем регистре, а на диске мог лежать «MixedNick» из старого
+        // импорта — сырое сравнение не давало его снять никогда: фильтр не
+        // ловил, echo storage.onChanged воскрешал в памяти (adversarial
+        // 29.08.2026, F1; страховка сверх разовой миграции в фоне).
+        const diskNorm = disk
+          .filter((n): n is string => typeof n === "string" && n !== "")
+          .map((n) => n.toLowerCase());
+        const merged = new Set([...diskNorm.filter((n) => !removedHere.has(n))]);
         for (const n of mem) merged.add(n);
         await browser.storage.local.set({ [key]: [...merged] });
       } catch (e) {

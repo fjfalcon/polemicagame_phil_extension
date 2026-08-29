@@ -106,8 +106,8 @@ function enqueueRecord<T>(task: () => Promise<T> | T): Promise<T> {
  * Сколько вкладок СЕЙЧАС в игровой комнате — спрашиваем сами вкладки
  * (инвариант §4 п.10: правду о вкладке знает только она; url-паттерн
  * считал живой discarded-вкладку и не видел комнату на голом /game —
- * adversarial 26.08.2026, OBS-5). Не ответившая вкладка комнатой не
- * считается: осиротевший content-скрипт запись не остановит никогда.
+ * adversarial 26.08.2026, OBS-5). Молчание вкладки разводится по косвенным
+ * признакам — см. silentTabLooksLikeRoom.
  */
 /**
  * У молчания вкладки ДВА смысла, и до 29.08.2026 они склеивались: «вкладки
@@ -120,6 +120,14 @@ function enqueueRecord<T>(task: () => Promise<T> | T): Promise<T> {
  * игровая комната, считается комнатой и без ответа. URL здесь вторичен
  * (правду о вкладке знает только она, §4.10) и решает только при молчании:
  * ответившая вкладка авторитетна как раньше.
+ *
+ * ЦЕНА (принята осознанно, adversarial 29.08.2026, Н-2/Н-3): вкладка с
+ * навечно мёртвым рендерером («Aw, Snap») на URL комнаты неотличима от
+ * орфана — она держит автозапись, пока её не закроют (запись видна в OBS,
+ * закрытие лечит за минуту), и блокирует автоперезаход словами «похоже,
+ * идёт матч», даже если комната давно мертва (orphan-баннер зовёт к F5).
+ * Ложный пропуск (остановить запись живого матча / автовыйти из него)
+ * дороже ложного блока — направление выбрано в его пользу.
  */
 function silentTabLooksLikeRoom(tab: { discarded?: boolean; url?: string }): boolean {
   if (tab.discarded === true) return false;
@@ -753,9 +761,19 @@ async function probeLiveMatchTabs(excludeTabId: number | undefined): Promise<{ l
   // live:false — фильтр по маршруту делает сам контент-скрипт.
   const tabs = await browser.tabs.query({ url: "*://*.polemicagame.com/game*" });
   const asked = tabs.filter((t) => t.id != null && t.id !== excludeTabId);
-  const answers = await Promise.all(
-    asked.map((t) => sendToTab<{ live?: boolean }>(t.id as number, { type: "postgame_live_probe" })),
-  );
+  // Таймаут на вкладку — тот же урок, что у countRoomTabs (adversarial
+  // 27.08.2026, №6): sendToTab ловит отказ, но не ЗАВИСАНИЕ. Без него один
+  // заблокированный main thread держал Promise.all, фон не отвечал вовсе, и
+  // контент через свои 3 с уходил в fail-open — «молчание = комната»
+  // работало только для отказа канала, а вердикт по соседнему орфану
+  // пропадал вместе с зависшим ответом (adversarial 29.08.2026, Н-1).
+  // 1500 < 3000 контента: честный вердикт успевает доехать.
+  const ask = (id: number): Promise<{ live?: boolean } | undefined> =>
+    Promise.race([
+      sendToTab<{ live?: boolean }>(id, { type: "postgame_live_probe" }),
+      new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500)),
+    ]);
+  const answers = await Promise.all(asked.map((t) => ask(t.id as number)));
   return {
     live: answers.some(
       (a, i) => a?.live === true || (a === undefined && silentTabLooksLikeRoom(asked[i])),
@@ -951,6 +969,28 @@ async function runUpgradeMigrations(): Promise<void> {
       "modulesDisabled",
     ]);
     await browser.storage.local.remove(["savedAvatarUrl", "playerVolumes"]);
+    // SEAM-08 (29.08.2026): рантайм ищет ники в lowercase, а старые импорты
+    // бэкапов могли занести «MixedNick» — такая запись была мёртвой, а после
+    // lowercase на чтении стала бы НЕСНИМАЕМОЙ: слияние при записи сравнивало
+    // сырые дисковые строки с lowercase-списком снятых (adversarial
+    // 29.08.2026, F1). Разовая нормализация обоих ключей + дедуп.
+    const lists = (await browser.storage.local.get({
+      pn_muted_players: [],
+      pn_hidden_players: [],
+    })) as Record<string, unknown>;
+    for (const key of ["pn_muted_players", "pn_hidden_players"]) {
+      const raw = lists[key];
+      if (!Array.isArray(raw)) continue;
+      const norm = [
+        ...new Set(
+          raw.filter((u): u is string => typeof u === "string" && u !== "").map((u) => u.toLowerCase()),
+        ),
+      ];
+      if (norm.length !== raw.length || norm.some((v, i) => v !== raw[i])) {
+        await browser.storage.local.set({ [key]: norm });
+        log.info("background", `${key}: регистр нормализован (${raw.length} → ${norm.length})`);
+      }
+    }
   } catch (e) {
     log.error("background", "migrations failed", e);
   }

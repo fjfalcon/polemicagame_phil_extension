@@ -875,8 +875,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Палитра и мьюты (см. экспорт): восстанавливаем объединением, чтобы
         // импорт не стирал то, что уже есть у пользователя.
-        const applyExtras = async (): Promise<{ marksTruncated: boolean; failed: boolean }> => {
+        const applyExtras = async (): Promise<{
+          marksTruncated: boolean;
+          listsTruncated: number;
+          failed: boolean;
+        }> => {
           let marksTruncated = false;
+          let listsTruncated = 0;
           const tags = Array.isArray(data?.customTags)
             ? (data.customTags as unknown[]).filter(isSafeTag)
             : [];
@@ -898,7 +903,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const hasMarks =
             !!data?.roleMarks && typeof data.roleMarks === "object" && !Array.isArray(data.roleMarks);
           if (!tags.length && !muted.length && !hiddenCams.length && !hasMarks)
-            return { marksTruncated, failed: false };
+            return { marksTruncated, listsTruncated, failed: false };
           try {
             const cur = (await browser.storage.local.get({
               [TAGS_KEY]: [],
@@ -911,17 +916,26 @@ document.addEventListener("DOMContentLoaded", () => {
               const curTags = Array.isArray(cur[TAGS_KEY]) ? (cur[TAGS_KEY] as string[]) : [];
               patch[TAGS_KEY] = [...new Set([...curTags, ...tags])].slice(0, 100);
             }
-            if (muted.length) {
-              const curMuted = Array.isArray(cur.pn_muted_players)
-                ? (cur.pn_muted_players as string[])
+            // Существующие списки — тоже к lowercase: на диске мог остаться
+            // «MixedNick» от старых импортов, и сырое слияние плодило дубли
+            // в двух регистрах (adversarial 29.08.2026, F5). Потолок — вслух:
+            // молчаливая потеря — тот же класс, что у меток (F4).
+            const mergeList = (curRaw: unknown, incoming: string[]): string[] => {
+              const curList = Array.isArray(curRaw)
+                ? (curRaw as unknown[])
+                    .filter((m): m is string => typeof m === "string" && m !== "")
+                    .map((m) => m.toLowerCase())
                 : [];
-              patch.pn_muted_players = [...new Set([...curMuted, ...muted])].slice(0, 1000);
+              const merged = [...new Set([...curList, ...incoming])];
+              const capped = merged.slice(0, 1000);
+              listsTruncated += merged.length - capped.length;
+              return capped;
+            };
+            if (muted.length) {
+              patch.pn_muted_players = mergeList(cur.pn_muted_players, muted);
             }
             if (hiddenCams.length) {
-              const curHidden = Array.isArray(cur.pn_hidden_players)
-                ? (cur.pn_hidden_players as string[])
-                : [];
-              patch.pn_hidden_players = [...new Set([...curHidden, ...hiddenCams])].slice(0, 1000);
+              patch.pn_hidden_players = mergeList(cur.pn_hidden_players, hiddenCams);
             }
             // Метки ролей: слияние по играм, существующие записи в приоритете
             // (импорт не должен затирать метки текущей сессии).
@@ -989,9 +1003,9 @@ document.addEventListener("DOMContentLoaded", () => {
             log.error(SCOPE, "extras import failed", e);
             // Тост обязан сказать правду: палитра/мьюты/метки не сохранены
             // (ревью 27.08.2026 — раньше провал был виден только в логе).
-            return { marksTruncated, failed: true };
+            return { marksTruncated, listsTruncated, failed: true };
           }
-          return { marksTruncated, failed: false };
+          return { marksTruncated, listsTruncated, failed: false };
         };
 
         if (Object.keys(incoming).length === 0) {
@@ -999,6 +1013,9 @@ document.addEventListener("DOMContentLoaded", () => {
           const extras = await applyExtras();
           const cut =
             (extras.marksTruncated ? " (часть меток ролей не поместилась в потолок 50 игр)" : "") +
+            (extras.listsTruncated
+              ? ` (мьюты/скрытия сверх потолка 1000 не сохранены: ${extras.listsTruncated})`
+              : "") +
             (extras.failed ? " — палитра/мьюты/метки НЕ сохранены" : "");
           showPopupToast(
             restoredSettings

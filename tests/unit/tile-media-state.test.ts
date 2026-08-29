@@ -128,6 +128,31 @@ describe("мьют: общий для вкладок список", () => {
     expect(s.isMuted("ещёник"), "и из чужой вкладки — тоже").toBe(true);
   });
 
+  test("F1: «MixedNick» со старого диска МОЖНО снять — и он не воскресает", async () => {
+    // adversarial 29.08.2026: lowercase был только на чтении, а слияние при
+    // записи сравнивало сырые дисковые строки с lowercase-списком снятых —
+    // мьют из старого импорта воскресал у пользователя на глазах, навсегда.
+    store.disk[MUTED_PLAYERS_KEY] = ["MixedNick"];
+    const s = make();
+    await s.loadMuted();
+    expect(s.isMuted("mixednick")).toBe(true);
+    s.toggleMute("MixedNick"); // снять
+    await flush();
+    expect(store.disk[MUTED_PLAYERS_KEY], "сырой регистр не пережил снятие").toEqual([]);
+    // echo своей же записи (storage.onChanged стреляет и в пишущей вкладке)
+    s.adoptExternalMuted(store.disk[MUTED_PLAYERS_KEY]);
+    expect(s.isMuted("mixednick"), "не воскрес").toBe(false);
+  });
+
+  test("F1: запись нормализует регистр диска — дублей в двух регистрах нет", async () => {
+    store.disk[HIDDEN_PLAYERS_KEY] = ["MixedNick"];
+    const s = make();
+    await s.loadHidden();
+    s.toggleHidden("Аня");
+    await flush();
+    expect((store.disk[HIDDEN_PLAYERS_KEY] as string[]).sort()).toEqual(["mixednick", "аня"]);
+  });
+
   test("мусор вместо списка игнорируется молча", () => {
     const s = make();
     s.toggleMute("Аня");

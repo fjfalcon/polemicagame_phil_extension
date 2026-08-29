@@ -45,3 +45,38 @@ describe("OP-1: латч видимости роли", () => {
     );
   });
 });
+
+/**
+ * Хвосты автомода после teardown (adversarial 29.08.2026, находки 1–2).
+ * Обвязки на живом DOM у панели нет — сторожим по исходнику, как и латч:
+ * это ловушка на неосторожную правку, а не доказательство поведения.
+ */
+describe("симметрия автомода: таймер видимости роли и включение", () => {
+  const stopBody = source.slice(
+    source.indexOf("function stopDOMMonitoring"),
+    source.indexOf("// ─────────────────────────── видимость панели"),
+  );
+  const schedBody = source.slice(
+    source.indexOf("function scheduleRoleVisibility"),
+    source.indexOf("async function hideRoleBeforeDaySceneSwitch"),
+  );
+
+  test("teardown автомода гасит pendingRoleVisibilityTimer", () => {
+    // Таймер взводится на 3 с (ночь) и жил дольше выключения автомода:
+    // срабатывал ПОСЛЕ restoreRoleVisibility и заново пинил роль !important.
+    expect(stopBody).toMatch(/clearTimeout\(pendingRoleVisibilityTimer\)/);
+  });
+
+  test("колбэк таймера видимости гейтится на autoModeEnabled", () => {
+    expect(schedBody).toMatch(/if \(!autoModeEnabled\) return;/);
+  });
+
+  test("включение автомода восстанавливает видимость роли текущей фазы", () => {
+    // teardown возвращает стили роли (restoreRoleVisibility) — значит enable
+    // обязан применить их заново, иначе цикл выкл/вкл на дне оставлял роль
+    // видимой на дневной сцене до следующей смены фазы.
+    const start = source.indexOf("if (wasInitialized && currentTimeOfDay) {");
+    const enableBody = source.slice(start, source.indexOf("requestTimeOfDayCheck();", start));
+    expect(enableBody).toMatch(/scheduleRoleVisibility\(currentTimeOfDay\)/);
+  });
+});

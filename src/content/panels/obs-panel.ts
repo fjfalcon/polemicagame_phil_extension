@@ -617,6 +617,9 @@ function scheduleRoleVisibility(timeOfDay: TimeOfDay, attempt = 0): void {
   log.debug(SCOPE, "Scheduling role visibility change to", targetVisibility, "in", delayMs);
   pendingRoleVisibilityTimer = setTimeout(() => {
     pendingRoleVisibilityTimer = null;
+    // Страховка второй линии: сам таймер гасится в stopDOMMonitoring/disable,
+    // но проверка здесь дешёвая и закрывает будущие пути взведения.
+    if (!autoModeEnabled) return;
     const applied = applyRoleVisibility(shouldShowRoles);
     if (applied) return;
     if (attempt < 5) {
@@ -1232,6 +1235,16 @@ function stopDOMMonitoring(): void {
     clearTimeout(pendingTimeOfDayConfirmTimer);
     pendingTimeOfDayConfirmTimer = null;
   }
+  // Таймер видимости роли — ТОЖЕ здесь: он взводится на 3 с (ночь) и 250 мс
+  // (дневные ретраи), переживал выключение автомода и заново пинил
+  // visibility/opacity инлайновым !important ПОСЛЕ того, как
+  // restoreRoleVisibility вернул стили — роль могла уехать в эфир при
+  // выключенном автомоде (adversarial 29.08.2026, находка 1; тот же класс,
+  // что SEAM-04, но таймерный хвост, а не await).
+  if (pendingRoleVisibilityTimer) {
+    clearTimeout(pendingRoleVisibilityTimer);
+    pendingRoleVisibilityTimer = null;
+  }
   timeOfDayCheckQueued = false;
   pendingTimeOfDay = null;
 }
@@ -1396,7 +1409,16 @@ function applyAutoSettings(ctx: FeatureContext): void {
     // есть без памяти «не понял — оставь как было» превращается в «считай,
     // что день», и смена пары сцен ночью могла выдать дневную сцену в эфир
     // (ревью 02.08.2026).
-    if (wasInitialized && currentTimeOfDay) void autoSwitchScene(currentTimeOfDay);
+    if (wasInitialized && currentTimeOfDay) {
+      void autoSwitchScene(currentTimeOfDay);
+      // Симметрия teardown/enable (§4 п.7): выключение возвращает стили роли
+      // (restoreRoleVisibility в stopDOMMonitoring), значит включение обязано
+      // применить видимость к уже известной фазе заново. Без этого цикл
+      // выкл/вкл на дне оставлял роль видимой на дневной сцене до следующей
+      // смены фазы — раньше дыру случайно маскировал негейченный таймер,
+      // который чинили находкой 1 (adversarial 29.08.2026, находка 2).
+      scheduleRoleVisibility(currentTimeOfDay);
+    }
     requestTimeOfDayCheck();
   } else {
     stopDOMMonitoring();

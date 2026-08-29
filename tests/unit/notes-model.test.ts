@@ -573,6 +573,28 @@ describe("палитра: мёртвый фон и откат памяти", () 
     expect(h.savedTags, "фолбэк не чёрный ход мимо санитайзера").toBeUndefined();
   });
 
+  test("F3: вычищенный небезопасный легаси-цвет фолбэк считает, как координатор", async () => {
+    // adversarial 29.08.2026: формулы разошлись — координатор тостил
+    // purged, фолбэк только логировал. Одно действие — один и тот же тост.
+    h.coordinator = () => undefined;
+    h.diskTags = ["red;position:fixed;inset:0", "#ff0000"];
+    const m = make();
+    expect(await m.addCustomTag("#00ff00")).toBe(true);
+    expect(h.savedTags?.sort(), "легаси вычищен, годные живы").toEqual(["#00ff00", "#ff0000"]);
+    expect(signals.toasts.join(" "), "вычистка названа вслух").toContain("1 цвет");
+  });
+
+  test("F3: штатное удаление цвета через фолбэк — без ложного тоста о потере", async () => {
+    h.coordinator = () => undefined;
+    h.diskTags = ["#ff0000", "#00ff00"];
+    const m = make();
+    await m.load();
+    m.removeCustomTag("#ff0000"); // fire-and-forget, ждём хвост
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(h.savedTags, "удалено ровно то, что просили").toEqual(["#00ff00"]);
+    expect(signals.toasts, "удаление без потерь — без тоста").toEqual([]);
+  });
+
   test("SEAM-06: переполненный фолбэк говорит о потере вслух, а не рапортует успех", async () => {
     // Координатор о потерях сообщает (dropped) — фолбэк молча резал slice'ом
     // и отвечал true (арх-аудит швов 29.08.2026). Причём slice режет хвост:

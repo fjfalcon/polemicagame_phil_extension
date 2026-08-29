@@ -17,9 +17,10 @@ const wiring = vi.hoisted(() => ({
   onMessage: [] as ((msg: unknown, sender: unknown) => unknown)[],
   onAlarm: [] as ((a: { name: string; scheduledTime: number }) => void)[],
   /** Вкладки сайта и их ответ на probe «ты в комнате?». */
-  // silent: вкладка НЕ отвечает на probe (осиротела после обновления /
-  // выгружена); url и discarded — то, что фон видит из tabs.query.
-  siteTabs: [] as { id: number; inRoom?: boolean; live?: boolean; silent?: boolean; url?: string; discarded?: boolean }[],
+  // silent: канал отказывает МГНОВЕННО (орфан после обновления). hang: промис
+  // не резолвится вовсе (заблокированный main thread) — другой сорт молчания,
+  // ловится только пер-вкладочным таймаутом (adversarial 29.08.2026, Н-1/Н-5).
+  siteTabs: [] as { id: number; inRoom?: boolean; live?: boolean; silent?: boolean; hang?: boolean; url?: string; discarded?: boolean }[],
 }));
 
 vi.mock("@core/env", () => ({
@@ -84,12 +85,13 @@ vi.mock("@core/messaging", () => ({
     wiring.onMessage.push(fn);
     return () => undefined;
   }),
-  sendToTab: vi.fn(async (tabId: number, msg: { type?: string }) => {
+  sendToTab: vi.fn((tabId: number, msg: { type?: string }) => {
     const tab = wiring.siteTabs.find((t) => t.id === tabId);
-    if (!tab || tab.silent) return undefined; // канала нет: молчание, не «false»
-    if (msg?.type === "obs_room_probe") return { inRoom: tab.inRoom === true };
-    if (msg?.type === "postgame_live_probe") return { live: tab.live === true };
-    return undefined;
+    if (tab?.hang) return new Promise(() => undefined); // висит вечно
+    if (!tab || tab.silent) return Promise.resolve(undefined); // отказ канала
+    if (msg?.type === "obs_room_probe") return Promise.resolve({ inRoom: tab.inRoom === true });
+    if (msg?.type === "postgame_live_probe") return Promise.resolve({ live: tab.live === true });
+    return Promise.resolve(undefined);
   }),
   sendRuntime: vi.fn(async () => undefined),
   broadcastToGameTabs: vi.fn(async () => undefined),
@@ -513,4 +515,35 @@ describe("сторож живого матча (background, SEAM-02)", () => {
     wiring.siteTabs = [{ id: 5, silent: true, url: "https://polemicagame.com/game/9" }];
     expect((await liveQuery(5)).live, "своё молчание — не чужой матч").toBe(false);
   });
+});
+
+describe("зависшая вкладка ≠ отказавшая: пер-вкладочный таймаут (adversarial 29.08.2026, Н-1)", () => {
+  async function liveQuery(tabId = 5): Promise<{ live: boolean }> {
+    for (const fn of wiring.onMessage) {
+      const res = fn({ type: "postgame_live_query" }, { tab: { id: tabId } });
+      if (res !== undefined) return (await res) as { live: boolean };
+    }
+    throw new Error("обработчик postgame_live_query не найден");
+  }
+
+  test("зависшая вкладка не глушит вердикт по соседнему орфану — ответ доезжает", async () => {
+    await bootConnected();
+    // Раньше Promise.all без таймаута висел на вкладке 11 вечно: фон не
+    // отвечал, контент через свои 3 с уходил в fail-open, и вычисленный
+    // вердикт по орфану 9 пропадал. Таймаут 1500 мс возвращает ответ.
+    wiring.siteTabs = [
+      { id: 9, silent: true, url: "https://polemicagame.com/game/42" },
+      { id: 11, hang: true, url: "https://polemicagame.com/game-search" },
+    ];
+    expect((await liveQuery()).live, "орфан-комната блокирует, зависание не мешает").toBe(true);
+  }, 10_000);
+
+  test("зависшая вкладка на URL комнаты сама считается комнатой (race → URL-фолбэк)", async () => {
+    const obs = await bootConnected();
+    await command("record_start", undefined, 5);
+    wiring.siteTabs = [{ id: 9, hang: true, url: "https://polemicagame.com/game/7" }];
+    const stop = await command("record_stop", undefined, 5);
+    expect(stop.data?.ignored).toBe("other_room_tabs");
+    expect(obs.recording, "запись не сиротеет из-за зависшего main thread").toBe(true);
+  }, 10_000);
 });

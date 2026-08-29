@@ -280,17 +280,15 @@ export class NotesModel {
       if (!ok) return rollback();
       this.tags = next;
       this.ctx.onTagsChanged();
-      // Потери — вслух, как у координатора: фолбэк молча резал переполнение
-      // и небезопасные легаси-цвета, отвечая «успех» (арх-аудит швов
-      // 29.08.2026, SEAM-06). slice режет ХВОСТ — то есть в первую очередь
-      // только что добавленный цвет.
-      const dropped = merged.length - next.length + (add.length - safeAdd.length);
+      // Потери — вслух, ТОЙ ЖЕ арифметикой, что у координатора (SEAM-06 +
+      // adversarial 29.08.2026, F3: формулы разошлись — одно действие
+      // тостилось по-разному в штатном пути и в фолбэке). Координатор:
+      // dropped = переполнение + вычищенные с диска небезопасные легаси;
+      // небезопасные элементы из add в счёт не входят там и не входят здесь.
+      const purged = disk.filter((t) => !removeSet.has(t) && !isSafeTag(t)).length;
+      const dropped = merged.length - next.length + purged;
       if (dropped > 0) {
         this.ctx.toast(`Палитра переполнена: ${dropped} цвет(ов) не сохранено`, true);
-      }
-      const purged = disk.length - disk.filter(isSafeTag).length;
-      if (purged > 0) {
-        log.warn("player-notes", "палитра (фолбэк): отброшено небезопасных легаси-цветов:", purged);
       }
       return true;
     } catch (e) {
