@@ -1209,8 +1209,14 @@ document.addEventListener("DOMContentLoaded", () => {
   // (арх-аудит швов 29.08.2026, SEAM-07). Новый захват снимает прежний
   // и возвращает его кнопке прежнюю подпись.
   let cancelKeyCapture: (() => void) | null = null;
+  // Все текущие назначения — для отказа в дубле: роутер клавиш держит ОДИН
+  // обработчик на код, и второе назначение молча вытесняло первое; при
+  // совпадении с клавишей скрытия роли вытеснялась защита (аудит скрытия
+  // ролей 29.08.2026, №6).
+  const hotkeyGetters: Array<() => string> = [];
   const beginKeyCapture = (
     btn: HTMLElement,
+    get: () => string,
     apply: (code: string) => void,
     render: () => void,
   ): void => {
@@ -1219,6 +1225,12 @@ document.addEventListener("DOMContentLoaded", () => {
       e.preventDefault();
       e.stopPropagation();
       if (isModifierCode(e.code)) return; // ждём не-модификатор
+      if (e.code !== get() && hotkeyGetters.some((g) => g() === e.code)) {
+        finish();
+        btn.textContent = "Занята другим действием";
+        setTimeout(render, 1400);
+        return;
+      }
       finish();
       apply(e.code);
       render();
@@ -1237,8 +1249,14 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   if (pauseCaptureBtn) {
+    hotkeyGetters.push(() => pauseHotkeyCode);
     pauseCaptureBtn.addEventListener("click", () =>
-      beginKeyCapture(pauseCaptureBtn, (code) => (pauseHotkeyCode = code), renderPauseKey),
+      beginKeyCapture(
+        pauseCaptureBtn,
+        () => pauseHotkeyCode,
+        (code) => (pauseHotkeyCode = code),
+        renderPauseKey,
+      ),
     );
   }
 
@@ -1260,7 +1278,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const render = () => (btn.textContent = formatKeyCode(get()));
     render();
     roleKeyRenders.push(render);
-    btn.addEventListener("click", () => beginKeyCapture(btn, set, render));
+    hotkeyGetters.push(get);
+    btn.addEventListener("click", () => beginKeyCapture(btn, get, set, render));
   };
   setupRoleKey("hotkey_role_fake", () => roleFakeCode, (c) => (roleFakeCode = c));
   setupRoleKey("hotkey_role_reset", () => roleResetCode, (c) => (roleResetCode = c));

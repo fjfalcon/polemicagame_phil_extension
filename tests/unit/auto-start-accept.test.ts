@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://polemicagame.com/game-search" }
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const seam = vi.hoisted(() => ({
@@ -33,6 +34,10 @@ vi.mock("@core/messaging", () => ({
   sendToActiveTabStrict: vi.fn(),
 }));
 vi.mock("@core/toast", () => ({ showToast: vi.fn(), clearToasts: vi.fn() }));
+const fakerSeam = vi.hoisted(() => ({ faked: false }));
+vi.mock("@content/features/role-faker", () => ({
+  isRoleFaked: () => fakerSeam.faked,
+}));
 vi.mock("@core/keyboard", () => ({
   keyboard: { register: vi.fn(() => () => {}), registerHold: vi.fn(() => () => {}) },
 }));
@@ -328,5 +333,58 @@ describe("автосмена ролей без авто-скрытия (прос
     vi.advanceTimersByTime(2_500);
     expect(document.getElementById("polemica-role-hide")).toBeNull();
     autoStartFeature.disable();
+  });
+});
+
+describe("клавиша скрытия уступает подмене роли (аудит скрытия ролей 29.08.2026, №4)", () => {
+  test("D при активном F не снимает CSS и глушит событие для сайта", () => {
+    fakerSeam.faked = true;
+    try {
+      autoStartFeature.enable({ settings: { auto_hide_roles_enabled: true } } as never);
+      const kb = keyboard as unknown as { register: ReturnType<typeof vi.fn> };
+      const roleKeyCall = kb.register.mock.calls.find((c) => c[0] === "KeyD");
+      expect(roleKeyCall).toBeTruthy();
+      // Скрытие ставится первым тиком интервала (как в тесте выше).
+      vi.advanceTimersByTime(1_100);
+      expect(document.getElementById("polemica-role-hide"), "роли скрыты CSS").not.toBeNull();
+      const e = new KeyboardEvent("keydown", { code: "KeyD", cancelable: true });
+      const stop = vi.spyOn(e, "stopPropagation");
+      (roleKeyCall![1] as (e?: KeyboardEvent) => void)(e);
+      expect(
+        document.getElementById("polemica-role-hide"),
+        "CSS на месте: настоящие роли стола не уехали в эфир под фальшивой своей",
+      ).not.toBeNull();
+      expect(stop, "нативный D сайта тоже не сработает").toHaveBeenCalled();
+    } finally {
+      fakerSeam.faked = false;
+      autoStartFeature.disable();
+    }
+  });
+});
+
+describe("peek и пин: source-стражи (№7/№10; поведение пина — в role-pin.test)", () => {
+  const src = readFileSync("src/content/features/auto-start.ts", "utf8");
+
+  test("№7: peek поднимает пин через владельца, а не срывом стилей", () => {
+    const start = src.indexOf("function startPeek");
+    const body = src.slice(start, src.indexOf("function stopPeek"));
+    expect(body).toMatch(/liftPins\(\)/);
+    const stopBody = src.slice(src.indexOf("function stopPeek"), src.indexOf("function bindPeek"));
+    expect(stopBody, "возврат пина при отпускании").toMatch(/restoreLiftedPins\(\)/);
+  });
+
+  test("№7: запинённый узел не считается «нашим inline» и не попадает в снимки", () => {
+    expect(src).toMatch(/!isPinnedElement\(el\)/);
+    const remember = src.slice(
+      src.indexOf("function rememberRoleInlineState"),
+      src.indexOf("function applyInlineRoleVisibility"),
+    );
+    expect(remember).toMatch(/isPinnedElement\(el\)\) return/);
+  });
+
+  test("№10: D во время peek глушится и для сайта", () => {
+    const start = src.indexOf("if (peeking) {");
+    const body = src.slice(start, start + 600);
+    expect(body).toMatch(/stopPropagation/);
   });
 });

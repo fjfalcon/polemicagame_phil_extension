@@ -18,6 +18,8 @@
 import { onDomChange, safeClick, isVisible } from "@core/dom";
 import { keyboard } from "@core/keyboard";
 import { log } from "@core/log";
+import { isPinnedElement, liftPins, restoreLiftedPins } from "../role-pin";
+import { isRoleFaked } from "./role-faker";
 import { SITE, TEXT, OWN, classifyPhaseText, endedScreenVisible, SITE_CLASS } from "@core/selectors";
 import { isAutoAcceptSuppressed } from "../auto-accept-gate";
 import { noteAutoAcceptDispatched } from "./queue-requeue";
@@ -443,11 +445,17 @@ function getOwnRoleState(roleElements = getRoleVisibilityTargets()): OwnRoleStat
   const primaryElement = getPrimaryOwnRoleElement(roleElements);
   const href = getRoleUseHref(primaryElement);
   const nativeHidden = href.includes("#stop");
+  // Узлы под пином obs-панели (data-pn-role-pin) НЕ наши: их скрытость —
+  // состояние автосмены сцен, а не «наш inline». Считать её своей значило
+  // снять снимок ЧУЖОГО пина и дописать поверх display:none — роль
+  // оставалась скрытой от игрока всю ночь (аудит скрытия ролей 29.08.2026,
+  // находка 7).
   const inlineHidden = roleElements.some(
     (el) =>
-      el.style.display === "none" ||
-      el.style.visibility === "hidden" ||
-      el.style.opacity === "0",
+      !isPinnedElement(el) &&
+      (el.style.display === "none" ||
+        el.style.visibility === "hidden" ||
+        el.style.opacity === "0"),
   );
   return {
     nativeHidden,
@@ -470,6 +478,7 @@ function syncTrackedRolesVisibility(state: OwnRoleState = getOwnRoleState()): bo
 
 function rememberRoleInlineState(roleElements: HTMLElement[]) {
   roleElements.forEach((el) => {
+    if (isPinnedElement(el)) return; // чужой пин — не «исходное состояние»
     if (roleVisibilityState.has(el)) return;
     roleVisibilityState.set(el, {
       display: el.style.display,
@@ -483,6 +492,9 @@ function rememberRoleInlineState(roleElements: HTMLElement[]) {
 function applyInlineRoleVisibility(roleElements: HTMLElement[], isVisible: boolean) {
   rememberRoleInlineState(roleElements);
   roleElements.forEach((el) => {
+    // Запинённый узел не трогаем ни в какую сторону: его видимостью владеет
+    // модуль role-pin, подъём/возврат пина — отдельный слой peek (наход. 7).
+    if (isPinnedElement(el)) return;
     const original =
       roleVisibilityState.get(el) || { display: "", visibility: "", opacity: "", pointerEvents: "" };
     if (isVisible) {
@@ -641,6 +653,8 @@ let peekRestoreHidden = false;
 let peekRestoreNative = false;
 /** Своя роль была спрятана inline-стилями (наш же путь setRoleVisibility). */
 let peekRestoreInline = false;
+/** Пин obs-панели был поднят на время подсматривания (модуль role-pin). */
+let peekRestorePin = false;
 /** Клавиша сейчас зажата. Пока да — состояние видимости НЕ учитываем. */
 let peeking = false;
 /** Проверка возврата нативного скрытия после отпускания. */
@@ -701,8 +715,13 @@ function startPeek(): void {
   peekRestoreHidden = isRolesHiddenByCSS();
   peekRestoreNative = ownState.nativeHidden;
   peekRestoreInline = ownState.inlineHidden;
+  // Четвёртый слой: дневной пин obs-панели. Поднимаем через владельца
+  // (liftPins), а не срывом стилей — до этого peek снимал снимок чужого
+  // пина как «исходное состояние» (аудит 29.08.2026, находка 7). Пока пин
+  // поднят, pinHolds отвечает «держится» — обс не воюет с подсматриванием.
+  peekRestorePin = liftPins();
   // Нечего снимать — и показывать нечего: клавиша не должна ничего трогать.
-  if (!peekRestoreHidden && !peekRestoreNative && !peekRestoreInline) return;
+  if (!peekRestoreHidden && !peekRestoreNative && !peekRestoreInline && !peekRestorePin) return;
   peeking = true;
   if (peekRestoreHidden) showAllRolesCSS();
   if (peekRestoreInline) applyInlineRoleVisibility(roleElements, true);
@@ -710,7 +729,12 @@ function startPeek(): void {
   log.info(
     SCOPE,
     "роли показаны, пока удерживается клавиша; снято скрытие:",
-    [peekRestoreHidden && "css", peekRestoreNative && "нативное", peekRestoreInline && "inline"]
+    [
+      peekRestoreHidden && "css",
+      peekRestoreNative && "нативное",
+      peekRestoreInline && "inline",
+      peekRestorePin && "пин",
+    ]
       .filter(Boolean)
       .join("+"),
   );
@@ -721,10 +745,15 @@ function stopPeek(): void {
   const restoreCss = peekRestoreHidden;
   const restoreNative = peekRestoreNative;
   const restoreInline = peekRestoreInline;
+  const restorePin = peekRestorePin;
   peekRestoreHidden = false;
   peekRestoreNative = false;
   peekRestoreInline = false;
+  peekRestorePin = false;
   peeking = false;
+  // Пин возвращается владельцу ВСЕГДА, до остальных слоёв: если обс за
+  // время удержания перепинил сам (смена фазы), restoreLiftedPins не мешает.
+  if (restorePin) restoreLiftedPins();
   if (restoreCss && shouldRehideAfterPeek(cfg, lastDetectedRolePhase)) {
     hideAllRolesCSS();
     // Состояние могло «испортиться» за время удержания (сверка с DOM видела
@@ -1306,7 +1335,21 @@ function handleRoleKey(e?: KeyboardEvent) {
   // действует, и человек должен понимать почему: нажал — ничего не
   // произошло — в логе есть строка.
   if (peeking) {
+    // stopPropagation обязателен (аудит 29.08.2026, №10): без него нативный
+    // D сайта переключал #stop под поднятыми слоями, и после отпускания V
+    // роль могла остаться нативно скрытой без владельца.
+    e?.stopPropagation();
     log.info(SCOPE, "клавиша скрытия роли не действует, пока удерживается «подсмотреть»");
+    return;
+  }
+  // Активна подмена роли (F): наш роутер срабатывает РАНЬШЕ её dBlocker и
+  // успевал снять CSS со всех НАСТОЯЩИХ ролей — состав стола уезжал в эфир
+  // под фальшивой своей ролью (аудит 29.08.2026, №4). Уступаем: скрытие
+  // вернётся после E.
+  if (isRoleFaked()) {
+    e?.stopPropagation();
+    e?.preventDefault();
+    log.info(SCOPE, "клавиша скрытия роли не действует, пока активна подмена (E — сбросить)");
     return;
   }
 

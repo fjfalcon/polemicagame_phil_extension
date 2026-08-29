@@ -46,6 +46,10 @@ class RoleFaker {
   ];
   private currentRoleIndex = 0;
   private isFaked = false;
+
+  get faked(): boolean {
+    return this.isFaked;
+  }
   private originalRoles = new Map<HTMLElement, { display: string; visibility: string }>();
   private originalStyles = new Map<HTMLElement, { right: string; position: string }>();
   private spriteBase?: string;
@@ -162,8 +166,23 @@ class RoleFaker {
         if (!this.isFaked) return;
         document.querySelectorAll<HTMLElement>(SITE.anyRole).forEach((el) => {
           if (el.closest(SITE.myRoleMark) || el.closest(SITE.myPlayerTile)) return;
-          if (el.style.display !== "none") el.style.display = "none";
+          if (el.style.display !== "none") {
+            // Снимок ДО скрытия: узел, созданный Vue во время подмены,
+            // прятался без регистрации — E/disable возвращали только старые,
+            // и напарник оставался скрыт до перерисовки сайта (аудит
+            // 29.08.2026, №8).
+            if (!this.originalRoles.has(el)) {
+              this.originalRoles.set(el, { display: el.style.display, visibility: el.style.visibility });
+            }
+            el.style.display = "none";
+          }
         });
+        // №3: Vue пересоздал узел СВОЕЙ роли — data-original-* умерли вместе
+        // с ним, новый узел показывает настоящую роль при живом isFaked и
+        // заблокированном D. Перенакладываем ту же фальшивую роль (без
+        // сдвига по кругу).
+        const own = document.querySelector<HTMLElement>(SITE.myRole);
+        if (own && !own.hasAttribute("data-original-role")) this.reapplyFake();
         document.querySelectorAll<HTMLElement>(SITE.playerMenuWithRole).forEach((menu) => {
           if (menu.closest(SITE.myRoleMark) || menu.closest(SITE.myPlayerTile)) return;
           if (menu.style.right !== "0.5rem") menu.style.right = "0.5rem";
@@ -199,6 +218,16 @@ class RoleFaker {
       }
     }
     this.setFaked(false);
+  }
+
+  /** Перенаклад текущей подмены на пересозданный узел (без сдвига по кругу). */
+  private reapplyFake(): void {
+    this.currentRoleIndex = (this.currentRoleIndex + this.roles.length - 1) % this.roles.length;
+    if (!this.changeRole()) {
+      // Узел исчез между проверкой и применением — вернём индекс, следующий
+      // проход попробует снова.
+      this.currentRoleIndex = (this.currentRoleIndex + 1) % this.roles.length;
+    }
   }
 
   /** true — своя роль реально подменена. false — подменять было нечего. */
@@ -248,6 +277,15 @@ class RoleFaker {
 }
 
 let faker: RoleFaker | null = null;
+
+/**
+ * Активна ли подмена роли — для клавиши скрытия auto-start (аудит скрытия
+ * ролей 29.08.2026, №4): его роутер срабатывает РАНЬШЕ нашего dBlocker и
+ * успевал снять CSS со всех НАСТОЯЩИХ ролей, пока на экране фальшивая.
+ */
+export function isRoleFaked(): boolean {
+  return faker?.faked === true;
+}
 let offKeys: Array<() => void> = [];
 let boundFake = "KeyF";
 let boundReset = "KeyE";

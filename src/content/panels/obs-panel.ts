@@ -32,6 +32,7 @@ import {
   SITE_CLASS,
 } from "@core/selectors";
 import { isGameRoomPath } from "@shared/routes";
+import { getRoleVisibilityTargets, pinHolds, pinOwnRole, releasePins } from "../role-pin";
 import { showToast } from "@core/toast";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { ObsConnectionState, ObsScene } from "@shared/types";
@@ -301,7 +302,7 @@ let currentTimeOfDay: TimeOfDay | null = null;
 let phaseConfirmedLive = false;
 /** Комната, в которой флаг взведён: смена pathname делает фазу «не живой». */
 let phaseFlagPathname = "";
-let lastAppliedRoleVisibility: string | null = null;
+let lastAppliedRoleVisibility: "visible" | "hidden" | null = null;
 const roleVisibilityDelayMs = 3000;
 /**
  * Реестр изменённых нами элементов ролей.
@@ -312,34 +313,15 @@ const roleVisibilityDelayMs = 3000;
  * (аудит lifecycle 01.08.2026, находка 7). Храним и приоритет: мы пишем
  * !important, и «просто снять значение» недостаточно.
  */
-interface RoleStyleSnapshot {
-  visibility: string;
-  visibilityPriority: string;
-  opacity: string;
-  opacityPriority: string;
-  pointerEvents: string;
-  pointerEventsPriority: string;
-}
-const roleVisibilityState = new WeakMap<HTMLElement, RoleStyleSnapshot>();
-const touchedRoleElements = new Set<HTMLElement>();
-
-/** Вернуть роли ровно те inline-стили (и приоритеты), что были до нас. */
+/**
+ * Снимки/пины своей роли уехали в ../role-pin (аудит скрытия ролей
+ * 29.08.2026): пин обязан сниматься «подсмотреть»-механизмом auto-start без
+ * войны снимков, а латч — проверяться по живому узлу, не по глобальной
+ * переменной.
+ */
 function restoreRoleVisibility(): void {
-  for (const el of touchedRoleElements) {
-    const snap = roleVisibilityState.get(el);
-    if (!snap) continue;
-    restoreProp(el, "visibility", snap.visibility, snap.visibilityPriority);
-    restoreProp(el, "opacity", snap.opacity, snap.opacityPriority);
-    restoreProp(el, "pointer-events", snap.pointerEvents, snap.pointerEventsPriority);
-    roleVisibilityState.delete(el);
-  }
-  touchedRoleElements.clear();
+  releasePins();
   lastAppliedRoleVisibility = null;
-}
-
-function restoreProp(el: HTMLElement, prop: string, value: string, priority: string): void {
-  el.style.removeProperty(prop);
-  if (value) el.style.setProperty(prop, value, priority || "");
 }
 
 // Таймеры/подписки (всё должно быть снято в disable()).
@@ -500,7 +482,12 @@ async function restorePersistedAutoState(status: any = null): Promise<boolean> {
     }
 
     currentTimeOfDay = stored.currentTimeOfDay;
-    lastAppliedRoleVisibility = stored.lastAppliedRoleVisibility || null;
+    // Латч из persisted НЕ восстанавливается (аудит скрытия ролей
+    // 29.08.2026, №2): он описывает мёртвый DOM прошлой загрузки. Считанное
+    // «hidden» до применения глушило ретрай — applyRoleVisibility после F5
+    // не находил целей, а schedule упирался в собственный латч, и роль
+    // монтировалась видимой на дневной сцене.
+    lastAppliedRoleVisibility = null;
 
     const applied = applyRoleVisibility(currentTimeOfDay === "night");
     if (!applied) scheduleRoleVisibility(currentTimeOfDay, 1);
@@ -516,66 +503,15 @@ async function restorePersistedAutoState(status: any = null): Promise<boolean> {
 
 // ─────────────────────────── видимость своей роли ───────────────────────────
 
-function getRoleVisibilityTargets(): HTMLElement[] {
-  const targets: HTMLElement[] = [];
-  const seen = new Set<Element>();
-  SITE.ownRoleTargets.forEach((selector) => {
-    document.querySelectorAll<HTMLElement>(selector).forEach((el) => {
-      if (seen.has(el)) return;
-      seen.add(el);
-      targets.push(el);
-    });
-  });
-  return targets;
-}
-
 function applyRoleVisibility(isRoleVisible: boolean): boolean {
-  // Ветка window.showOwnRole/hideOwnRole удалена: эти функции нигде не
-  // определялись (наследие legacy page-script), в изолированном мире
-  // content-скрипта их не существует — ветка была мертва всегда.
-
-  const targets = getRoleVisibilityTargets();
-  if (targets.length === 0) {
+  // Пин и снимки — в ../role-pin; здесь остаётся решение «когда» и латч.
+  const target = isRoleVisible ? ("visible" as const) : ("hidden" as const);
+  if (!pinOwnRole(target)) {
     log.debug(SCOPE, "Role visibility targets not found, skipping role update");
     return false;
   }
-
-  targets.forEach((element) => {
-    if (!roleVisibilityState.has(element)) {
-      roleVisibilityState.set(element, {
-        visibility: element.style.visibility,
-        visibilityPriority: element.style.getPropertyPriority("visibility"),
-        opacity: element.style.opacity,
-        opacityPriority: element.style.getPropertyPriority("opacity"),
-        pointerEvents: element.style.pointerEvents,
-        pointerEventsPriority: element.style.getPropertyPriority("pointer-events"),
-      });
-    }
-    touchedRoleElements.add(element);
-    // Сайт пересобирает плитки на каждой смене фазы: без уборки реестр
-    // держал бы сильные ссылки на отсоединённые поддеревья (ревью пакета C).
-    for (const tracked of touchedRoleElements) {
-      if (!tracked.isConnected) touchedRoleElements.delete(tracked);
-    }
-
-    const originalState = roleVisibilityState.get(element)!;
-    if (isRoleVisible) {
-      // Восстановление через setProperty(...,"important"): auto-start при
-      // включённом авто-скрытии держит СВОЙ <style> c !important, и обычный
-      // inline-показ ему проигрывал — роль ночью не показывалась никогда.
-      // Inline !important сильнее любого stylesheet !important.
-      setImportant(element, "visibility", originalState.visibility || "visible");
-      setImportant(element, "opacity", originalState.opacity || "1");
-      element.style.pointerEvents = originalState.pointerEvents;
-    } else {
-      setImportant(element, "visibility", "hidden");
-      setImportant(element, "opacity", "0");
-      element.style.pointerEvents = "none";
-    }
-  });
-
   const previous = lastAppliedRoleVisibility;
-  lastAppliedRoleVisibility = isRoleVisible ? "visible" : "hidden";
+  lastAppliedRoleVisibility = target;
   // info на СМЕНЕ состояния (несколько раз за игру): без неё в файле не видно,
   // была ли роль реально скрыта перед дневной сценой, и успешное переключение
   // сцены создавало ложное ощущение полного успеха (OP-1).
@@ -602,7 +538,10 @@ function scheduleRoleVisibility(timeOfDay: TimeOfDay, attempt = 0): void {
     pendingRoleVisibilityTimer = null;
   }
 
-  if (lastAppliedRoleVisibility === targetVisibility) {
+  // Латч сверяется с ЖИВЫМ узлом (аудит скрытия ролей 29.08.2026, №1): Vue
+  // пересоздаёт плитку, пин умирает вместе с ней, а глобальная переменная
+  // продолжала утверждать «скрыто» — настоящая роль была видна в эфире.
+  if (lastAppliedRoleVisibility === targetVisibility && pinHolds(targetVisibility)) {
     log.debug(SCOPE, "Role visibility already set to", targetVisibility);
     return;
   }
@@ -1183,8 +1122,10 @@ function startDOMMonitoring(): void {
   // этапа» живёт соседом списка стадий и может не попасть под селектор —
   // его добирает редкий страховочный опрос ниже.
   const PHASE_SCOPE = SITE.phaseScope;
+  const ROLE_SEL = SITE.ownRoleTargets.join(", ");
   unsubDom = onDomChange((mutations) => {
     let shouldCheckTime = false;
+    let roleNodeAdded = false;
 
     for (const mutation of mutations) {
       const t = mutation.target;
@@ -1195,21 +1136,55 @@ function startDOMMonitoring(): void {
       }
       if (mutation.type === "childList") {
         for (const n of mutation.addedNodes) {
-          if (n instanceof Element && (n.matches(PHASE_SCOPE) || n.querySelector(PHASE_SCOPE))) {
+          if (!(n instanceof Element)) continue;
+          if (!shouldCheckTime && (n.matches(PHASE_SCOPE) || n.querySelector(PHASE_SCOPE))) {
             shouldCheckTime = true;
-            break;
+          }
+          // Дешёвый гейт: пин перепроверяем ТОЛЬКО когда в DOM добавлялись
+          // узлы роли (Vue-пересоздание) — а не на каждый flush, иначе два
+          // QSA на пачку вернули бы перф-класс PERF-1.
+          if (!roleNodeAdded && (n.matches(ROLE_SEL) || n.querySelector(ROLE_SEL))) {
+            roleNodeAdded = true;
           }
         }
-        if (shouldCheckTime) break;
+        if (shouldCheckTime && roleNodeAdded) break;
       }
+    }
+
+    // Пересозданный узел роли — перенакласть пин НЕМЕДЛЕННО, не дожидаясь
+    // 2с-опроса (аудит №1): страховочный интервал остаётся второй линией.
+    if (
+      roleNodeAdded &&
+      autoModeEnabled &&
+      currentTimeOfDay &&
+      lastAppliedRoleVisibility &&
+      !pinHolds(lastAppliedRoleVisibility)
+    ) {
+      const phase = currentTimeOfDay;
+      lastAppliedRoleVisibility = null;
+      scheduleRoleVisibility(phase);
     }
 
     if (shouldCheckTime) requestTimeOfDayCheck();
   });
 
   // Страховочный редкий опрос (2с): ловит смену текста таймера вне
-  // .stage-скоупа и любые нестандартные раскладки вёрстки.
-  timeOfDayFallbackTimer = setInterval(() => requestTimeOfDayCheck(), 2000);
+  // .stage-скоупа и любые нестандартные раскладки вёрстки. Здесь же —
+  // самолечение пина (аудит №1): пересозданный Vue узел теряет пин, латч
+  // сверяется с живым DOM и перенакладывает в пределах пары секунд.
+  timeOfDayFallbackTimer = setInterval(() => {
+    if (
+      autoModeEnabled &&
+      currentTimeOfDay &&
+      lastAppliedRoleVisibility &&
+      !pinHolds(lastAppliedRoleVisibility)
+    ) {
+      const phase = currentTimeOfDay;
+      lastAppliedRoleVisibility = null; // латч мёртв вместе с узлом
+      scheduleRoleVisibility(phase);
+    }
+    requestTimeOfDayCheck();
+  }, 2000);
 
   // Начальная проверка времени суток.
   setTimeout(() => requestTimeOfDayCheck(), 1000);

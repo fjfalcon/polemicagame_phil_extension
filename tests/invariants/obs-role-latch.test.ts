@@ -80,3 +80,31 @@ describe("симметрия автомода: таймер видимости �
     expect(enableBody).toMatch(/scheduleRoleVisibility\(currentTimeOfDay\)/);
   });
 });
+
+describe("латч против живого узла (аудит скрытия ролей 29.08.2026, №1/№2)", () => {
+  test("№1: ранний выход schedule сверяет латч с живым пином, не с памятью", () => {
+    expect(source).toMatch(
+      /lastAppliedRoleVisibility === targetVisibility && pinHolds\(targetVisibility\)/,
+    );
+  });
+
+  test("№1: пересозданный узел лечится и подписчиком, и страховочным опросом", () => {
+    const heals = source.match(/!pinHolds\(lastAppliedRoleVisibility\)/g) ?? [];
+    expect(heals.length, "две линии самолечения пина").toBeGreaterThanOrEqual(2);
+  });
+
+  test("№2: persisted-латч НЕ доверяется до применения", () => {
+    const start = source.indexOf("currentTimeOfDay = stored.currentTimeOfDay;");
+    const body = source.slice(start, source.indexOf("const applied = applyRoleVisibility", start));
+    expect(body, "латч обнуляется: он описывает мёртвый DOM прошлой загрузки").toMatch(
+      /lastAppliedRoleVisibility = null/,
+    );
+    expect(body).not.toMatch(/stored\.lastAppliedRoleVisibility/);
+  });
+
+  test("teardown отдаёт пины владельцу-модулю", () => {
+    const start = source.indexOf("function restoreRoleVisibility");
+    const body = source.slice(start, source.indexOf("}", start) + 1);
+    expect(body).toMatch(/releasePins\(\)/);
+  });
+});
