@@ -148,3 +148,24 @@ describe("латч против живого узла (аудит скрытия
     expect(body).toMatch(/releasePins\(\)/);
   });
 });
+
+describe("смена сцены только по живому распознанию (жалоба 31.08.2026)", () => {
+  test("детектор помечает каждый вызов: маркеры или фолбэк", () => {
+    const i = source.indexOf("const result = detectTimeOfDayInner();");
+    expect(i).toBeGreaterThan(-1);
+    expect(source.slice(i, i + 200)).toMatch(/lastDetectWasLive = !phaseUnknownHit;/);
+  });
+
+  test("фолбэчный результат не взводит и не подтверждает смену фазы", () => {
+    // На входе в комнату фолбэк «не понял → день» подтверждался как
+    // null → day: прегейм-сцена стримера сменялась «Днём» на экране
+    // ожидания, нулевая ночь шла в эфире на дневной сцене (63 с по логу).
+    const gates = source.match(/if \(!lastDetectWasLive\) return;/g) ?? [];
+    expect(gates.length, "гейт на взведении pending И на подтверждении").toBeGreaterThanOrEqual(2);
+    const evalStart = source.indexOf("function evaluateTimeOfDay");
+    expect(evalStart).toBeGreaterThan(-1);
+    const armIdx = source.indexOf("pendingTimeOfDay = newTimeOfDay;", evalStart);
+    const gateIdx = source.indexOf("if (!lastDetectWasLive) return;", evalStart);
+    expect(gateIdx, "гейт стоит ДО взведения pending").toBeLessThan(armIdx);
+  });
+});

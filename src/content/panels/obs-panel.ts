@@ -301,6 +301,16 @@ let currentTimeOfDay: TimeOfDay | null = null;
  * Единственная точка взведения — обёртка detectTimeOfDay при распознании.
  */
 let phaseConfirmedLive = false;
+/**
+ * ПОСЛЕДНИЙ вызов детектора распознал маркеры (не фолбэк). Отдельно от
+ * phaseConfirmedLive: тот липкий на комнату (защита владения), а этот — про
+ * конкретный вызов. Жалоба 31.08.2026: на входе в комнату детектор падал в
+ * фолбэк «не понял → день», и «день» ПОДТВЕРЖДАЛСЯ как смена null → day —
+ * прегейм-сцена стримера («Скоро начнется») сменялась «Днём» ещё на экране
+ * ожидания, а нулевая ночь (раздача, знакомство мафии) шла в эфире на
+ * дневной сцене до первого живого распознавания (63 с по логу).
+ */
+let lastDetectWasLive = false;
 /** Комната, в которой флаг взведён: смена pathname делает фазу «не живой». */
 let phaseFlagPathname = "";
 let lastAppliedRoleVisibility: "visible" | "hidden" | null = null;
@@ -719,6 +729,7 @@ function detectTimeOfDay(): TimeOfDay {
   }
   phaseUnknownHit = false;
   const result = detectTimeOfDayInner();
+  lastDetectWasLive = !phaseUnknownHit;
   if (phaseUnknownHit) {
     if (!phaseUnknownSince) {
       phaseUnknownSince = Date.now();
@@ -988,6 +999,11 @@ function evaluateTimeOfDay(): void {
     return;
   }
 
+  // Фолбэчный результат смену НЕ взводит: «не понял» — не основание трогать
+  // сцену стримера (жалоба 31.08.2026, см. lastDetectWasLive). Живой это
+  // гейт не задерживает: распознанная фаза проходит как раньше.
+  if (!lastDetectWasLive) return;
+
   if (pendingTimeOfDay !== newTimeOfDay) {
     pendingTimeOfDay = newTimeOfDay;
 
@@ -1003,6 +1019,9 @@ function evaluateTimeOfDay(): void {
       if (pendingTimeOfDay !== newTimeOfDay) return;
 
       const confirmedTimeOfDay = detectTimeOfDay();
+      // Подтверждение — тоже только живым распознанием: фолбэк в окне
+      // подтверждения не имеет права финализировать смену (жалоба 31.08.2026).
+      if (!lastDetectWasLive) return;
       if (confirmedTimeOfDay === newTimeOfDay && confirmedTimeOfDay !== currentTimeOfDay) {
         // info: точка, с которой начинается вся автосмена. Без неё в логе
         // не видно даже того, распознали мы фазу или нет.
