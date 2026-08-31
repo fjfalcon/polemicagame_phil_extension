@@ -14,6 +14,7 @@ import { escapeHtml } from "@core/escape";
 import { actionTip, isLiftBallot, resolveDayOutcome } from "../match-outcome";
 import { log } from "@core/log";
 import { getLastGameData, getMatchId } from "../match-data";
+import { analyzeMafiaShots, type NightShooting } from "../mafia-shots";
 import type { Feature, FeatureContext } from "@core/feature";
 import type { Settings } from "@shared/types";
 
@@ -332,7 +333,7 @@ function unlinkPlayerNames(root: ParentNode = document): void {
 function removeEnhancements(): void {
   document
     .querySelectorAll(
-      `${SITE.statsRowPhase}, ${SITE.bestMoveDot}, ${SITE.penaltyDots}, .pn-timeline`,
+      `${SITE.statsRowPhase}, ${SITE.bestMoveDot}, ${SITE.penaltyDots}, .pn-timeline, .pn-shot-icon`,
     )
     .forEach((element) => element.remove());
 }
@@ -597,8 +598,89 @@ function enhanceTable(table: HTMLElement, gameData: any): void {
 
   trackTimeout(() => {
     addBestMoveIndicators(table, gameData);
+    addShotIcons(table, gameData);
     log.debug(SCOPE, "Best move indicators added");
   }, 100);
+}
+
+/**
+ * Значок «пистолет» у чёрных в разборе: вся ночная стрельба игрока и
+ * промахи с виновными (просьба владельца 31.08.2026). Контент — в title:
+ * тултип-фича вынесет его в body, как у «лучшего хода». Правило вины — в
+ * mafia-shots.ts (уведший от большинства; при ничьей виновны все).
+ */
+const SHOT_ICON_CLASS = "pn-shot-icon";
+
+export function shotIconTitle(position: number, nights: NightShooting[]): string {
+  const lines: string[] = ["Стрельба мафии"];
+  let teamMisses = 0;
+  let blamedHere: number[] = [];
+  for (const n of nights) {
+    if (n.missed) teamMisses++;
+    const own = n.shots.find((sh) => sh.shooter === position);
+    if (!own) continue;
+    let outcome: string;
+    if (!n.missed) {
+      outcome = `убит ${n.victim}`;
+    } else if (n.blamed.includes(position)) {
+      blamedHere.push(n.alive);
+      outcome = n.blamed.length === n.shots.length ? "ПРОМАХ — не сведено" : "ПРОМАХ — увёл выстрел";
+    } else {
+      outcome = "промах команды (не его)";
+    }
+    lines.push(`ночь ${n.night} · в ${n.alive} · → ${own.victim} · ${outcome}`);
+  }
+  lines.push(
+    `Промахов команды: ${teamMisses} · виновен: ${blamedHere.length}` +
+      (blamedHere.length ? ` (${blamedHere.map((a) => `в ${a}`).join(", ")})` : ""),
+  );
+  return lines.join("\n");
+}
+
+export function addShotIcons(table: HTMLElement, gameData: any): void {
+  const players = gameData?.data?.players;
+  if (!Array.isArray(players)) return;
+  const nights = analyzeMafiaShots(gameData.data);
+  if (nights.length === 0) return;
+  // Чёрные: 0 — дон, 1 — мафия (кодировка разбора, как в findShotNight).
+  const mafia = players.filter((p: any) => p?.role === 0 || p?.role === 1);
+  for (const p of mafia) {
+    const position = p?.position;
+    if (!Number.isSafeInteger(position)) continue;
+    const cell = table.querySelector<HTMLElement>(
+      `${SITE.statsUsernameCell}[data-player="${position}"]`,
+    );
+    if (!cell) continue;
+    // Идемпотентно: пересборки таблицы зовут нас повторно.
+    if (cell.querySelector(`.${SHOT_ICON_CLASS}`)) continue;
+    const icon = document.createElement("span");
+    icon.className = SHOT_ICON_CLASS;
+    icon.title = shotIconTitle(position, nights);
+    icon.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<path d="M3 8h17v4h-3l-1.5 6h-4l1.2-5H9.5L8.5 16H4.5L6 12H3V8z" fill="currentColor"/>' +
+      '<rect x="19" y="7" width="2.4" height="2.2" fill="currentColor"/></svg>';
+    // Ссылка на профиль могла уже поглотить содержимое ячейки — значок
+    // кладём В ссылку, если она есть, чтобы не разъезжалась вёрстка.
+    (cell.querySelector(`.${PROFILE_LINK_CLASS}`) ?? cell).appendChild(icon);
+  }
+  addShotIconStyles();
+}
+
+function addShotIconStyles(): void {
+  appendStyle(
+    `
+    .pn-shot-icon {
+      display: inline-flex;
+      margin-left: 4px;
+      vertical-align: middle;
+      color: #b45959;
+      cursor: help;
+    }
+    .pn-shot-icon:hover { color: #e07070; }
+  `,
+    "pn-shot-icon-style",
+  );
 }
 
 function buildPhaseTimeline(

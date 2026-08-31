@@ -19,7 +19,13 @@ vi.mock("@core/messaging", () => ({
 }));
 vi.mock("@core/toast", () => ({ showToast: vi.fn(), clearToasts: vi.fn() }));
 
-import { applyAutoHeight, findSummaryRows, winnerBadge } from "@content/features/match-stats";
+import {
+  addShotIcons,
+  applyAutoHeight,
+  findSummaryRows,
+  winnerBadge,
+} from "@content/features/match-stats";
+import { readFileSync } from "node:fs";
 
 describe("winnerBadge: сырой winnerCode SSR", () => {
   test("0 — победа мирных (живая фикстура match_610180)", () => {
@@ -115,5 +121,66 @@ describe("протухшие Vue-scope-ID не возвращаются", () => 
     // историческое упоминание в комментарии.
     expect(src).not.toMatch(/["'[]data-v-(33ae8458|1db9d42a)/);
     expect(src).toContain("data-pn-stats");
+  });
+});
+
+describe("значок «пистолет»: стрельба мафии в разборе (31.08.2026)", () => {
+  function tableFor(positions: number[]): HTMLElement {
+    const table = document.createElement("div");
+    for (const p of positions) {
+      const cell = document.createElement("div");
+      cell.className = "cell username";
+      cell.dataset.player = String(p);
+      cell.textContent = `игрок ${p}`;
+      table.appendChild(cell);
+    }
+    document.body.appendChild(table);
+    return table;
+  }
+
+  test("значок у чёрных, у мирных нет; повторный вызов не плодит", () => {
+    const d = JSON.parse(readFileSync("legacy/match_314446.json", "utf8"));
+    const table = tableFor([1, 2, 5, 9, 10]);
+    addShotIcons(table, d);
+    addShotIcons(table, d); // идемпотентность: пересборка зовёт повторно
+    const iconsAt = (p: number) =>
+      table.querySelectorAll(`[data-player="${p}"] .pn-shot-icon`).length;
+    expect(iconsAt(2), "мафия").toBe(1);
+    expect(iconsAt(5), "дон").toBe(1);
+    expect(iconsAt(10), "мафия").toBe(1);
+    expect(iconsAt(1), "мирный — без значка").toBe(0);
+    expect(iconsAt(9), "шериф — без значка").toBe(0);
+    const title = table.querySelector<HTMLElement>('[data-player="10"] .pn-shot-icon')!.title;
+    expect(title).toContain("ночь 1 · в 10");
+    expect(title).toContain("Промахов команды: 0");
+    table.remove();
+  });
+
+  test("виновный видит «увёл выстрел», большинство — «промах команды (не его)»", () => {
+    const d = {
+      data: {
+        players: [
+          ...Array.from({ length: 10 }, (_, i) => ({ position: i + 1, role: 2 })),
+        ],
+        votes: [],
+        shots: [
+          { night: 1, shooter: 2, victim: 7 },
+          { night: 1, shooter: 5, victim: 7 },
+          { night: 1, shooter: 10, victim: 3 },
+        ],
+      },
+    };
+    (d.data.players[1] as { role: number }).role = 1; // 2 — мафия
+    (d.data.players[4] as { role: number }).role = 0; // 5 — дон
+    (d.data.players[9] as { role: number }).role = 1; // 10 — мафия
+    const table = tableFor([2, 5, 10]);
+    addShotIcons(table, d);
+    const titleOf = (p: number) =>
+      table.querySelector<HTMLElement>(`[data-player="${p}"] .pn-shot-icon`)!.title;
+    expect(titleOf(10)).toContain("ПРОМАХ — увёл выстрел");
+    expect(titleOf(10)).toContain("виновен: 1 (в 10)");
+    expect(titleOf(2)).toContain("промах команды (не его)");
+    expect(titleOf(2)).toContain("виновен: 0");
+    table.remove();
   });
 });
