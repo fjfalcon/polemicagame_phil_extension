@@ -156,16 +156,61 @@ describe("смена сцены только по живому распозна�
     expect(source.slice(i, i + 200)).toMatch(/lastDetectWasLive = !phaseUnknownHit;/);
   });
 
-  test("фолбэчный результат не взводит и не подтверждает смену фазы", () => {
+  test("фолбэчный результат не трогает машину смены: ни взвод, ни подтверждение, ни отмена", () => {
     // На входе в комнату фолбэк «не понял → день» подтверждался как
     // null → day: прегейм-сцена стримера сменялась «Днём» на экране
     // ожидания, нулевая ночь шла в эфире на дневной сцене (63 с по логу).
-    const gates = source.match(/if \(!lastDetectWasLive\) return;/g) ?? [];
-    expect(gates.length, "гейт на взведении pending И на подтверждении").toBeGreaterThanOrEqual(2);
+    // Якорные проверки ОБОИХ гейтов по месту — счёт вхождений обходился
+    // копией строки-приманки в чужой функции (adversarial, Н3).
     const evalStart = source.indexOf("function evaluateTimeOfDay");
     expect(evalStart).toBeGreaterThan(-1);
-    const armIdx = source.indexOf("pendingTimeOfDay = newTimeOfDay;", evalStart);
     const gateIdx = source.indexOf("if (!lastDetectWasLive) return;", evalStart);
-    expect(gateIdx, "гейт стоит ДО взведения pending").toBeLessThan(armIdx);
+    const equalIdx = source.indexOf("if (newTimeOfDay === previousTimeOfDay)", evalStart);
+    const armIdx = source.indexOf("pendingTimeOfDay = newTimeOfDay;", evalStart);
+    expect(gateIdx, "гейт существует в evaluateTimeOfDay").toBeGreaterThan(-1);
+    // Гейт стоит ДО ветки «не изменилось»: фолбэчный тик не должен и ГАСИТЬ
+    // живо взведённый pending (Н5), не только взводить.
+    expect(gateIdx).toBeLessThan(equalIdx);
+    expect(gateIdx).toBeLessThan(armIdx);
+    // Второй гейт — в окне подтверждения, между повторным детектом и логом.
+    const confirmDetect = source.indexOf("const confirmedTimeOfDay = detectTimeOfDay();");
+    const confirmLog = source.indexOf("фаза подтверждена", confirmDetect);
+    expect(confirmDetect).toBeGreaterThan(-1);
+    const confirmGate = source.indexOf("if (!lastDetectWasLive) return;", confirmDetect);
+    expect(confirmGate, "гейт подтверждения на месте").toBeGreaterThan(-1);
+    expect(confirmGate).toBeLessThan(confirmLog);
+  });
+
+  test("Н3: lastDetectWasLive присваивается ровно в двух местах — объявление и деривация", () => {
+    // Третье присваивание (например, «= true» перед гейтом) — обход гейта.
+    const writes = source.match(/lastDetectWasLive = /g) ?? [];
+    expect(writes.length).toBe(2);
+  });
+
+  test("Н1: каждая фолбэчная ветка детектора помечена phaseUnknownHit", () => {
+    // «Изолированная Ночь» возвращала currentTimeOfDay || \"day\" БЕЗ метки —
+    // «остаёмся в текущем» считалось живым и проходило гейт (Н1).
+    const marks = source.match(/phaseUnknownHit = true;/g) ?? [];
+    expect(marks.length, "изолированная ночь + финальный фолбэк + catch").toBeGreaterThanOrEqual(3);
+    const iso = source.indexOf('Found isolated "Ночь"');
+    expect(iso).toBeGreaterThan(-1);
+    const isoBranch = source.slice(source.lastIndexOf("if (", iso - 200), iso);
+    expect(isoBranch + source.slice(iso, iso + 50)).toContain("phaseUnknownHit");
+  });
+
+  test("Н2: до первого живого распознания роль запинена fail-safe hidden", () => {
+    const start = source.indexOf("function desiredRoleVisibility");
+    const body = source.slice(start, source.indexOf("function healRolePin", start));
+    expect(body, "фаза null при автомоде — прятать").toMatch(
+      /if \(!currentTimeOfDay\) return "hidden";/,
+    );
+  });
+
+  test("Н4: уход из комнаты обнуляет persisted-состояние автосцены", () => {
+    const start = source.indexOf("function resetNightOnLeave");
+    const body = source.slice(start, source.indexOf("/** Автоматически переключает", start));
+    expect(body, "persisted-ночь умирает вместе с уходом").toMatch(
+      /clearPersistedAutoState\(false\)/,
+    );
   });
 });

@@ -552,7 +552,13 @@ function setImportant(el: HTMLElement, prop: string, value: string): void {
  * не зависит.
  */
 function desiredRoleVisibility(): "visible" | "hidden" | null {
-  if (!autoModeEnabled || !currentTimeOfDay) return null;
+  if (!autoModeEnabled) return null;
+  // Фаза ещё не распознана (гейт живого распознания, 9.59.0) — роль
+  // прятать ВСЁ РАВНО: до фикса её прятал фолбэчный «день», и снять этот
+  // побочный щит значило открыть окно «роль в эфире на раздаче» для тех,
+  // у кого включена только автосмена (adversarial 31.08.2026, Н2).
+  // Fail-safe направление: спрятать до первой распознанной фазы.
+  if (!currentTimeOfDay) return "hidden";
   return currentTimeOfDay === "night" ? "visible" : "hidden";
 }
 
@@ -835,11 +841,16 @@ function detectTimeOfDayInner(): TimeOfDay {
       }
     }
 
-    // Изолированная "Ночь" без "ДО СМЕНЫ ЭТАПА" — игнорируем, остаёмся в текущем времени
+    // Изолированная "Ночь" без "ДО СМЕНЫ ЭТАПА" — игнорируем, остаёмся в
+    // текущем времени. Это ФОЛБЭК и метится как фолбэк (adversarial
+    // 31.08.2026, Н1): ветка возвращала currentTimeOfDay || "day" БЕЗ
+    // phaseUnknownHit — «остаёмся в текущем» считалось живым распознанием,
+    // и свежая загрузка посреди ночи подтверждала null → day через гейт.
     const currentSubstage = document.querySelector(SITE.substageCurrent);
     if (currentSubstage) {
       const currentText = norm(currentSubstage);
       if (currentText.trim() === "ночь" || currentText.trim() === "night") {
+        phaseUnknownHit = true;
         const fallbackTime = currentTimeOfDay || "day";
         log.debug(
           SCOPE,
@@ -990,6 +1001,12 @@ function evaluateTimeOfDay(): void {
 
   log.debug(SCOPE, "Time-of-day result:", newTimeOfDay, "(previous:", previousTimeOfDay, ")");
 
+  // Фолбэк не трогает машину смены ЦЕЛИКОМ (adversarial 31.08.2026, Н5):
+  // гейт стоял ниже ветки «значение не изменилось», и фолбэчный тик,
+  // вернувший previous, ГАСИЛ живо взведённый pending — ночная сцена
+  // опаздывала до следующего распознавания.
+  if (!lastDetectWasLive) return;
+
   if (newTimeOfDay === previousTimeOfDay) {
     pendingTimeOfDay = null;
     if (pendingTimeOfDayConfirmTimer) {
@@ -998,11 +1015,6 @@ function evaluateTimeOfDay(): void {
     }
     return;
   }
-
-  // Фолбэчный результат смену НЕ взводит: «не понял» — не основание трогать
-  // сцену стримера (жалоба 31.08.2026, см. lastDetectWasLive). Живой это
-  // гейт не задерживает: распознанная фаза проходит как раньше.
-  if (!lastDetectWasLive) return;
 
   if (pendingTimeOfDay !== newTimeOfDay) {
     pendingTimeOfDay = newTimeOfDay;
@@ -1103,6 +1115,11 @@ function resetNightOnLeave(): void {
   currentTimeOfDay = "day";
   nightSince = null;
   longNightWarned = false;
+  // Persisted-ночь обязана умереть вместе с уходом (adversarial 31.08.2026,
+  // Н4): запись переживала уход с TTL 10 мин, и вход в НОВУЮ комнату
+  // восстанавливал ночную сцену поверх прегейм-сцены стримера. Restore
+  // существует для F5 живой игры — ушли из комнаты, значит restore нечего.
+  void clearPersistedAutoState(false);
   if (!dayScene) {
     log.info(SCOPE, "дневная сцена не выбрана — вернуть нечего");
     return;
