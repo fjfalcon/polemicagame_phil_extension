@@ -1,6 +1,6 @@
 {
   "name": "polemica-notes",
-  "version": "9.60.0",
+  "version": "9.60.1",
   "private": true,
   "license": "MPL-2.0",
   "description": "Расширение для Polemica Game: статистика, заметки, OBS, Twitch",

@@ -643,16 +643,34 @@ export function addShotIcons(table: HTMLElement, gameData: any): void {
   const nights = analyzeMafiaShots(gameData.data);
   if (nights.length === 0) return;
   // Чёрные: 0 — дон, 1 — мафия (кодировка разбора, как в findShotNight).
-  const mafia = players.filter((p: any) => p?.role === 0 || p?.role === 1);
-  for (const p of mafia) {
-    const position = p?.position;
-    if (!Number.isSafeInteger(position)) continue;
-    const cell = table.querySelector<HTMLElement>(
-      `${SITE.statsUsernameCell}[data-player="${position}"]`,
-    );
-    if (!cell) continue;
+  const mafiaByPos = new Set(
+    players
+      .filter((p: any) => p?.role === 0 || p?.role === 1)
+      .map((p: any) => p.position)
+      .filter((n: unknown) => Number.isSafeInteger(n)),
+  );
+  const posByName = new Map<string, number>();
+  for (const p of players) {
+    if (typeof p?.username === "string" && Number.isSafeInteger(p?.position)) {
+      posByName.set(p.username.trim(), p.position);
+    }
+  }
+  // Таблица разбора ТРАНСПОНИРОВАНА: колонки — игроки, data-атрибутов с
+  // позицией в разметке НЕТ (сверено на живом /match/627785, 31.08.2026:
+  // первая версия искала [data-player] и не находила ничего). Привязка —
+  // по нику (как у ссылок профиля), фолбэк — индекс колонки: строка «Ник»
+  // идёт в том же порядке, что строка «№» 1..10.
+  const cells = table.querySelectorAll<HTMLElement>(
+    `${SITE.statsUsernameCell}:not(${SITE.statsCellTitle})`,
+  );
+  cells.forEach((cell, idx) => {
+    const shown =
+      (cell.querySelector<HTMLElement>(`.${PROFILE_LINK_CLASS}`) ?? cell).textContent?.trim() ??
+      "";
+    const position = posByName.get(shown) ?? idx + 1;
+    if (!mafiaByPos.has(position)) return;
     // Идемпотентно: пересборки таблицы зовут нас повторно.
-    if (cell.querySelector(`.${SHOT_ICON_CLASS}`)) continue;
+    if (cell.querySelector(`.${SHOT_ICON_CLASS}`)) return;
     const icon = document.createElement("span");
     icon.className = SHOT_ICON_CLASS;
     icon.title = shotIconTitle(position, nights);
@@ -663,7 +681,7 @@ export function addShotIcons(table: HTMLElement, gameData: any): void {
     // Ссылка на профиль могла уже поглотить содержимое ячейки — значок
     // кладём В ссылку, если она есть, чтобы не разъезжалась вёрстка.
     (cell.querySelector(`.${PROFILE_LINK_CLASS}`) ?? cell).appendChild(icon);
-  }
+  });
   addShotIconStyles();
 }
 

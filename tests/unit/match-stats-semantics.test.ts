@@ -125,34 +125,73 @@ describe("протухшие Vue-scope-ID не возвращаются", () => 
 });
 
 describe("значок «пистолет»: стрельба мафии в разборе (31.08.2026)", () => {
-  function tableFor(positions: number[]): HTMLElement {
+  // Живая разметка (/match/627785, 31.08.2026): таблица транспонирована,
+  // строка «Ник» — .cell.title.username + десять .cell.player.username в
+  // порядке позиций, БЕЗ data-атрибутов. Первая версия искала
+  // [data-player] и молча не находила ничего («хоть убей не вижу где»).
+  function tableFor(nicks: string[]): HTMLElement {
     const table = document.createElement("div");
-    for (const p of positions) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const title = document.createElement("div");
+    title.className = "cell title username";
+    title.textContent = "Ник";
+    row.appendChild(title);
+    for (const n of nicks) {
       const cell = document.createElement("div");
-      cell.className = "cell username";
-      cell.dataset.player = String(p);
-      cell.textContent = `игрок ${p}`;
-      table.appendChild(cell);
+      cell.className = "cell player username";
+      cell.textContent = n;
+      row.appendChild(cell);
     }
+    table.appendChild(row);
     document.body.appendChild(table);
     return table;
   }
 
-  test("значок у чёрных, у мирных нет; повторный вызов не плодит", () => {
+  test("значок у чёрных по НИКУ, у мирных нет; заголовок «Ник» нетронут; идемпотентно", () => {
     const d = JSON.parse(readFileSync("legacy/match_314446.json", "utf8"));
-    const table = tableFor([1, 2, 5, 9, 10]);
+    const nicks = (d.data.players as Array<{ username: string }>).map((p) => p.username);
+    const table = tableFor(nicks);
     addShotIcons(table, d);
     addShotIcons(table, d); // идемпотентность: пересборка зовёт повторно
-    const iconsAt = (p: number) =>
-      table.querySelectorAll(`[data-player="${p}"] .pn-shot-icon`).length;
-    expect(iconsAt(2), "мафия").toBe(1);
-    expect(iconsAt(5), "дон").toBe(1);
-    expect(iconsAt(10), "мафия").toBe(1);
+    const iconsAt = (i: number) =>
+      table.querySelectorAll(".cell.player.username")[i - 1].querySelectorAll(".pn-shot-icon")
+        .length;
+    expect(iconsAt(2), "мафия (поз. 2)").toBe(1);
+    expect(iconsAt(5), "дон (поз. 5)").toBe(1);
+    expect(iconsAt(10), "мафия (поз. 10)").toBe(1);
     expect(iconsAt(1), "мирный — без значка").toBe(0);
     expect(iconsAt(9), "шериф — без значка").toBe(0);
-    const title = table.querySelector<HTMLElement>('[data-player="10"] .pn-shot-icon')!.title;
+    expect(
+      table.querySelector(".cell.title.username .pn-shot-icon"),
+      "заголовок строки — не игрок",
+    ).toBeNull();
+    const title = table.querySelectorAll<HTMLElement>(".cell.player.username")[9]
+      .querySelector<HTMLElement>(".pn-shot-icon")!.title;
     expect(title).toContain("ночь 1 · в 10");
     expect(title).toContain("Промахов команды: 0");
+    table.remove();
+  });
+
+  test("ник главнее индекса: перемешанные колонки следуют за НИКОМ", () => {
+    const d = JSON.parse(readFileSync("legacy/match_314446.json", "utf8"));
+    const nicks = (d.data.players as Array<{ username: string }>).map((p) => p.username);
+    const table = tableFor([...nicks].reverse()); // сайт отсортировал иначе
+    addShotIcons(table, d);
+    const cells = table.querySelectorAll(".cell.player.username");
+    // Дон — позиция 5, его ник теперь в колонке 10-5+1=6 (индекс 5).
+    expect(cells[5].querySelector(".pn-shot-icon"), "дон нашёлся по нику").not.toBeNull();
+    expect(cells[4].querySelector(".pn-shot-icon"), "чужая колонка 5 — мимо").toBeNull();
+    table.remove();
+  });
+
+  test("ник не совпал (обрезан вёрсткой) — привязка по индексу колонки", () => {
+    const d = JSON.parse(readFileSync("legacy/match_314446.json", "utf8"));
+    const table = tableFor(Array.from({ length: 10 }, (_, i) => `обрезан${i}`));
+    addShotIcons(table, d);
+    const cells = table.querySelectorAll(".cell.player.username");
+    expect(cells[4].querySelector(".pn-shot-icon"), "дон — колонка 5").not.toBeNull();
+    expect(cells[0].querySelector(".pn-shot-icon"), "мирный — колонка 1").toBeNull();
     table.remove();
   });
 
@@ -173,10 +212,12 @@ describe("значок «пистолет»: стрельба мафии в ра
     (d.data.players[1] as { role: number }).role = 1; // 2 — мафия
     (d.data.players[4] as { role: number }).role = 0; // 5 — дон
     (d.data.players[9] as { role: number }).role = 1; // 10 — мафия
-    const table = tableFor([2, 5, 10]);
+    const table = tableFor(Array.from({ length: 10 }, (_, i) => `ник${i + 1}`));
     addShotIcons(table, d);
     const titleOf = (p: number) =>
-      table.querySelector<HTMLElement>(`[data-player="${p}"] .pn-shot-icon`)!.title;
+      table
+        .querySelectorAll<HTMLElement>(".cell.player.username")
+        [p - 1].querySelector<HTMLElement>(".pn-shot-icon")!.title;
     expect(titleOf(10)).toContain("ПРОМАХ — увёл выстрел");
     expect(titleOf(10)).toContain("виновен: 1 (в 10)");
     expect(titleOf(2)).toContain("промах команды (не его)");
