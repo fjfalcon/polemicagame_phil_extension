@@ -650,11 +650,18 @@ export function addShotIcons(table: HTMLElement, gameData: any): void {
       .filter((n: unknown) => Number.isSafeInteger(n)),
   );
   const posByName = new Map<string, number>();
+  const dupNames = new Set<string>();
   for (const p of players) {
     if (typeof p?.username === "string" && Number.isSafeInteger(p?.position)) {
-      posByName.set(p.username.trim(), p.position);
+      const name = p.username.trim();
+      if (posByName.has(name)) dupNames.add(name); // тёзки: ник не однозначен
+      posByName.set(name, p.position);
     }
   }
+  // Коллизия ников (adversarial 03.09.2026, Н5): last-wins вешал ЧУЖУЮ
+  // стрельбу на обе ячейки — тёзки резолвятся только индексом колонки.
+  for (const name of dupNames) posByName.delete(name);
+
   // Таблица разбора ТРАНСПОНИРОВАНА: колонки — игроки, data-атрибутов с
   // позицией в разметке НЕТ (сверено на живом /match/627785, 31.08.2026:
   // первая версия искала [data-player] и не находила ничего). Привязка —

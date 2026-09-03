@@ -185,6 +185,77 @@ describe("значок «пистолет»: стрельба мафии в ра
     table.remove();
   });
 
+  test("Н5: тёзки не резолвятся ником — обе колонки падают на индекс", () => {
+    const d = JSON.parse(readFileSync("legacy/match_314446.json", "utf8"));
+    // Тёзки В ДАННЫХ: мирный (поз. 1) носит тот же ник, что дон (поз. 5) —
+    // last-wins вешал бы донскую стрельбу на ОБЕ ячейки.
+    (d.data.players[0] as { username: string }).username = d.data.players[4].username;
+    const nicks = (d.data.players as Array<{ username: string }>).map((p) => p.username);
+    const table = tableFor(nicks);
+    addShotIcons(table, d);
+    const cells = table.querySelectorAll(".cell.player.username");
+    expect(cells[0].querySelector(".pn-shot-icon"), "колонка 1 по индексу — мирный").toBeNull();
+    expect(cells[4].querySelector(".pn-shot-icon"), "колонка 5 по индексу — дон").not.toBeNull();
+    table.remove();
+  });
+
+  test("пересортированная таблица: title несёт стрельбу ИМЕННО этого игрока", () => {
+    // Мутант shotIconTitle(idx+1) проходил зелёным: тесты проверяли только
+    // наличие значка (adversarial 03.09.2026, Н7).
+    const d = {
+      data: {
+        players: Array.from({ length: 10 }, (_, i) => ({
+          position: i + 1,
+          role: 2,
+          username: `ник${i + 1}`,
+        })),
+        votes: [],
+        shots: [
+          { night: 1, shooter: 2, victim: 7 },
+          { night: 1, shooter: 5, victim: 7 },
+          { night: 1, shooter: 10, victim: 3 },
+        ],
+      },
+    };
+    (d.data.players[1] as { role: number }).role = 1;
+    (d.data.players[4] as { role: number }).role = 0;
+    (d.data.players[9] as { role: number }).role = 1;
+    // Колонки в обратном порядке: виновный (поз. 10) — в ПЕРВОЙ колонке.
+    const table = tableFor(d.data.players.map((p) => p.username).reverse());
+    addShotIcons(table, d);
+    const first = table
+      .querySelectorAll(".cell.player.username")[0]
+      .querySelector<HTMLElement>(".pn-shot-icon")!;
+    expect(first.title, "стрельба позиции 10, а не колонки 1").toContain("→ 3");
+    expect(first.title).toContain("ПРОМАХ — увёл выстрел");
+    expect(first.title, "итог промахов команды ненулевой").toContain("Промахов команды: 1");
+    table.remove();
+  });
+
+  test("ничья выстрелов: у каждого «ПРОМАХ — не сведено»", () => {
+    const d = {
+      data: {
+        players: Array.from({ length: 10 }, (_, i) => ({
+          position: i + 1,
+          role: i === 1 || i === 4 ? 1 : 2,
+          username: `ник${i + 1}`,
+        })),
+        votes: [],
+        shots: [
+          { night: 1, shooter: 2, victim: 7 },
+          { night: 1, shooter: 5, victim: 3 },
+        ],
+      },
+    };
+    const table = tableFor(d.data.players.map((p) => p.username));
+    addShotIcons(table, d);
+    const title = table
+      .querySelectorAll(".cell.player.username")[1]
+      .querySelector<HTMLElement>(".pn-shot-icon")!.title;
+    expect(title).toContain("ПРОМАХ — не сведено");
+    table.remove();
+  });
+
   test("ник не совпал (обрезан вёрсткой) — привязка по индексу колонки", () => {
     const d = JSON.parse(readFileSync("legacy/match_314446.json", "utf8"));
     const table = tableFor(Array.from({ length: 10 }, (_, i) => `обрезан${i}`));

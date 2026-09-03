@@ -394,7 +394,7 @@ function enhanceTooltip(element: HTMLElement): void {
   };
 }
 
-const DOT_SELECTOR = `${SITE.penaltyDot}, ${SITE.bestMoveDot}`;
+const DOT_SELECTOR = `${SITE.penaltyDot}, ${SITE.bestMoveDot}, .pn-shot-icon`;
 
 function scanRoot(root: ParentNode): void {
   // querySelectorAll ищет только ПОТОМКОВ. Точка ЛХ добавляется голым

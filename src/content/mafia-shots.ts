@@ -12,8 +12,11 @@
  * — виновны ВСЕ стрелявшие: определить уведшего нельзя.
  *
  * «В скольких» (живых на момент ночи) восстанавливается по таймлайну:
- * убийства сведённых ночей до этой + выбывшие голосованиями дней до этой
- * (resolveDayOutcome — единственный владелец правила исхода дня).
+ * убийства сведённых ночей + выбывшие голосованиями дней 1..k (день k идёт
+ * ПЕРЕД ночью k; resolveDayOutcome — единственный владелец правила исхода
+ * дня). ИЗВЕСТНАЯ ГРАНИЦА (adversarial 03.09.2026, Н2): дисквалификации,
+ * ППК и уходы штрафом в votes/shots не отражены — на таких матчах «в
+ * скольких» завышено на каждого удалённого.
  */
 import { resolveDayOutcome, type MatchVote } from "./match-outcome";
 
@@ -51,28 +54,43 @@ export function analyzeMafiaShots(data: {
     ? data.players.length
     : 10;
 
-  const byNight = new Map<number, Array<{ shooter: number; victim: number }>>();
+  // Один стрелок — ОДИН голос за ночь (первая запись побеждает): дубль
+  // записи в недоверенном разборе иначе искажал большинство и вину
+  // (adversarial 03.09.2026, Н4).
+  const byNightShooter = new Map<number, Map<number, number>>();
   for (const s of rawShots) {
     if (!s || typeof s !== "object") continue; // мусор из недоверенного разбора
     const night = asPos(s.night);
     const shooter = asPos(s.shooter);
     const victim = asPos(s.victim);
     if (night === null || shooter === null || victim === null) continue;
-    if (!byNight.has(night)) byNight.set(night, []);
-    byNight.get(night)!.push({ shooter, victim });
+    if (!byNightShooter.has(night)) byNightShooter.set(night, new Map());
+    const perShooter = byNightShooter.get(night)!;
+    if (!perShooter.has(shooter)) perShooter.set(shooter, victim);
+  }
+  const byNight = new Map<number, Array<{ shooter: number; victim: number }>>();
+  for (const [night, perShooter] of byNightShooter) {
+    byNight.set(
+      night,
+      [...perShooter.entries()].map(([shooter, victim]) => ({ shooter, victim })),
+    );
   }
 
   const nights = [...byNight.keys()].sort((a, b) => a - b);
   const out: NightShooting[] = [];
   let deaths = 0;
-  let lastNight = 0;
+  let lastDayCounted = 0;
   for (const night of nights) {
-    // Дни между предыдущей учтённой ночью и этой: каждый мог унести
-    // выбывших. Ночь k идёт после дней 1..k-1 (день 0 — без голосования).
-    for (let day = lastNight; day < night; day++) {
-      if (day >= 1) deaths += resolveDayOutcome(votes, day).departed.length;
+    // ХРОНОЛОГИЯ: день k идёт ПЕРЕД ночью k — жертва ночи k ещё голосует
+    // днём k (доказано двумя живыми матчами: №2 голосует в дне 1 и убит в
+    // ночь 1, и т.д.). Первая версия считала дни только до k-1 и завышала
+    // «в скольких» на день в почти каждом матче; тест закреплял баг
+    // циркулярно — ожидания были сняты с самого кода (adversarial
+    // 03.09.2026, Н1). Значит, перед ночью k учтены дни 1..k.
+    for (let day = lastDayCounted + 1; day <= night; day++) {
+      deaths += resolveDayOutcome(votes, day).departed.length;
     }
-    lastNight = night;
+    lastDayCounted = night;
 
     const shots = byNight.get(night)!;
     const victims = new Set(shots.map((s) => s.victim));

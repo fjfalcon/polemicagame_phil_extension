@@ -780,6 +780,14 @@ function stopPeek(): void {
     trackedRolesVisible = false;
     peekRestoreAttempts = 0;
     restoreNativeHide();
+    // V удержана через переход в ночь дольше ночного автопоказа: показ уже
+    // отработал ПОД клавишей, applyRolePhase его не перевзведёт (фаза не
+    // менялась) — и возвращённый натив прятал роль до ручного D
+    // (adversarial 03.09.2026, Н6). Натив возвращаем всё равно (fail-safe),
+    // но ночью с автосменой тут же перевзводим показ.
+    if (cfg.rolePhaseSwitch && lastDetectedRolePhase === "night") {
+      scheduleNightRoleAutoShow(600);
+    }
   }
 }
 

@@ -475,7 +475,21 @@ describe("peek и пин: source-стражи (№7/№10; поведение п
     // показанной и ретрай молчит.
     const start = src.indexOf("const stillHidden = el");
     expect(start).toBeGreaterThan(-1);
-    expect(src.slice(start, start + 200)).toMatch(/inlineHidden/);
+    const slice = src.slice(start, start + 220);
+    expect(slice).toMatch(/\|\| getOwnRoleState\(\)\.inlineHidden/);
+    // Семантический мутант «inlineHidden && false» содержал подстроку и
+    // проходил прежнюю грепу (adversarial 03.09.2026, №7 из списка мутаций).
+    expect(slice).not.toMatch(/inlineHidden\s*&&/);
+  });
+
+  test("Н6: возврат натива ночью с автосменой перевзводит ночной показ", () => {
+    // V, удержанная через переход в ночь дольше night-show, оставляла роль
+    // нативно скрытой до ручного D: показ отработал ПОД клавишей, а
+    // applyRolePhase его не перевзводит (фаза не менялась).
+    const stopStart = src.indexOf("function stopPeek");
+    const body = src.slice(stopStart, src.indexOf("function restoreNativeHide"));
+    expect(body).toMatch(/scheduleNightRoleAutoShow\(/);
+    expect(body).toMatch(/lastDetectedRolePhase === "night"/);
   });
 
   test("№7: peek поднимает пин через владельца, а не срывом стилей", () => {
