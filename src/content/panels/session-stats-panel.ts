@@ -86,12 +86,19 @@ export function loadPrefs(): SessionPrefs {
 /** Строк истории за запрос: сессия — десятки игр, не тысячи (~65 КБ vs 660). */
 const SESSION_PAGE_LIMIT = 200;
 
-/** Роль сайта → фрагмент спрайта (дон в спрайте зовётся godfather). */
+/**
+ * Роль сайта → фрагмент спрайта. API отдаёт дона как `godfather` (живой
+ * матч: role.type === "godfather"), а карта знала только `don` — дон
+ * рисовался МИРНЫМ через молчаливый фолбэк (жалоба с profile/210,
+ * 03.09.2026: «написано, что я был мирным»). BLACK_ROLES в crossover.ts
+ * обе формы знал давно — карта спрайтов отстала.
+ */
 const ROLE_SPRITE: Record<string, string> = {
   civilian: "civilian",
   sheriff: "sheriff",
   mafia: "mafia",
   don: "godfather",
+  godfather: "godfather",
 };
 
 function fmtDelta(n: number): string {

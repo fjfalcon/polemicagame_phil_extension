@@ -99,6 +99,30 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("роль в строке игры (жалоба 03.09.2026: «написано, что я был мирным»)", () => {
+  test("дон API-имени godfather рисуется доном, а не фолбэчным мирным", async () => {
+    // fetchFirstPage замокан УЖЕ разобранными GameRow: роль — строка из
+    // role.type живого API (дон = "godfather", не "don").
+    const at = (mins: number) => {
+      const d = new Date(Date.now() - mins * 60_000);
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+    };
+    h.rows = [
+      { id: 2, role: "godfather", win: true, date: at(1), mmrDiff: 22, mmrAfter: 9154 },
+      { id: 1, role: "mafia", win: false, date: at(2), mmrDiff: -17, mmrAfter: 9132 },
+    ];
+    await sessionStatsFeature.enable({ settings: {} } as never);
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    const rows = [...panelEl().querySelectorAll(".ss-row")];
+    expect(rows).toHaveLength(2);
+    expect(rows[0].innerHTML, "первая строка — дон").toContain("#godfather");
+    expect(rows[0].innerHTML).not.toContain("#civilian");
+    expect(rows[1].innerHTML, "вторая — мафия").toContain("#mafia");
+    sessionStatsFeature.disable();
+  });
+});
+
 describe("«Мой вечер»: настройки вида", () => {
   test("меню открывается «шестерёнкой» и знает актуальные значения", async () => {
     await start();
