@@ -499,10 +499,14 @@ function applyInlineRoleVisibility(roleElements: HTMLElement[], isVisible: boole
     const original =
       roleVisibilityState.get(el) || { display: "", visibility: "", opacity: "", pointerEvents: "" };
     if (isVisible) {
-      el.style.display = original.display;
-      el.style.visibility = original.visibility;
-      el.style.opacity = original.opacity;
-      el.style.pointerEvents = original.pointerEvents;
+      // Снимку НЕ доверяем прятать (тот же урок, что находка B у пина,
+      // 03.09.2026): скрытые значения в «оригинале» — чей-то чужой hide
+      // (прежняя версия, чужой писатель), и «показ» из такого снимка был
+      // no-op — роль ночью оставалась скрытой при зелёной верификации.
+      el.style.display = original.display === "none" ? "" : original.display;
+      el.style.visibility = original.visibility === "hidden" ? "" : original.visibility;
+      el.style.opacity = original.opacity === "0" ? "" : original.opacity;
+      el.style.pointerEvents = original.pointerEvents === "none" ? "" : original.pointerEvents;
     } else {
       el.style.display = "none";
       el.style.visibility = "hidden";
@@ -761,7 +765,14 @@ function stopPeek(): void {
     // показанные роли) — возвращаем его вместе со скрытием.
     trackedRolesVisible = false;
   }
-  if (restoreInline) applyInlineRoleVisibility(getRoleVisibilityTargets(), false);
+  // Inline подчиняется ТОЙ ЖЕ фазовой логике, что CSS (жалоба 03.09.2026:
+  // «ночью проверки нет, V не работает» — каждый отпуск клавиши возвращал
+  // inline-скрытие, которое ночной автопоказ не снимал; роль ночью гасла
+  // после каждого подсматривания, а D «помогал» со 2-3 раза только потому,
+  // что нативный тумблер заставлял Vue пересоздать узел без наших стилей).
+  if (restoreInline && shouldRehideAfterPeek(cfg, lastDetectedRolePhase)) {
+    applyInlineRoleVisibility(getRoleVisibilityTargets(), false);
+  }
   // Нативное скрытие возвращаем ВСЕГДА, без оглядки на настройки и фазу: до
   // нажатия роль была скрыта, и «подсмотреть» не имеет права оставить её на
   // экране. Ночной автопоказ, если он положен, покажет её сам.
@@ -873,6 +884,11 @@ function scheduleNightRoleAutoShow(delayMs: number) {
     // 1) Убираем CSS-скрытие
     showAllRolesCSS();
 
+    // 1а) И НАШ inline-слой: его пишут вход в игру и возврат после
+    // подсматривания, а показ раньше снимал только CSS и натив — роль
+    // ночью оставалась скрытой inline'ом (жалоба 03.09.2026).
+    applyInlineRoleVisibility(getRoleVisibilityTargets(), true);
+
     // 2) Нативный показ через D
     const roleElements = getRoleVisibilityTargets();
     const primary = getPrimaryOwnRoleElement(roleElements);
@@ -888,7 +904,11 @@ function scheduleNightRoleAutoShow(delayMs: number) {
     // инкрементировался (только обнулялся) — ретрай был мёртв со времён legacy.
     setTimeout(() => {
       const el = getPrimaryOwnRoleElement();
-      const stillHidden = el ? getRoleUseHref(el).includes("#stop") : false;
+      // Застрявший INLINE — тоже «не показана»: раньше проверялся только
+      // натив, и ретрай считал inline-скрытую роль показанной.
+      const stillHidden = el
+        ? getRoleUseHref(el).includes("#stop") || getOwnRoleState().inlineHidden
+        : false;
       if (
         stillHidden &&
         cfg.rolePhaseSwitch &&
@@ -1371,6 +1391,9 @@ function handleRoleKey(e?: KeyboardEvent) {
     // авто-решения дальше принимались по перевёрнутому состоянию.
     e?.stopPropagation();
     showAllRolesCSS();
+    // И inline-слой: «показать» значит снять ВСЕ наши слои — до 03.09.2026
+    // снимался только CSS с нативом, и D при живом inline «не работал».
+    applyInlineRoleVisibility(getRoleVisibilityTargets(), true);
     // Под CSS роль могла быть скрыта и нативно — досылаем D сайту сами.
     const primary = getPrimaryOwnRoleElement();
     if (getRoleUseHref(primary).includes("#stop")) dispatchNativeRoleToggle();

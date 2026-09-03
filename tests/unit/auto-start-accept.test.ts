@@ -342,6 +342,101 @@ describe("автосмена ролей без авто-скрытия (прос
   });
 });
 
+describe("inline-слой подчиняется фазе (жалоба Ильи 03.09.2026: «ночью проверки нет, V не работает»)", () => {
+  function nightRoomWithInlineHiddenRole(): HTMLElement {
+    document.body.className = "night";
+    document.body.innerHTML = `
+      <div class="player my-player">
+        <span class="player__role role my-role red"><svg><use href="#sheriff"></use></svg></span>
+      </div>`;
+    const role = document.querySelector<HTMLElement>(".my-role")!;
+    // Inline-скрытие, как его пишут вход в игру и возврат после peek.
+    role.style.display = "none";
+    role.style.visibility = "hidden";
+    role.style.opacity = "0";
+    return role;
+  }
+
+  test("ночной автопоказ снимает и INLINE-слой, а не только CSS с нативом", () => {
+    // Роль ночью оставалась скрытой inline'ом: показ снимал CSS и натив,
+    // верификация проверяла только #stop — inline-скрытая роль считалась
+    // показанной, ретрай молчал.
+    const role = nightRoomWithInlineHiddenRole();
+    autoStartFeature.enable({
+      settings: { auto_hide_roles_enabled: true, role_phase_auto_switch_enabled: true },
+    } as never);
+    // Интервал фазы (~1с) + night-show (3с) + верификация (0.5с).
+    vi.advanceTimersByTime(6_000);
+    expect(role.style.display, "inline снят — проверки ночью видны").not.toBe("none");
+    expect(role.style.visibility).not.toBe("hidden");
+    autoStartFeature.disable();
+  });
+
+  test("отпускание V ночью НЕ возвращает inline-скрытие (решение за фазовой логикой)", () => {
+    const role = nightRoomWithInlineHiddenRole();
+    autoStartFeature.enable({
+      settings: {
+        auto_hide_roles_enabled: true,
+        role_phase_auto_switch_enabled: true,
+        hotkey_role_peek: "KeyV", // без явной клавиши bindPeekKey не привяжется
+      },
+    } as never);
+    vi.advanceTimersByTime(2_500); // фаза «ночь» распознана до отпускания
+    const kb = keyboard as unknown as { registerHold: ReturnType<typeof vi.fn> };
+    const holdCall = kb.registerHold.mock.calls.at(-1)!;
+    (holdCall[1] as () => void)(); // зажали V: peek поднимает inline
+    expect(role.style.display, "во время удержания роль видна").not.toBe("none");
+    (holdCall[2] as () => void)(); // отпустили
+    expect(
+      role.style.display,
+      "ночью с автосменой inline не возвращается — иначе каждый отпуск гасил роль",
+    ).not.toBe("none");
+    autoStartFeature.disable();
+  });
+
+  test("днём отпускание V честно возвращает inline-скрытие (регресс-страж)", () => {
+    document.body.className = "day";
+    document.body.innerHTML = `
+      <div class="player my-player">
+        <span class="player__role role my-role red"><svg><use href="#sheriff"></use></svg></span>
+      </div>`;
+    const role = document.querySelector<HTMLElement>(".my-role")!;
+    role.style.display = "none";
+    autoStartFeature.enable({
+      settings: {
+        auto_hide_roles_enabled: true,
+        role_phase_auto_switch_enabled: true,
+        hotkey_role_peek: "KeyV",
+      },
+    } as never);
+    vi.advanceTimersByTime(2_500); // фаза «день» распознана
+    const kb = keyboard as unknown as { registerHold: ReturnType<typeof vi.fn> };
+    const holdCall = kb.registerHold.mock.calls.at(-1)!;
+    (holdCall[1] as () => void)();
+    (holdCall[2] as () => void)();
+    expect(role.style.display, "днём скрытие возвращается").toBe("none");
+    autoStartFeature.disable();
+  });
+
+  test("D-показ из-под CSS снимает и inline", () => {
+    const role = nightRoomWithInlineHiddenRole();
+    autoStartFeature.enable({
+      settings: { auto_hide_roles_enabled: true, role_phase_auto_switch_enabled: false },
+    } as never);
+    vi.advanceTimersByTime(1_100); // CSS-скрытие встало
+    const kb = keyboard as unknown as { register: ReturnType<typeof vi.fn> };
+    const roleKeyCall = kb.register.mock.calls.find((c) => c[0] === "KeyD")!;
+    (roleKeyCall[1] as (e?: KeyboardEvent) => void)(
+      new KeyboardEvent("keydown", { code: "KeyD", cancelable: true }),
+    );
+    expect(document.getElementById("polemica-role-hide"), "CSS снят").toBeNull();
+    expect(role.style.display, "inline снят тем же нажатием — D работает с первого раза").not.toBe(
+      "none",
+    );
+    autoStartFeature.disable();
+  });
+});
+
 describe("клавиша скрытия уступает подмене роли (аудит скрытия ролей 29.08.2026, №4)", () => {
   test("D при активном F не снимает CSS и глушит событие для сайта", () => {
     fakerSeam.faked = true;
@@ -372,6 +467,16 @@ describe("клавиша скрытия уступает подмене роли
 
 describe("peek и пин: source-стражи (№7/№10; поведение пина — в role-pin.test)", () => {
   const src = readFileSync("src/content/features/auto-start.ts", "utf8");
+
+  test("верификация ночного показа видит застрявший inline (03.09.2026)", () => {
+    // Поведенчески не закрепить без гонок с таймингами интервала фазы:
+    // окно верификации 500 мс. Страж по исходнику: проверка «показана ли»
+    // обязана включать inlineHidden, иначе inline-скрытая роль считается
+    // показанной и ретрай молчит.
+    const start = src.indexOf("const stillHidden = el");
+    expect(start).toBeGreaterThan(-1);
+    expect(src.slice(start, start + 200)).toMatch(/inlineHidden/);
+  });
 
   test("№7: peek поднимает пин через владельца, а не срывом стилей", () => {
     const start = src.indexOf("function startPeek");
